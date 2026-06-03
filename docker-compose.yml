@@ -1,0 +1,31 @@
+# cv-tailor — dev compose (SPEC §7.5).
+# The project directory is bind-mounted so edits on the host are visible
+# immediately and outputs/ + data/ persist on the host.
+#
+# Usage:
+#   docker compose build
+#   docker compose run --rm cli pytest tests/
+#   docker compose run --rm cli python -m corpus.ingest --cv-dir data/cvs/
+#   docker compose run --rm cli python -m tailor run --jd data/jd.txt --demo
+services:
+  cli:
+    build: .
+    volumes:
+      - .:/app                       # edits on host visible immediately
+    env_file: .env
+    # Short-lived, interactive; entry command supplied per `docker compose run`.
+
+  backend:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    env_file: .env
+    # NOTE: api/main.py is added in the UI phase; the image builds now but this
+    # service only runs once the backend exists.
+
+  # frontend: added in the UI phase (needs frontend/Dockerfile.dev).
+  # Defined in SPEC §7.5; omitted here so `docker compose build` does not fail
+  # on a missing build context before the React app exists.

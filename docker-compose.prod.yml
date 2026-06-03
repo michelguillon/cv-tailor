@@ -1,0 +1,14 @@
+# cv-tailor — homeserver (M720q) prod overlay (SPEC §7.5).
+# Layered on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  backend:
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000   # no --reload
+    restart: unless-stopped
+
+  # frontend: added in the UI phase.
+  # Dockerfile.prod is multi-stage (Node build → nginx-alpine, ~30 MB).
+  # nginx serves the static bundle on :3000 and proxies /api/* to backend:8000.
+  # IMPORTANT (learned from the RFI project): nginx.conf must set
+  #   proxy_buffering off;
+  # on the /api/ location, or SSE streams buffer and the progress feed stalls.

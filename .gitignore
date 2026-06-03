@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Real corpus + derived state (irreplaceable / re-embeddable; never commit)
+data/cvs/
+data/chroma/
+outputs/
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node (UI phase)
+node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db

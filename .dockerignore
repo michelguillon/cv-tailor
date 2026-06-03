@@ -1,0 +1,16 @@
+# Keep the build context small and never bake secrets or state into the image
+# (SPEC §7). These are bind-mounted at runtime instead.
+.env
+.git
+.gitignore
+data/
+outputs/
+tmp/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+**/node_modules/
+frontend/dist/
+docs/
+*.md
+!ADAPTING.md

@@ -1,0 +1,9 @@
+# Normalise line endings to LF. The repo builds and runs in a Linux container;
+# CRLF can break shell scripts and is noise in diffs on a Windows host.
+* text=auto eol=lf
+
+# Binary assets (CV corpus lives outside git, but be explicit for any that land).
+*.docx binary
+*.png binary
+*.jpg binary
+*.ico binary

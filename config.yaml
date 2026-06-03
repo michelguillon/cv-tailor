@@ -1,0 +1,57 @@
+# cv-tailor configuration (SPEC_ORCHESTRATOR.md §3.7, §3.8)
+# Runtime behaviour is governed by a RunConfig loaded from this file. Any mode
+# difference expressed as a config value is readable, testable, and adjustable
+# without touching code (the Week 2 RunConfig pattern).
+
+modes:
+  demo:
+    max_iterations: 1
+    orchestrator_model: "claude-haiku-4-5"
+    cost_cap_usd: 0.75
+
+  full:
+    max_iterations: 3
+    orchestrator_model: "claude-sonnet-4-6"
+    cost_cap_usd: 5.00
+    full_mode_key: "${FULL_MODE_KEY}"   # env var, gitignored
+
+# Fixed model roles (D-03). Provider is an implementation detail of each tool;
+# the orchestrator never selects these directly.
+models:
+  jd_analysis: "mistral-small-latest"        # Mistral: extraction + embeddings
+  embeddings: "mistral-embed"
+  critique: "gpt-4o-mini"                     # OpenAI: harsher section critique
+  validation: "claude-haiku-4-5"             # Anthropic: formatting gate + HITL interpret
+
+# Convergence thresholds (D-05). Subject to calibration after first real run.
+convergence:
+  keyword_delta_threshold: 0.05
+  critique_delta_threshold: 0.5
+
+# Dynamic rubric safeguards (D-04).
+rubric:
+  max_additions_per_iteration: 2
+
+# ChromaDB (D-03 R-03: metric is set at creation and immutable; encode in name).
+chroma:
+  collection: "cv_sections_cosine"
+  metric: "cosine"
+  persist_dir: "data/chroma"
+
+# Canonical section list (SPEC §3.8). Order here is the default assembly order;
+# per-CV order is governed by CVSection.position discovered at ingestion.
+cv_sections:
+  - profile
+  - skills
+  - experience        # one CVSection per job per company
+  - ai_projects       # absent from some CVs; prominent in AI-role CVs
+  - education         # static: true (typically)
+  - certifications    # static: true (typically)
+  - interests         # static: true, always
+
+# Sections copied verbatim and excluded from the critique loop (D-13).
+# `interests` is always static; education/certifications usually are.
+static_sections:
+  - interests
+  - education
+  - certifications

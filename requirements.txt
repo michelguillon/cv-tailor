@@ -1,0 +1,21 @@
+# cv-tailor — Week 3 portfolio. Python 3.12 (3.13 also works for Step 0+).
+# No LangChain, no LangGraph — orchestration is built manually (SPEC §11).
+
+# Providers
+anthropic>=0.40
+openai>=1.50
+mistralai>=1.2
+
+# Retrieval (Week 1 reuse)
+chromadb>=0.5
+
+# Ingestion / parsing
+python-docx>=1.1
+pyyaml>=6.0
+
+# CLI + output
+click>=8.1
+jinja2>=3.1
+
+# Tests
+pytest>=8.0
