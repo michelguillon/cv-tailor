@@ -66,5 +66,9 @@ Under active build.
   recommended source, target anchored to source length (no padding), static
   copied verbatim; run-context + checkpoint pattern (versioned section files +
   audit log). Verified end-to-end: coverage lifts source→draft. 123 tests.
+- **Step 5** — critique tool (GPT-4o-mini). Done: strict-JSON section critique
+  with explicit severity definitions (D-11) and score anchors (R-08), plus
+  deterministic length-budget items. Verified live: weak draft 3.0 vs strong
+  8.0, no over-scoring. 131 tests.
 
-Next: Step 5 — critique tool (GPT-4o-mini), section-by-section.
+Next: Step 6 — refinement loop (Claude orchestrates critique→revise→converge).

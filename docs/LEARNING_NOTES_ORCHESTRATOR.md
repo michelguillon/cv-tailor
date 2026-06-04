@@ -457,6 +457,31 @@ Questions.
 
 ---
 
+### F-14 — Step 5: critique score anchors work — weak 3.0 vs strong 8.0, no over-scoring
+
+**What was verified (GPT-4o-mini, live, Airwallex rubric):** a deliberately weak
+profile ("hard worker, good communicator, various roles") scored **3.0** with a
+`major` item; a strong tailored profile scored **8.0** with only a `minor`. The
+score discriminated sharply and — the key R-08 risk — GPT did **not** inflate the
+weak draft to 8+. The explicit anchors ("9–10 = …, 5–6 = …, 3–4 = …") in the
+prompt are what prevented the LLM-judge over-scoring; without them this signal
+would be useless for convergence.
+
+**Confirms:** D-11 (severity calibrated and consistent: weak→major, strong→minor)
+and the soft-stop precondition (strong draft = zero major items → soft-stop
+eligible). GPT-4o-mini's harshness (D-03) shows: it gave a 2/10 section score
+where a flattering model would not.
+
+**Design notes:** structured output uses OpenAI **strict `json_schema`** — the
+severity `enum` is enforced server-side, so a bad severity can't reach the
+soft-stop logic. `section_scores` is a list (not a dict) because strict mode needs
+`additionalProperties:false`; converted to a dict after parsing. Length-budget
+items (D-14) are appended **deterministically** in code (word count), not left to
+GPT — code counts, GPT judges content. Output still schema-validated + retried
+once (R-09).
+
+---
+
 ### F-13 — Step 4: draft target is anchored to source length, not the section_type median
 
 **What was found:** First end-to-end draft (Haiku) inflated a 23-word

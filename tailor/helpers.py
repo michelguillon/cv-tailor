@@ -22,16 +22,19 @@ import os
 import time
 
 import anthropic
+import openai
 from mistralai.client import Mistral
 from mistralai.client.errors import MistralError
 
 __all__ = [
     "get_mistral_client",
     "get_anthropic_client",
+    "get_openai_client",
     "call_with_retry",
     "embed_texts",
     "embed_query",
     "claude_complete",
+    "gpt_complete",
     "RETRYABLE_STATUS",
 ]
 
@@ -67,6 +70,17 @@ def get_anthropic_client(api_key: str | None = None) -> anthropic.Anthropic:
             "`docker compose run --rm cli ...`."
         )
     return anthropic.Anthropic(api_key=key)
+
+
+def get_openai_client(api_key: str | None = None) -> openai.OpenAI:
+    """Build the OpenAI client. Fail loud and early on a missing key."""
+    key = api_key or os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "OPENAI_API_KEY is not set. Add it to .env and run via "
+            "`docker compose run --rm cli ...`."
+        )
+    return openai.OpenAI(api_key=key)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,3 +216,33 @@ def claude_complete(
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
     return call_with_retry(client.messages.create, retryable_exc=anthropic.APIError, **kwargs)
+
+
+# --------------------------------------------------------------------------- #
+# GPT (OpenAI — section critique tool; GPT-4o-mini, D-03)                     #
+# --------------------------------------------------------------------------- #
+
+def gpt_complete(
+    *,
+    model: str,
+    messages: list[dict],
+    response_format: dict | None = None,
+    max_tokens: int = 2048,
+    temperature: float = 0.0,
+    client: openai.OpenAI | None = None,
+):
+    """Call the OpenAI Chat Completions API through call_with_retry.
+
+    Returns the raw response; callers read `resp.choices[0].message.content`.
+    `response_format` enables JSON / strict structured outputs.
+    """
+    client = client or get_openai_client()
+    kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if response_format is not None:
+        kwargs["response_format"] = response_format
+    return call_with_retry(client.chat.completions.create, retryable_exc=openai.APIError, **kwargs)
