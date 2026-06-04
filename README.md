@@ -62,5 +62,9 @@ Under active build.
   variant per section, experience mixed per company) + Claude (Haiku/dev,
   Sonnet/full) for typed gaps + outcome via forced tool-use; soft seniority
   (D-23); HITL preview. 113 tests.
+- **Step 4** — initial draft. Done: per-section drafting (Claude) from the
+  recommended source, target anchored to source length (no padding), static
+  copied verbatim; run-context + checkpoint pattern (versioned section files +
+  audit log). Verified end-to-end: coverage lifts source→draft. 123 tests.
 
-Next: Step 4 — initial draft (Claude, per-section, budget-aware).
+Next: Step 5 — critique tool (GPT-4o-mini), section-by-section.

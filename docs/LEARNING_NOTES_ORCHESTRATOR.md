@@ -457,6 +457,28 @@ Questions.
 
 ---
 
+### F-13 — Step 4: draft target is anchored to source length, not the section_type median
+
+**What was found:** First end-to-end draft (Haiku) inflated a 23-word
+`design_engineer` role to **143 words** because the per-`section_type` experience
+budget uses the corpus *median* (108) as target — and the drafter dutifully padded
+the terse early role toward it. Padding a CV section to hit a word count is a
+fabrication risk, the one thing the drafter must never do.
+
+**Decision (D-27, resolves the Phase-2 budget open question):** the drafting
+target for a section is `clamp(source_word_count, budget.min_words,
+budget.max_words)` — anchored to what the source actually says, with the budget as
+guardrails. Tailoring reweights wording; it must not materially change length. The
+median `target_words` is kept only as a corpus statistic / the assembled-length
+check (Phase 5), not as a per-section drafting target. Re-verified: drafted
+lengths now track source (101→92, 152→129, 63→50) with no inflation, while
+keyword coverage still lifts base→draft (0.47→0.63; 0.53→0.74 on another run).
+
+This is the concrete resolution of the "experience budget granularity" open
+question raised when D-21 split experience per role-group.
+
+---
+
 ### F-12 — Step 3: Phase 1 validated end-to-end with Haiku; honest gap typing; outcome wobble noted
 
 **What was verified (Phase 0 → Phase 1, Haiku/dev, real JDs):**
@@ -784,12 +806,10 @@ tests, and which are tested by inspection only.*
 - [x] ~~Is `mistral-small` the right model for Phase 0, or does structured extraction
       quality warrant `mistral-medium`?~~ **Resolved (F-09/D-24):** small + prompt
       fix, validated on 4 JDs — medium's accuracy at small's 4× speed and lower cost.
-- [ ] **Experience budget granularity (Phase 2/3):** `budgets.yaml` derives one
-      budget per `section_type`, but per-role-group experience sections vary widely
-      (observed 23–187 words: a terse early role vs a detailed recent one). A single
-      `experience` target (108) over-inflates small role sections. Decide at drafting
-      time whether to bucket experience budgets (e.g. by seniority/recency) or treat
-      max_words as a ceiling only rather than target. Surfaced by D-21's revision.
+- [x] ~~**Experience budget granularity (Phase 2/3):** a single `experience`
+      target over-inflates small role sections.~~ **Resolved (D-27/F-13):** draft
+      target = `clamp(source_word_count, min, max)`; the median is a corpus stat /
+      Phase-5 check, not a per-section drafting target.
 - [ ] **D-23 — seniority soft filter:** confirm the soft/band-based seniority
       ranking (not hard pre-filter) against real Application Engineer / Deployment
       Specialist JDs when Phase 1 retrieval is built. Verify a generic
