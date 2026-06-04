@@ -457,6 +457,71 @@ Questions.
 
 ---
 
+### F-12 — Step 3: Phase 1 validated end-to-end with Haiku; honest gap typing; outcome wobble noted
+
+**What was verified (Phase 0 → Phase 1, Haiku/dev, real JDs):**
+- **Airwallex (good fit):** section-level mix genuinely mixes sources (profile
+  from Figma, skills/experience from AI/Airwallex); gaps centred on
+  payments/fintech *domain* (the real gap) — addressable, no blocker.
+- **JPMC (the "gap but worth applying" JD):** PARTIAL with exactly the right
+  major-but-addressable gaps (hands-on cloud AI at scale, production AI with data
+  scientists, cloud-native in finance) and **nothing blocking** — matching the
+  human read. Seniority was NOT raised as a gap on either (D-23 honoured), even
+  though the JPMC JD has no explicit title.
+
+**Design confirmations:** the hybrid split works — deterministic composition +
+coverage as inputs, Claude for typed `FitGap`s and outcome (D-01). Structured
+output is forced via an Anthropic **tool** (`tool_choice`), more reliable than
+free-form JSON from Haiku, then schema-validated with one retry (R-09).
+
+**Caveat (feeds D-26):** Haiku's *outcome* label wobbled between STRONG and
+PARTIAL across runs on the borderline Airwallex case (temperature=0; the gap list
+stayed stable). Acceptable in dev; the final Sonnet validation should give a
+steadier, more nuanced verdict — a concrete data point for the Haiku→Sonnet delta.
+
+---
+
+### F-11 — Step 3: keyword coverage selects section variants but does NOT rank whole-CV fit (validates the hybrid)
+
+**What was found (Airwallex JD vs the 7-CV corpus):** Per-CV non-static union
+coverage ranked **Figma 0.58 > JPMC 0.53 > AI / Airwallex / Mistral 0.47 >
+Adtech 0.42**. The CV hand-tailored for *this* Airwallex role sits mid-pack —
+two other solutions-leadership CVs use more of the rubric's vocabulary. Yet at
+the section level the Airwallex CV's *profile* (0.32) and *skills* (0.16) score
+best of all variants, while the strongest *experience* block is JPMC's (0.53).
+
+**Implications:**
+1. **Section-mixing has real value here (D-17 confirmed):** different CVs win
+   different sections, so a single-base-CV pick would leave coverage on the table.
+   And because all 7 are one person's career, mixing phrasings is coherent, not
+   Frankenstein.
+2. **Keyword coverage alone must NOT decide fit outcome.** It discriminates
+   *variants of the same section* well, but as a whole-CV fit signal it's weak
+   and even mis-orders (tailored ≠ highest keyword density). This is exactly why
+   Phase 1 keeps deterministic coverage as an *input* and lets Claude reason the
+   outcome/gaps (D-01 hybrid). Coverage feeds selection + the rubric; judgement
+   feeds the verdict.
+3. Cross-variant selection uses **keyword coverage, not semantic similarity** —
+   semantic scores barely differ across variants of the same person's section
+   (same content, reworded), whereas coverage tracks the tailoring.
+
+---
+
+### D-26 — Dev with Haiku, final-validate with Sonnet (orchestration cost discipline)
+
+**What was decided (user):** Build and iterate every Claude-using phase in **demo
+mode (Haiku orchestrator)** to keep dev cost near-zero, then run a few **final
+validation passes in full mode (Sonnet)** once the pipeline works end-to-end, to
+see the quality/value delta. This is exactly the demo/full split already in
+`config.yaml` (D-08, §3.7) — no new mechanism, just a working practice: phases
+take the orchestrator model from `RunConfig`, never hardcode it.
+
+**Portfolio angle:** the Haiku→Sonnet final comparison is the orchestration-tier
+analogue of the Phase 0 small-vs-medium evaluation (F-09) — a documented,
+evidence-based view of what the bigger model buys, rather than assuming it.
+
+---
+
 ### F-10 — Step 2: keyword matching must be token-subset, not exact-phrase (found on real data)
 
 **What was found:** The first scorer matched a rubric keyword only as a contiguous

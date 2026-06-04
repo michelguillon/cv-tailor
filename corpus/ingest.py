@@ -80,6 +80,7 @@ def _section_metadatas(meta: CVMetadata, es: ExtractedSection) -> dict:
         "word_count": es.section.word_count,
         "line_count": es.section.line_count,
         "title": es.title,
+        "company": es.company,            # "" for non-experience → dropped by sanitise
     })
 
 

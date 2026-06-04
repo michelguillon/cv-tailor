@@ -21,14 +21,17 @@ import logging
 import os
 import time
 
+import anthropic
 from mistralai.client import Mistral
 from mistralai.client.errors import MistralError
 
 __all__ = [
     "get_mistral_client",
+    "get_anthropic_client",
     "call_with_retry",
     "embed_texts",
     "embed_query",
+    "claude_complete",
     "RETRYABLE_STATUS",
 ]
 
@@ -53,6 +56,17 @@ def get_mistral_client(api_key: str | None = None) -> Mistral:
             "`docker compose run --rm cli ...` (Compose loads .env automatically)."
         )
     return Mistral(api_key=key)
+
+
+def get_anthropic_client(api_key: str | None = None) -> anthropic.Anthropic:
+    """Build the Anthropic client. Fail loud and early on a missing key."""
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise EnvironmentError(
+            "ANTHROPIC_API_KEY is not set. Add it to .env and run via "
+            "`docker compose run --rm cli ...`."
+        )
+    return anthropic.Anthropic(api_key=key)
 
 
 # --------------------------------------------------------------------------- #
@@ -151,3 +165,40 @@ def embed_query(text: str, *, model: str, client: Mistral | None = None) -> list
     """Embed a single query string (Phase 1 retrieval)."""
     vectors, _ = embed_texts([text], model=model, client=client)
     return vectors[0]
+
+
+# --------------------------------------------------------------------------- #
+# Claude (Anthropic — orchestrator/reasoner; Haiku in dev/demo, Sonnet in full) #
+# --------------------------------------------------------------------------- #
+
+def claude_complete(
+    *,
+    model: str,
+    messages: list[dict],
+    system: str | None = None,
+    max_tokens: int = 2048,
+    temperature: float = 0.0,
+    tools: list[dict] | None = None,
+    tool_choice: dict | None = None,
+    client: anthropic.Anthropic | None = None,
+):
+    """Call the Claude Messages API through call_with_retry. Returns the raw Message.
+
+    The provider is hidden from callers (D-02). `tools`+`tool_choice` let a caller
+    force structured output (a tool call), which is more reliable than free-form
+    JSON — especially from Haiku in dev (D-26).
+    """
+    client = client or get_anthropic_client()
+    kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if system is not None:
+        kwargs["system"] = system
+    if tools is not None:
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+    return call_with_retry(client.messages.create, retryable_exc=anthropic.APIError, **kwargs)

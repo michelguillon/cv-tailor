@@ -49,6 +49,9 @@ class ExtractedSection:
     section: CVSection
     text: str             # section body as markdown-ish plain text (no title line)
     title: str            # the header text as it appeared, e.g. "Core Skills" / "Utiq"
+    company: str = ""     # employer for experience sections (enables per-company
+                          # source mixing in Phase 1, since role-group section_ids
+                          # don't align across CV variants — F-11/D-17)
 
 
 def _normalise(text: str) -> str:
@@ -191,6 +194,7 @@ def _emit_simple(section_type, title, block_paras, position, static, out) -> int
         ),
         text=text,
         title=title,
+        company="",
     ))
     return position + 1
 
@@ -248,6 +252,7 @@ def _emit_experience(block_paras, position, static, out) -> int:
             ),
             text=text,
             title=(titles[0] if titles else company),
+            company=company,
         ))
         buf, titles, seen_bullet = [], [], False
         return pos + 1

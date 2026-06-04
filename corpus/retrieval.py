@@ -15,7 +15,7 @@ from tailor.helpers import embed_query
 
 from .ingest import get_collection, load_config
 
-__all__ = ["SectionHit", "search_sections", "build_where", "collection_stats"]
+__all__ = ["SectionHit", "search_sections", "build_where", "collection_stats", "all_sections"]
 
 
 @dataclass
@@ -88,6 +88,21 @@ def search_sections(
             metadata=meta,
         ))
     return hits
+
+
+def all_sections(config: dict | None = None, collection=None) -> list[dict]:
+    """Every stored section as {…metadata, 'document': text}. For composition/fit.
+
+    Phase 1 reasons over the whole corpus (which CV has the best version of each
+    section), not just a top-k query, so it needs the full set.
+    """
+    config = config or load_config()
+    collection = collection if collection is not None else get_collection(config)
+    got = collection.get(include=["metadatas", "documents"])
+    out = []
+    for meta, doc in zip(got["metadatas"], got["documents"]):
+        out.append({**meta, "document": doc})
+    return out
 
 
 def collection_stats(config: dict | None = None) -> dict:

@@ -58,5 +58,9 @@ Under active build.
 - **Step 2** — JD analysis (Mistral, forced JSON) + section-level keyword
   scorer. Done: model chosen on evidence (4-JD eval), token-subset coverage
   matching. 103 tests.
+- **Step 3** — fit assessment. Done: deterministic section-level mix (best CV
+  variant per section, experience mixed per company) + Claude (Haiku/dev,
+  Sonnet/full) for typed gaps + outcome via forced tool-use; soft seniority
+  (D-23); HITL preview. 113 tests.
 
-Next: Step 3 — fit assessment (RAG retrieval + Claude Sonnet reasoning, HITL).
+Next: Step 4 — initial draft (Claude, per-section, budget-aware).
