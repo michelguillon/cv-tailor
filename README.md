@@ -55,5 +55,8 @@ Under active build.
 - **Step 0** — schemas + audit logger. Done.
 - **Step 1** — corpus ingestion + retrieval. Done: 7 CVs → 83 sections in
   ChromaDB, length budgets derived, metadata-filtered semantic search. 86 tests.
+- **Step 2** — JD analysis (Mistral, forced JSON) + section-level keyword
+  scorer. Done: model chosen on evidence (4-JD eval), token-subset coverage
+  matching. 103 tests.
 
-Next: Step 2 — JD analysis (Mistral) + section-level keyword scoring.
+Next: Step 3 — fit assessment (RAG retrieval + Claude Sonnet reasoning, HITL).

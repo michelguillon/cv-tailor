@@ -457,6 +457,63 @@ Questions.
 
 ---
 
+### F-10 — Step 2: keyword matching must be token-subset, not exact-phrase (found on real data)
+
+**What was found:** The first scorer matched a rubric keyword only as a contiguous
+token run. Scoring the **Airwallex CV — which is tailored for the Airwallex JD —**
+against that JD's own rubric gave a union coverage of **0.11** (2/19). Not a real
+gap: Phase 0 emits multi-word keywords ("go-to-market strategy", "executive
+communication", "rfp responses") whose words appear in the CV reworded or
+non-adjacent, so exact-phrase matching missed them. A convergence signal this
+brittle is useless — every section would look uncovered and deltas would be noise.
+
+**Decision (D-25):** A keyword matches if EITHER its tokens are contiguous OR all
+its *significant* tokens (minus a small stoplist) appear as whole tokens anywhere
+in the text. Single-token keywords still require an exact whole-token match (no
+stemming, no partials) to avoid false positives. Re-scored: the Airwallex CV now
+reads **0.42** union coverage, matching the concepts it genuinely covers and
+flagging real gaps (`fintech`, `payment ecosystem` = domain gaps; `proof-of-concept`,
+`rfp responses` = addressable). This required/missing split is the raw material
+for Phase 1's `FitGap` typing (D-16/D-17).
+
+**Why it matters (R-08 link):** an LLM-or-heuristic score is only useful if it
+discriminates consistently. The fix was found by *running the scorer on real CV ×
+real JD*, not by unit tests on synthetic strings — which all passed at 0.11.
+Verify scorers against real data, not just fixtures.
+
+---
+
+### F-09 — Step 2: Phase 0 uses mistral-small-latest + a classification/keyword prompt fix (open question resolved)
+
+**What was tested:** `analyse_jd` run with `mistral-small-latest` vs
+`mistral-medium-latest` across 4 real JDs (Airwallex, JPMC, AI-consultancy,
+Figma), temp=0, identical prompt. Compared classification accuracy
+(required vs nice-to-have, against each JD's explicit markers), keyword quality,
+structural-requirement specificity, latency, and cost.
+
+**Findings:**
+- **Cost is not a factor.** Phase 0 is one call per run (~1.5k in / ~0.5k out).
+  Aggregate over 4 JDs: small ≈$0.0011, medium ≈$0.0055 (paid list); **$0 on the
+  free tier either way**. Latency: small ~2.5–3s, medium ~9–13s (**~4× slower**).
+- **Medium classified cleaner** out of the box (respected "preferred"/"advantageous"
+  markers); small over-populated nice_to_haves with responsibilities/values.
+- **But medium's `structural_requirements` were near-identical boilerplate across
+  all 4 JDs**, while small's were JD-specific and actionable (e.g. Figma "31
+  consultants, 4 managers") — and structural_requirements feed drafting. The
+  smaller model produced the more *useful* output there.
+- `required_keywords` (the actual scoring driver) was solid in both.
+
+**Decision (D-24):** Use **mistral-small-latest** for Phase 0, plus two prompt
+rules that close small's only real gap: (a) classify by the JD's own markers
+("preferred"/"advantageous"/"a plus" → nice-to-have; responsibilities → required),
+(b) exclude generic standalone keywords (`product`, `engineering`, `ai`-alone) and
+require JD-specific structural_requirements. **Re-validated on all 4 JDs:**
+classification now matches medium's precision, zero generic-keyword leaks,
+structural guidance still tailored. Net: medium's accuracy at small's speed/cost.
+Revisit only if a future JD class regresses.
+
+---
+
 ### F-08 — Cost figures are list-price ESTIMATES, not actual billing (Mistral runs free-tier)
 
 **What was found:** The ingestion "cost" (≈$0.0011) is computed in code as
@@ -659,8 +716,9 @@ tests, and which are tested by inspection only.*
 - [ ] Does the convergence threshold (keyword_delta < 0.05, critique_delta < 0.5) need
       calibration after seeing real iteration data? Document the first real run's
       score progression to validate.
-- [ ] Is `mistral-small` the right model for Phase 0, or does structured extraction
-      quality warrant `mistral-medium`? Test on 3 real JDs before committing.
+- [x] ~~Is `mistral-small` the right model for Phase 0, or does structured extraction
+      quality warrant `mistral-medium`?~~ **Resolved (F-09/D-24):** small + prompt
+      fix, validated on 4 JDs — medium's accuracy at small's 4× speed and lower cost.
 - [ ] **Experience budget granularity (Phase 2/3):** `budgets.yaml` derives one
       budget per `section_type`, but per-role-group experience sections vary widely
       (observed 23–187 words: a terse early role vs a detailed recent one). A single

@@ -6,6 +6,10 @@ data/cvs/
 data/chroma/
 outputs/
 tmp/
+# Job descriptions — real target JDs reveal the job search; keep local only.
+# (Commit a sanitised sample as data/jd.example.txt if one is ever needed.)
+data/*.txt
+!data/*.example.txt
 
 # Python
 __pycache__/
