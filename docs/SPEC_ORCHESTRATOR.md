@@ -246,14 +246,21 @@ class CVMetadata:
 ```
 
 **Canonical section list (config.yaml):**
+> Updated during Step 1 build from the observed corpus (LEARNING_NOTES F-05,
+> D-19/D-20/D-21): `header` and `languages` added; experience sub-sections are
+> per *company* (`experience_<company_slug>`), not per job; section detection is
+> by canonical-name vocabulary (`section_aliases`) + a size split inside the
+> experience block, not by heading style.
 ```yaml
 cv_sections:
+  - header            # static, position 0 — name + contact block (above Profile)
   - profile
   - skills
-  - experience        # one CVSection per job per company; section_id encodes company+role+year
+  - experience        # one CVSection per COMPANY; section_id = experience_<company_slug>
   - ai_projects       # absent from some CVs; prominent in AI-role CVs
   - education         # static: true (typically)
-  - certifications    # static: true (typically)
+  - languages         # static, present in this corpus
+  - certifications    # static: true (typically); absent from this corpus
   - interests         # static: true, always
 ```
 
@@ -913,30 +920,38 @@ logger, no API calls, needed from Phase 2 onward. No API calls in this step.
 Build `corpus/ingest.py`, `corpus/retrieval.py`, `corpus/metadata.py`.
 
 Key sub-tasks:
-- `.docx` parser: extract section text and word/line counts using python-docx.
-  Section boundary detection uses heading styles (Heading 1 / Heading 2). Verify
-  this works for all 6 CVs — silent partial parse (2 sections where 8 are expected)
-  is more dangerous than a crash.
+- `.docx` parser (reused from the Week 1 RAG `docx_loader`): flatten the
+  single-table layout into `Paragraph`s with rendered size / bold / numPr / date.
+  Section boundary detection is by **canonical-title vocabulary + size split**,
+  NOT heading styles (corrected during build — see LEARNING_NOTES F-04/F-05,
+  D-19/D-20/D-21). The real 7-CV corpus has no reliable heading structure; a
+  style-only parser would silently produce a near-empty corpus.
 - **Section extraction verification pass:** after parsing each CV, print a section
   inventory (`section_id: N words`) and block ingestion if any section count is below
   a minimum threshold (< 4 sections on a 2-page CV is almost certainly a parsing
-  failure). Human must confirm before ChromaDB writes proceed.
+  failure). Matched-but-empty headers are reported, not silently dropped. Human
+  must confirm before ChromaDB writes proceed.
 - **Collection metric verification:** after `get_or_create`, verify
   `collection.metadata["hnsw:space"] == config.metric`. If mismatch, raise with:
   "Collection exists with metric X, config requires Y. Run --replace to recreate."
 - **Metadata sanitisation:** `sanitise_metadata(d: dict) -> dict` in `ingest.py`
   strips None values and empty strings before any `collection.add()` call.
   ChromaDB rejects None and empty string metadata values silently in some versions.
-- YAML front-matter written per section file (persisted discovery output — runtime
-  treats this as ground truth, never re-derives section structure)
+- Persisted discovery (R-10): section structure + CV metadata are stored as
+  ChromaDB section metadata and in the per-CV sidecar `<name>.yaml`; the
+  tailoring path treats this as ground truth and never re-derives it. (The spec
+  originally said per-section YAML front-matter files; implemented as ChromaDB
+  metadata + sidecar instead — section files are written later, in Phase 2.)
 - `SectionBudget` derivation: compute min/max/median word counts per section_type,
   write `budgets.yaml`
-- Checkpoint granularity: one (section_id) per write — lose at most one section
-  on failure, not the whole ingestion run
+- Checkpoint granularity: per CV — ChromaDB persists after each CV, so a failure
+  loses at most one CV's embeddings (the natural failure unit for a 7-CV corpus;
+  embedding is batched per CV). Refines R-06's per-section guidance for this scale.
 
-*Verification:* query for "solution architect experience sections" returns the
-right sections; `budgets.yaml` exists with plausible word counts; re-ingest
-without `--replace` skips existing sections; collection metric matches config.
+*Verification:* a role-relevant query (e.g. "solutions consulting leadership
+experience") returns the right experience sections; `budgets.yaml` exists with
+plausible word counts; re-ingest without `--replace` skips existing CVs;
+collection metric matches config. (All confirmed: 83 sections, 7 CVs.)
 
 **Step 2 — JD analysis and scoring rubric**
 Build `phases/phase0_jd_analysis.py` and `tools/scorer.py`.

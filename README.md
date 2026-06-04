@@ -35,7 +35,7 @@ cp .env.example .env        # ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY
 docker compose build
 docker compose run --rm cli pytest tests/
 
-# ingest your CVs (.docx, heading-styled — see ADAPTING.md), then tailor:
+# ingest your CVs (.docx + a sidecar .yaml each — see ADAPTING.md), then tailor:
 docker compose run --rm cli python -m corpus.ingest --cv-dir data/cvs/
 docker compose run --rm cli python -m tailor run --jd data/jd.txt --demo
 ```
@@ -51,4 +51,9 @@ reasoning tabs), `cv_final.md` (clean CV), and `run_log.jsonl` (audit trail).
 
 ## Status
 
-Under active build. Step 0 (schemas + audit logger, fully tested) complete.
+Under active build.
+- **Step 0** — schemas + audit logger. Done.
+- **Step 1** — corpus ingestion + retrieval. Done: 7 CVs → 83 sections in
+  ChromaDB, length budgets derived, metadata-filtered semantic search. 86 tests.
+
+Next: Step 2 — JD analysis (Mistral) + section-level keyword scoring.

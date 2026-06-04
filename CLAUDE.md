@@ -43,7 +43,8 @@ the prod multi-stage build land in the UI phase.
   (R-05). This is load-bearing from the first real run, not polish.
 - **Checkpoint pattern.** Each phase writes its output to `outputs/<run_id>/`
   before the next phase starts. Drafts are section files on disk, *not* fields
-  on `PipelineOutput` (D-07 #3). Ingestion checkpoints per section; the loop
+  on `PipelineOutput` (D-07 #3). Ingestion checkpoints per CV (ChromaDB persists
+  after each CV; refines R-06's per-section guidance for a 7-CV corpus); the loop
   checkpoints per iteration (R-06).
 - **Audit trail ≠ context.** Reasoning is logged to `run_log.jsonl` via
   `tailor/audit.py` and **never injected back into the messages array** (D-06).

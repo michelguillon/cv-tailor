@@ -4,7 +4,7 @@
 # Providers
 anthropic>=0.40
 openai>=1.50
-mistralai>=1.2
+mistralai>=2.0.0,<3.0.0          # 2.x layout: `from mistralai.client import Mistral` (F-07)
 
 # Retrieval (Week 1 reuse)
 chromadb>=0.5

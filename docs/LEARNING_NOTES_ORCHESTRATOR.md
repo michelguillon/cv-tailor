@@ -430,6 +430,185 @@ every schema plus the D-07/D-11 correction guards.
 
 ---
 
+### D-23 — Seniority is a soft ranking preference, not a hard pre-filter (to confirm at Step 3)
+
+**What was decided (provisional; confirm against real JDs when retrieval is built):**
+Phase 1's seniority signal **ranks** candidate CVs but never **excludes** them.
+SPEC §3.8 calls seniority a "pre-filter"; this refines that to a soft, band-based
+preference rather than a hard gate — encoded in `config.yaml` under `retrieval`.
+
+**Load-bearing reason (user/Claude feedback during Step 1 sidecar authoring):**
+Application Engineer / Deployment Specialist roles at AI-native companies often
+carry no clean seniority signal in the JD — titled "Senior" or "Principal" but
+scoped at what would be director-equivalent elsewhere. A hard seniority filter
+would wrongly drop a strong generic CV. This is most acute for `cv_type: generic`
+CVs, whose `target_role` deliberately spans levels (the corpus has three such CVs,
+all `seniority: director` but written to suit principal→VP-equivalent roles).
+
+**Mechanism (provisional):** a `seniority_order` ladder
+(`senior < principal < director < vp`) yields a band distance; within ±1 step is
+treated as a full match, beyond that a graded penalty — applied to ranking only.
+`seniority_filter_mode` is `soft` for both cv_types initially; tighten
+`job_specific` to a harder filter only if real runs show false positives.
+
+**Links:** depends on [[F-06]] (single scalar seniority) and the canonical
+vocabulary in D-22. Revisit in Step 3 (Phase 1 fit assessment) — added to Open
+Questions.
+
+---
+
+### F-08 — Cost figures are list-price ESTIMATES, not actual billing (Mistral runs free-tier)
+
+**What was found:** The ingestion "cost" (≈$0.0011) is computed in code as
+`tokens / 1e6 × list_price`, not read from any billing API. The Mistral account
+is on the free "Experiment" tier (rate-limited, no payment method) so actual
+spend is **£0**; the estimate overstates it by assuming the paid rate.
+
+**Affects D-08 (cost tracking).** When the per-model `cost_breakdown` and the
+`run_complete` footer are built (Step 8/9), label them as **estimated**
+(list-price), e.g. `estimated_usd`, and state the assumed per-model rates in one
+place. The portfolio value is "what this would cost at scale on paid tiers" — but
+it must never read as a real invoice. Anthropic/OpenAI calls in later steps *are*
+paid (those keys are on paid accounts), so the estimate matters there; Mistral
+stays free.
+
+---
+
+### F-07 — Step 1: mistralai 2.4.9 puts the SDK under `mistralai.client` (RAG import path still valid)
+
+**What was found:** The installed `mistralai==2.4.9` has **no top-level
+`__init__.py`** — `import mistralai` yields an empty namespace package
+(`__file__ is None`). The real SDK lives under `mistralai.client`: the client is
+`from mistralai.client import Mistral`, the base error is
+`mistralai.client.errors.MistralError` (with `SDKError`, `NoResponseError`,
+`ResponseValidationError` beneath it), and HTTP status/headers are on
+`exc.raw_response` (an `httpx.Response`), not on the exception directly.
+Embeddings: `client.embeddings.create(model="mistral-embed", inputs=[...])` →
+`resp.data[i].embedding`, with token usage on `resp.usage`.
+
+**Why it matters / what changed:** This is the same import path the Week 1 RAG
+helper used (`from mistralai.client import Mistral`), so that reuse holds — but
+the RAG retry logic keyed on a flat `MistralError.status_code`/`.headers`, which
+in 2.4.9 must be read from `exc.raw_response`. `tailor/helpers.py`'s
+`call_with_retry` reads status/headers defensively across SDK shapes
+(`raw_response` first, then a flat `status_code`/`headers`) so the same wrapper
+will also cover the Anthropic/OpenAI clients added later. `requirements.txt`
+pinned `mistralai>=2.0.0,<3.0.0` to match. Verified by introspection, no API call.
+
+---
+
+### F-06 — Step 1: sidecar metadata uses single scalar values, validated at write-time
+
+**What was found:** The first hand-filled sidecar (Adtech Consulting, a *generic*
+CV) packed ranges into single fields: `seniority: principal, director, VP`,
+`target_role` as a comma-list, and a `target_company` despite `cv_type: generic`.
+`seniority: principal, director, VP` is valid YAML but parses as the *string*
+`"principal, director, VP"` — it silently would not match any seniority filter.
+
+**Decision (D-22):** Sidecar filter fields (`cv_type`, `target_role`,
+`seniority`, `target_company`) are **single scalar values**, because ChromaDB
+metadata is scalar — lists can't be stored or filtered. A generic CV's breadth
+is carried by its embedded content and by semantic retrieval, not by cramming
+multiple values into a filter field. Controlled vocabularies: `cv_type ∈
+{generic, job_specific}`, `seniority ∈ {senior, principal, director, vp}` (added
+`vp`). `target_company` is `null` for generic CVs. `skills_emphasis` is the one
+list field.
+
+**What changed:** Added `validate_sidecar(data) -> (errors, warnings)` to
+`corpus/metadata.py`, called by `load_sidecar` (raises on errors). This applies
+R-09 (validate structured input at write-time, not downstream) to *human*-authored
+input — and matters more here because the user will batch-generate the remaining
+sidecars with an LLM: the validator turns a silent retrieval-time mismatch into
+an immediate, fixable error. A generic-CV-with-company is a warning (surfaced at
+ingest), not a hard error.
+
+---
+
+### F-04 — Step 1: the CV corpus has NO heading-style structure — D-15's parse assumption is wrong; reuse the RAG table-aware loader
+
+**What was found:** The 7 real CVs (`data/cvs/`) are **table-based**: each is a
+single table, all body content lives in its cells, and `python-docx`'s
+`doc.paragraphs` sees only 1–2 top-level `Normal` paragraphs. A heading-style
+parser (D-15) would have produced a near-empty corpus **without crashing** —
+exactly the R-01 silent-partial-parse failure mode. Even inside the table,
+hierarchy is not reliably heading-styled: section headers are mostly
+`Heading 1`/16pt but "Core Skills" is `Heading 4`/14pt, and "AI Projects" is
+`Heading 1`/16pt in some CVs and `Heading 4`/14pt in others. Company names
+collide with that 14pt band (`Heading 3`, `Heading 4`, and `Normal`-bold all
+appear at 14pt).
+
+**Decision affected:** **D-15 (heading-style parsing) is corrected.** Also the
+SPEC §3.8 canonical section list (see F-05).
+
+**What changed:**
+1. **Reused the Week 1 RAG `docx_loader.py`** (`corpus/docx_loader.py`) rather
+   than reinventing. Its table walk (read *every* cell, pair the date column),
+   `numPr` bullet detection, and rendered-size resolution (run → style →
+   base-style chain) are exactly what this corpus needs — it is the same family
+   of documents that logic was built for. Simplified: dropped the PDF/format-
+   agnostic split (cv-tailor ingests only `.docx`) and the `source_format` field.
+2. **Parsing is now fingerprint-based, not heading-based** (the RAG R-10
+   "discover structure, don't assume it" pattern). The robust section-boundary
+   signal is **text matched against a canonical-section vocabulary**, not style
+   or size — because style/size are inconsistent but the section *titles* are a
+   small known set.
+
+**What this teaches (portfolio):** The single most valuable thing Step 1 did was
+*look at the data before writing the parser*. The R-01 note predicted this exact
+failure; running a 30-line discovery dump in the container turned a predicted
+risk into an observed fact and saved a silently-wrong corpus.
+
+---
+
+### F-05 — Step 1: section model grounded in the observed corpus (vocabulary + size split; two new canonical sections)
+
+**What was found (the corpus fingerprint):**
+- Body text 11pt; name "Michel Guillon" 18pt-bold; contact lines 10pt (above
+  "Profile").
+- Section headers match a known vocabulary: Profile, Core Skills, Work
+  experience, (Technical &) AI Projects, Education, **Languages**, Interests.
+- Inside Work experience, **company = 14pt** (any style), **role line = ≤12pt**
+  (carries a date, inline or in the date column), **bullet = `numPr`**. A company
+  can hold several roles (Imagination Technologies has 3); bullets attach to the
+  company block, not cleanly to individual roles.
+
+**Decisions made (refining SPEC §3.8, recorded before writing the sectioniser):**
+
+- **D-19 — Section detection = canonical-name vocabulary + size split.** A
+  paragraph is a section header iff its normalised text matches a canonical
+  alias *and* it is non-bullet and visually elevated (size > body OR
+  Heading-styled OR bold). Within the experience block only, a new company
+  sub-section starts at each non-bullet paragraph at the block's max non-bullet
+  size (14pt here); role lines (≤12pt) and bullets are that company's content.
+  Aliases live in `config.yaml` (`section_aliases`) — the discovered vocabulary,
+  persisted, never re-guessed at runtime (R-10).
+
+- **D-20 — Two canonical sections added: `header` and `languages`.** The spec's
+  list started at `profile`, but every CV has a name/contact block above it and
+  a Languages section below. `header` (position 0) and `languages` are added,
+  both **static**. `certifications` stays in the vocabulary though absent from
+  this corpus (present-only assembly handles its absence). Static set for this
+  corpus: `{header, education, languages, certifications, interests}`; active
+  (critiqued): `{profile, skills, experience_<company>, ai_projects}`.
+
+- **D-21 — Experience sub-sections are per company AND per role-group.**
+  *(First proposed as per-company; revised after user feedback — roles are worked
+  on as distinct sections across the LLMs, so they should be separate.)* SPEC §3.8
+  said "one CVSection per job per company". Naive per-job splitting fails on this
+  corpus because companies stack promotions before shared bullets (Appnexus:
+  Director → Associate Director → 4 shared bullets; Imagination: Senior Customer
+  Engineer → Application Specialist → 4 shared bullets) — splitting those orphans
+  the bullets. Resolution: split on **role-group** boundaries — a new section
+  starts at a role line that *follows a bullet*; consecutive role lines with no
+  bullet between them stay together. This gives per-role granularity while
+  keeping promotion-stacks intact. `section_id =
+  experience_<company>_<first-role-slug>` (e.g.
+  `experience_appnexus_xandr_director_solution_consulting`). Observed result: the
+  AI CV goes from 4 company sections to 7 role-group sections. Cost rises modestly
+  but is bounded — sections freeze once converged (D-12), so critique stays focused.
+
+---
+
 ### F-03 — Step 0: Docker is the run target; image pins Python 3.13-slim (supersedes the 3.12 note)
 
 **What was found:** Mid-Step-0, the spec was extended (§6, §7, §7.5) to make
@@ -482,6 +661,17 @@ tests, and which are tested by inspection only.*
       score progression to validate.
 - [ ] Is `mistral-small` the right model for Phase 0, or does structured extraction
       quality warrant `mistral-medium`? Test on 3 real JDs before committing.
+- [ ] **Experience budget granularity (Phase 2/3):** `budgets.yaml` derives one
+      budget per `section_type`, but per-role-group experience sections vary widely
+      (observed 23–187 words: a terse early role vs a detailed recent one). A single
+      `experience` target (108) over-inflates small role sections. Decide at drafting
+      time whether to bucket experience budgets (e.g. by seniority/recency) or treat
+      max_words as a ceiling only rather than target. Surfaced by D-21's revision.
+- [ ] **D-23 — seniority soft filter:** confirm the soft/band-based seniority
+      ranking (not hard pre-filter) against real Application Engineer / Deployment
+      Specialist JDs when Phase 1 retrieval is built. Verify a generic
+      `seniority: director` CV is not excluded by a JD titled "Senior". Tune the
+      band width and decide whether `job_specific` should tighten.
 ---
 
 ## Reuse Analysis — What the RAG and RFI Projects Teach This Build
@@ -752,6 +942,13 @@ length compliance over a marginal wording improvement.
 ---
 
 ### D-15 — CVs are .docx files; ingestion uses python-docx with heading-style parsing
+
+> **⚠ CORRECTED during Step 1 — see F-04/F-05.** The real corpus has no reliable
+> heading-style structure (table-based; section headers span Heading 1/3/4 and
+> 16/14pt; companies collide with section headers at 14pt). Section detection is
+> now **canonical-name vocabulary matching + a size-based company split inside
+> the experience block** (D-19), using the reused RAG table-aware `docx_loader`.
+> The heading-style assumption below is retained for the record but superseded.
 
 **What was decided:**
 All source CVs are `.docx` files. The ingestion parser uses `python-docx` to

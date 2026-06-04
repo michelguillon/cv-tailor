@@ -38,20 +38,57 @@ chroma:
   metric: "cosine"
   persist_dir: "data/chroma"
 
-# Canonical section list (SPEC §3.8). Order here is the default assembly order;
-# per-CV order is governed by CVSection.position discovered at ingestion.
+# Retrieval / fit-assessment behaviour (Phase 1). PROVISIONAL — to be confirmed
+# when retrieval is built/tested (Step 3) against real JDs.
+retrieval:
+  # Seniority ladder, low → high. Used to compute how far a JD's inferred
+  # seniority is from a CV's `seniority` (a band, not an exact match).
+  seniority_order: [senior, principal, director, vp]
+  # Seniority is a SOFT preference (ranking signal), never a hard pre-filter
+  # that can exclude a CV (D-23). Rationale: Application Engineer / Deployment
+  # Specialist roles at AI-native companies often carry no clean seniority
+  # signal — titled "Senior"/"Principal" but scoped director-equivalent — so a
+  # hard filter would wrongly drop a strong generic CV. Especially true for
+  # cv_type: generic, whose target_role deliberately spans levels.
+  seniority_filter_mode:
+    generic: soft
+    job_specific: soft        # start soft; tighten only if false positives appear
+  # Role is matched semantically (embeddings), not by exact string equality.
+  role_match: semantic
+
+# Canonical section list (SPEC §3.8, corrected by F-05/D-20). Order here is the
+# default assembly order; per-CV order is governed by CVSection.position
+# discovered at ingestion.
 cv_sections:
+  - header            # name + contact block (above Profile)
   - profile
   - skills
-  - experience        # one CVSection per job per company
+  - experience        # one CVSection per COMPANY: section_id = experience_<company_slug>
   - ai_projects       # absent from some CVs; prominent in AI-role CVs
-  - education         # static: true (typically)
-  - certifications    # static: true (typically)
-  - interests         # static: true, always
-
-# Sections copied verbatim and excluded from the critique loop (D-13).
-# `interests` is always static; education/certifications usually are.
-static_sections:
-  - interests
   - education
+  - languages         # present in this corpus
+  - certifications    # absent from this corpus; kept for present-only assembly
+  - interests
+
+# Section-boundary vocabulary (D-19). A paragraph is a section header iff its
+# normalised text matches one of these aliases AND it is visually elevated
+# (size > body, Heading-styled, or bold) and not a bullet. Matching by title is
+# robust where style/size are inconsistent across the corpus (F-04).
+section_aliases:
+  header: []                         # synthesised from the pre-Profile block, not title-matched
+  profile: ["profile", "summary", "professional summary"]
+  skills: ["core skills", "skills", "key skills", "technical skills"]
+  experience: ["work experience", "experience", "professional experience", "employment"]
+  ai_projects: ["technical & ai projects", "ai projects", "technical and ai projects", "technical projects"]
+  education: ["education"]
+  languages: ["languages"]
+  certifications: ["certifications", "certificates", "certification"]
+  interests: ["interests", "hobbies", "interests & hobbies"]
+
+# Sections copied verbatim and excluded from the critique loop (D-13, D-20).
+static_sections:
+  - header
+  - education
+  - languages
   - certifications
+  - interests

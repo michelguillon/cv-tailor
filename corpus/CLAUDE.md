@@ -11,11 +11,16 @@ semantic retrieval. Week 1 RAG reuse. Read the root `CLAUDE.md` first.
 
 - **Unit of ingestion is a section, not a CV** (D-12, R-10). One ChromaDB
   document per section; CV-level metadata replicated onto every section document.
-- **Parse by heading style, verify loudly.** Section boundaries come from Word
-  Heading 1/2 styles, never line splitting (D-15). A silent partial parse is the
-  dangerous failure (R-01): after parsing each CV, print a section inventory
-  (`section_id: N words`) and **block ingestion** if any CV yields fewer than ~4
-  sections until a human confirms.
+- **Parse by title vocabulary + size, verify loudly (D-19, F-04/F-05).** Section
+  boundaries are detected by matching title text against `config.section_aliases`
+  when the line is visually elevated (size > body, Heading-styled, or bold) —
+  NOT by heading style alone (the corpus mixes Heading 1/3/4 + bold Normal for the
+  same roles). Inside experience, the largest non-bullet size = company; split per
+  company AND per role-group (D-21). A silent partial parse is the dangerous
+  failure (R-01): print a section inventory (`section_id: N words`), report any
+  matched-but-empty header, and **block ingestion** if any CV yields fewer than
+  ~`MIN_SECTIONS` until a human confirms. `docx_loader.py` is reused from the
+  Week 1 RAG pipeline (table-aware; do not "fix" it back to heading-only parsing).
 - **ChromaDB metric is immutable** (R-03). Encode it in the collection name
   (`cv_sections_cosine`) and, after `get_or_create`, assert
   `collection.metadata["hnsw:space"] == config.metric`; raise with a clear
