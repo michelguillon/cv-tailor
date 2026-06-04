@@ -21,7 +21,8 @@ The orchestrator and all phases/tools. Entry point: `python -m tailor`
   `write_checkpoint`, `read_section`).
 - `phases/` — `phase0`…`phase6`. Deterministic, fixed order; the only agentic
   region is `phase3_refinement.py`. Local conventions in `phases/CLAUDE.md`.
-- `tools/` — LLM-as-tool wrappers (`critique.py`, `scorer.py`, `rubric.py`). Each
+- `tools/` — LLM-as-tool wrappers: the dual-writer trio (`claude_writer.py`,
+  `gpt_writer.py`, `orchestrator_tool.py`) plus `scorer.py` and `rubric.py`. Each
   returns a typed `models.py` object; the caller never learns which provider ran.
   Local conventions in `tools/CLAUDE.md`.
 

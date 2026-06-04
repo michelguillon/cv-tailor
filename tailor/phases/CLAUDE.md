@@ -21,23 +21,28 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   This rule is stated in the prompt *and* relied on in review.
 - **HITL is preview-before-apply** (Phases 1, 4, 5): show what changes, then ask.
 
-## phase3_refinement.py — the agentic loop (D-01, D-05, D-12)
+## phase3_refinement.py — the dual-writer agentic loop (D-28, D-01, D-05, D-12)
 
-- **Section is the unit of work.** Drafting, critique, scoring, freezing, and
+- **Section is the unit of work.** Writing, adjudication, scoring, freezing, and
   convergence are all per-section. Static sections never enter the loop (D-13).
-- **The orchestrator (Claude) accepts/rejects each `CritiqueItem`** and logs its
-  reasoning (D-06). Set `accepted_by_orchestrator`; set `applied` when the
-  acceptance is reflected in a new version file. accepted-but-not-applied is an
-  anomaly — log it (D-07 #1).
-- **Freeze a section when its critique has zero `major` items** → `converged=True`,
-  excluded from later critique calls. This is what makes iteration 2+ cheaper.
+- **Two writers + one orchestrator** (D-28): `claude_writer` and `gpt_writer` each
+  draft every active section independently; `orchestrator_tool.adjudicate` scores
+  both, selects/synthesises, and sets `direction`. Selected text → `<id>_v<n>.md`;
+  per-writer drafts → `<id>_<writer>_v<n>.md` for the Changes tab.
+- **One pushback exchange** (D-29): both writers may object to the direction once;
+  the orchestrator holds or revises it (skipped on the final pass). All reasoning
+  is logged (D-06), never fed back into context.
+- **Freeze** = orchestrator `converged` **AND** zero `major` items across both
+  drafts (majors are the canonical freeze/soft-stop source, D-28). Frozen sections
+  are excluded from all later iterations — what makes iteration 2+ cheap.
+- **`LoopMemory` is structured state, not prose** (D-30): per-section `directions`
+  carried forward, MINOR suggestions accumulated as `rejected_suggestions` (majors
+  stay raisable until resolved — F-19), frozen set, score history. D-06 preserved.
 - **Termination is dual-signal** (D-05): `abs(keyword_delta) < 0.05` **AND**
-  `abs(critique_delta) < 0.5`. Other exits: all sections frozen; soft-stop when the
-  iteration had zero `major` items; `max_iterations` as the hard ceiling. The loop
-  reports the most informative reason but never exceeds the cap. Don't add a
-  termination path without recording it (and confirm thresholds against real
-  deltas — F-16).
+  `abs(quality_delta) < 0.5`. Other exits: all frozen; soft-stop when the iteration
+  had zero `major` items; `max_iterations` as the hard ceiling (most informative
+  reason wins, never exceeds the cap). Thresholds confirmed on real runs (F-16).
 - **Aggregate `keyword_coverage` is UNION coverage** across non-static sections
-  (F-15), not a mean. Aggregate `critique_score` is the mean over *active*
-  sections, so it can dip as easy sections freeze — expected, absorbed by the 0.5
-  threshold (F-16).
+  (F-15). Aggregate `critique_score` is the mean of the **selected** draft's
+  quality over *active* sections, so it can dip as easy sections freeze — expected,
+  absorbed by the 0.5 threshold (F-16).

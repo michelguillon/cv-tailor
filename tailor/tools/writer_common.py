@@ -1,0 +1,109 @@
+"""tools/writer_common.py — shared pieces for the two dual-writer tools (D-28).
+
+Both writers (Claude, GPT) tailor a section truthfully, respect the same word
+budget (D-27/F-13), self-assess with the same two severity levels (D-11), and get
+the same deterministic length-budget items appended in code (D-14) — code counts
+words, the model judges content. Keeping these in one place means the two writers
+stay calibrated against each other, which is what makes the orchestrator's
+two-draft comparison meaningful.
+"""
+
+from __future__ import annotations
+
+from tailor.models import CritiqueItem
+
+__all__ = [
+    "SEVERITIES",
+    "TRUTHFULNESS_RULES",
+    "SEVERITY_DEFS",
+    "word_target",
+    "length_items",
+    "build_writer_user_prompt",
+]
+
+SEVERITIES = {"major", "minor"}
+
+# A section materially below budget if under this fraction of min_words (matches
+# the old critique tool's threshold so length calls don't shift under the rewrite).
+_UNDER_BUDGET_FRACTION = 0.7
+
+TRUTHFULNESS_RULES = """\
+HARD RULES (a CV tool that fabricates is worse than useless):
+- Do NOT invent or alter employers, job titles, dates, companies, metrics, or \
+facts. Change emphasis, ordering, and wording only.
+- Keep every claim traceable to the SOURCE section. If a keyword or requirement \
+isn't supported, leave it out — never fabricate experience to match the JD.
+- Preserve the source's structure: if it uses bullet points, return bullet points."""
+
+SEVERITY_DEFS = """\
+When you self-assess, flag issues with exactly two severity levels:
+- "major": materially weakens the application or contradicts a JD requirement \
+(a required capability is absent or buried, a claim is vague where the JD wants \
+evidence). The loop only freezes a section when zero major issues remain, so be \
+honest — a real gap is major.
+- "minor": an improvement opportunity; the section is acceptable for submission \
+without it."""
+
+
+def word_target(section_text: str, budget) -> int:
+    """Draft target = clamp(source length, min, max) — anchored to source, not the
+    corpus median (D-27/F-13: padding a terse section toward a median is fabrication
+    risk)."""
+    wc = len(section_text.split())
+    if budget:
+        return min(max(wc, budget.min_words), budget.max_words)
+    return wc or 120
+
+
+def length_items(section_id: str, text: str, budget, writer: str) -> list[CritiqueItem]:
+    """Deterministic length-budget items (D-14) for one writer's own draft — code
+    counts words, the model judges content. Applied to BOTH writers so a length
+    violation reaches the orchestrator's zero-major check regardless of who wrote
+    the over/under-length draft (F-17)."""
+    if not budget:
+        return []
+    wc = len(text.split())
+    if wc > budget.max_words:
+        return [CritiqueItem(
+            section=section_id, severity="major",
+            issue=f"Section is {wc} words, over the {budget.max_words}-word budget (breaks the two-page limit).",
+            suggestion="Cut to the most role-relevant points.",
+            source_writer=writer,
+        )]
+    if wc < budget.min_words * _UNDER_BUDGET_FRACTION:
+        return [CritiqueItem(
+            section=section_id, severity="minor",
+            issue=f"Section is {wc} words, well below the {budget.min_words}-word norm (undertells the role).",
+            suggestion="Add concrete, role-relevant detail.",
+            source_writer=writer,
+        )]
+    return []
+
+
+def build_writer_user_prompt(
+    section_id, section_text, jd, rubric, budget, direction, rejected_suggestions, is_final
+) -> str:
+    """The variable (non-cacheable) half of a writer prompt: this section, the JD
+    requirements, current direction, and loop memory. System + score scaffolding
+    is the stable half (cached separately, D-31)."""
+    target = word_target(section_text, budget)
+    parts = [
+        f"ROLE: {jd.role_title} ({jd.seniority_level})",
+        f"SECTION TYPE: {section_id}",
+        f"TARGET WORDS: ~{target} (stay close to the source length; do not pad)",
+        "",
+        "JD KEY REQUIREMENTS:",
+        *(f"  - {r}" for r in jd.key_requirements),
+        "",
+        f"RUBRIC required keywords: {rubric.required_keywords}",
+        f"RUBRIC nice-to-have: {rubric.nice_to_have_keywords}",
+    ]
+    if direction:
+        parts += ["", f"ORCHESTRATOR'S DIRECTION FOR THIS SECTION: {direction}"]
+    if rejected_suggestions:
+        parts += ["", "ALREADY CONSIDERED AND REJECTED — do not re-raise these:",
+                  *(f"  - {s}" for s in rejected_suggestions)]
+    if is_final:
+        parts += ["", "This is the FINAL pass — produce your definitive version."]
+    parts += ["", f"SOURCE SECTION:\n{section_text}"]
+    return "\n".join(parts)

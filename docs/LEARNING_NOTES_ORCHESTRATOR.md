@@ -390,12 +390,117 @@ version_date catches intentional updates to the same file).
 
 ## Findings Log (populated during build)
 
-> Newest first within the build order; F-15/F-16 are Step 6 (refinement loop).
-
+> Newest first within the build order. F-17–F-20 are the dual-writer Step 5/6
+> rewrite (D-28..D-31); they supersede the single-writer critique loop that the
+> first Step 6 commit built. F-15/F-16 (union coverage, threshold calibration)
+> carry over unchanged.
 
 *Entries added here when build reveals something that changes or confirms
 an architectural decision. Format: what was found, which decision it affects,
 what changed (if anything).*
+
+---
+
+### F-21 — Step 6 (dual-writer): loop validated live; thresholds hold; synthesis dominates selection
+
+**What was verified (Phase 0→3, Haiku writer+orchestrator + GPT-4o-mini writer,
+Airwallex JD, 2 iterations, demo):**
+
+| it | coverage | Δkw     | quality | Δq     | frozen | active |
+|----|----------|---------|---------|--------|--------|--------|
+| 1  | 0.947    | +0.316  | 6.625   | 0.000  | 0      | 8      |
+| 2  | 0.905    | −0.043  | 7.875   | +1.250 | 2      | 6      |
+
+All gates pass: valid per-section `IterationScore`; selected text + per-writer
+drafts on disk; scores discriminate (`claude_quality ≠ gpt_quality` in 4/8
+sections); freezing, rubric extension (→ v2), and rejected-minor forwarding (45
+carried) all work. **Thresholds unchanged (F-16 holds under dual-writer):** Δq
++1.25 correctly did NOT converge (genuine improvement, loop hit the iteration cap),
+and coverage dipped −0.043 from rubric expansion — the bounded effect D-05 predicts.
+
+**Three real dynamics of the dual-writer design:**
+1. **Synthesis dominates selection (14/16).** The orchestrator overwhelmingly
+   merges the two drafts rather than picking one outright — strong evidence for the
+   two-draft premise (D-28: a richer output space than one draft + a punch list).
+   *Watch:* 14/16 is high enough to suspect a synthesis-as-default bias; confirm at
+   the Sonnet validation (D-26) that synthesis is earned, not a reflex.
+2. **Freezing is slower than the single-writer loop** (0 froze in iter1 here vs 5–6
+   in F-16). The orchestrator's `converged` bar is stricter — both drafts strong
+   AND zero major — so sections take longer to settle. More iterations of real work,
+   higher cost: exactly the ~$2–4 trade-off D-28 accepted.
+3. **Quality rises faster** (+1.25 in one iteration vs the single-writer loop's
+   sub-1.0 steps) — the orchestrator's per-section `direction` carried forward (D-30)
+   is doing visible work.
+
+**Deferred:** a 3-iteration live run to watch dual-signal convergence actually fire
+under the new design (here `max_iterations=2` hit the cap first). Folds into the
+final Sonnet validation. **Affects D-28, D-05; confirms F-16.**
+
+---
+
+### F-20 — Step 6 (dual-writer): Anthropic does not hard-enforce a tool's `required`; tolerate a missing array
+
+**What was found (live, Haiku writer):** the `submit_draft` tool schema lists
+`items` as `required`, but Haiku returned a tool call with `text` and no `items`
+key — and the run crashed on `data["items"]`. Unlike OpenAI strict `json_schema`
+(which enforces `required`/`additionalProperties` server-side), Anthropic tool
+input schemas are advisory: the model usually honours them but may omit an
+optional-looking array, especially a small model.
+
+**Decision / what changed:** read tool arrays defensively — `data.get("items") or
+[]`, never `data["items"]`. The validation loop already treated empty items as
+valid (a draft with zero self-flagged issues is legitimate), so the only bug was
+the unguarded access. Both writers fixed. **Affects R-09** (validate-before-use):
+for Anthropic, "validate" must include normalising absent optional fields, not
+just range/enum checks. GPT's writer is safe because strict mode guarantees the
+key — a concrete reason the strict-vs-advisory provider difference matters.
+
+---
+
+### F-19 — Step 6 (dual-writer): `rejected_suggestions` carries MINOR suggestions only
+
+**What was found / decided:** D-30's `rejected_suggestions` ("prevent
+re-litigation") is under-specified — the dual-writer flow has no explicit
+item-level accept/reject (the orchestrator selects whole drafts, not items). To
+make it concrete and safe, the loop forwards into `rejected_suggestions` the
+`suggestion` text of **minor** items only; **major** items are never added.
+
+**Load-bearing reason:** freezing and the soft-stop depend on *zero major items*,
+so a major issue MUST stay raisable every iteration until it's actually resolved —
+suppressing it via "already considered" would let a section freeze with an open
+major gap. Minor items are exactly the recurring nag D-30 targets ("add team
+size" raised every round), so suppressing repeats of those is safe and useful.
+**Affects D-30.** Flagged as a calibration point — confirm on real runs that
+minor suppression doesn't drop a genuinely worth-doing improvement.
+
+---
+
+### F-18 — Step 6 (dual-writer): the orchestrator produces synthesis text; it is NOT stored on OrchestratorDecision
+
+**What was found:** SPEC §4 has `selected_base: "synthesis"` and Phase 3 says the
+"selected/synthesised text [is] written to disk", but `OrchestratorDecision`
+carries no text field. Where does the merged text come from?
+
+**Decision:** `adjudicate()` returns `(OrchestratorDecision, selected_text)`. For a
+pure claude/gpt pick, `selected_text` is that draft's text **verbatim** (the model
+never rewrites a chosen draft — no drift). For `synthesis`, the orchestrator writes
+the merged text in a transient `final_text` tool field, which becomes
+`selected_text`. The decision object stays a pure summary — **draft text lives on
+disk, never in a summary schema (D-07 #3)** — so this respects the checkpoint
+pattern rather than bloating the schema. **Affects D-28, consistent with D-07 #3.**
+
+---
+
+### F-17 — Step 6 (dual-writer): deterministic length items apply to BOTH writers
+
+**What was found / decided:** the length-budget `CritiqueItem`s (D-14: major over
+`max_words`, minor under `min_words`) are computed in code (`writer_common.length_items`)
+and appended to **both** writers' drafts, tagged with `source_writer`. The updated
+spec described this only for `gpt_writer`, but a length violation must reach the
+orchestrator's zero-major freeze check regardless of who wrote the over-length
+draft — otherwise a long Claude draft could freeze a section that breaks the
+two-page limit. Code counts words for both; the models judge content. **Affects
+D-14/D-28.**
 
 ---
 
@@ -1311,3 +1416,105 @@ but downstream processing needs structured input.
 text into a structured instruction before it touches the pipeline, and shows
 the interpretation back to the human for confirmation. The pipeline gets
 structured input; the human gets an expressive interface."
+
+---
+
+### D-28 — Dual-writer refinement loop: two independent drafters, one orchestrator
+
+**What was decided (mid-build, after Step 4 validated the single-writer pipeline):**
+The refinement loop uses two independent writers — Claude Sonnet and GPT-4o-mini —
+each producing their own draft of every active section per iteration. The Claude
+Sonnet orchestrator (in a separate, explicit role) adjudicates: scores both drafts,
+selects or synthesises the best text, and sets direction for the next iteration.
+Both writers can push back on the orchestrator's direction with explicit reasoning
+(one exchange only). The orchestrator reads pushbacks and may revise its direction
+before the next iteration begins.
+
+**Why this replaces the prior design (single writer + GPT critique):**
+The single-writer design had GPT-4o-mini returning `CritiqueItem` lists (issues +
+suggestions), with Claude revising against accepted items. The limitation: two
+writers with different priors produce a richer output space than one writer with
+one critic. GPT's suggested draft is more useful input to Claude than a list of
+issues — "here's what I'd write" forces engagement rather than pick-and-choose
+from suggestions. This mirrors the manual workflow (write with Claude, rewrite with
+ChatGPT, push back to Claude) that produced the best real results.
+
+**D-03 is preserved:** GPT is still the challenger, Claude still the primary
+writer and orchestrator. Roles differ (both write now) but the model-selection
+rationale — GPT as harsher, more direct — remains valid. GPT's drafts serve the
+same function as its critiques did before.
+
+**Cost accepted:** ~$2–4 per full-mode run (vs ~$1 prior). The quality uplift from
+two genuinely independent drafts is worth the 2× writing cost, especially given
+section freezing (F-16: 5–6 of 8–10 sections freeze after iter 1, so later
+iterations are cheap regardless).
+
+**Schema changes:**
+- `WriterDraft` added: `{writer, section_id, text, version, pushback}`
+- `OrchestratorDecision` added: `{section_id, selected_base, direction, synthesis_notes, claude_quality, gpt_quality, keyword_coverage, converged, rubric_additions}`
+- `CritiqueItem.source_writer` added (which writer raised the item)
+- `SectionScore` gains `claude_quality`, `gpt_quality`, `selected_writer` (replaces `critique_score`)
+- `IterationScore.critique_delta` renamed to `quality_delta`
+- `Critique` class removed — writers self-assess and flag issues within their drafts
+- `tools/critique.py` replaced by `tools/claude_writer.py`, `tools/gpt_writer.py`, `tools/orchestrator_tool.py`
+
+**What this teaches:**
+Multi-writer orchestration is a natural extension of the tool pattern. The
+orchestrator's role becomes more valuable when it has two drafts to arbitrate rather
+than one draft to accept/reject suggestions on. "Editor with two manuscripts" is a
+richer and more defensible design than "author with a punch list."
+
+**Interview framing:**
+"The loop has two independent writers — Claude and GPT — each drafting every
+section separately. The orchestrator compares both, scores them, and can synthesise
+the best of each. Both writers can push back on the orchestrator's direction with
+explicit reasoning. It mirrors the manual workflow I found most effective."
+
+---
+
+### D-29 — Writer pushback: one exchange, structured, logged
+
+**What was decided:**
+After the orchestrator issues a decision and direction, both writers get one
+opportunity to push back with explicit reasoning (`WriterDraft.pushback: str | None`).
+The orchestrator reads both pushbacks and decides whether to revise direction or
+hold. One exchange only — the pushback is not subject to further pushback.
+
+**Purpose:** surfaces genuine model disagreement before it silently accumulates as
+quality drift across iterations. If Claude thinks the direction would weaken a
+section, it says so. The orchestrator adjudicates; the reasoning is logged.
+
+**What this is not:** a negotiation loop. One exchange prevents the pushback
+mechanism from burning tokens without converging.
+
+---
+
+### D-30 — Loop-level memory: structured state forwarded; prose reasoning stays in audit trail
+
+**What was decided:**
+`LoopMemory` forwarded each iteration: `rejected_suggestions` (accumulating),
+`orchestrator_directions` (one per iteration), `frozen_sections`, `iteration_scores`.
+
+This is signal, not prose reasoning. D-06 preserved: verbose orchestrator reasoning
+stays in `run_log.jsonl` only. What flows forward is structured state — a shared
+whiteboard, not a conversation history.
+
+**The failure mode prevented:** without `rejected_suggestions`, GPT re-raises
+the same rejected item every iteration, burning a writing slot and forcing
+re-litigation of a settled point. In a 3-iteration loop this can consume a full
+iteration on re-discussion.
+
+---
+
+### D-31 — Prompt caching on stable blocks (post-prompt-tuning)
+
+**What was decided:**
+Anthropic `cache_control` breakpoints on stable blocks (system prompts, JD
+requirements, rubric) once prompts are stable. Variable content (current drafts,
+direction, loop memory) appended after cached prefix. Cache breakpoints set
+**after** prompt tuning — caching a prompt under active development wastes cache
+fills.
+
+**Caveat:** rubric updates mid-loop invalidate the rubric cache block. Rubric
+placed after system prompt but before per-section variable content — a rubric
+update invalidates one cache level, not the system prompt cache.

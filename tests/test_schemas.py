@@ -8,7 +8,6 @@ import dataclasses
 import pytest
 
 from tailor.models import (
-    Critique,
     CritiqueItem,
     CVMatch,
     CVMetadata,
@@ -17,6 +16,7 @@ from tailor.models import (
     FitGap,
     IterationScore,
     JDAnalysis,
+    OrchestratorDecision,
     PipelineOutput,
     ReasoningEntry,
     RubricAddition,
@@ -24,6 +24,7 @@ from tailor.models import (
     SectionBudget,
     SectionRecommendation,
     SectionScore,
+    WriterDraft,
 )
 
 
@@ -110,7 +111,7 @@ def make_iteration_score():
         keyword_coverage=0.74,
         critique_score=7.8,
         keyword_delta=0.13,
-        critique_delta=1.6,
+        quality_delta=1.6,
         sections_converged=2,
         sections_active=3,
         section_scores={
@@ -118,7 +119,9 @@ def make_iteration_score():
                 section_id="profile",
                 section_type="profile",
                 keyword_coverage=0.81,
-                critique_score=8.2,
+                claude_quality=8.2,
+                gpt_quality=7.5,
+                selected_writer="claude",
                 converged=True,
                 current_version=2,
             )
@@ -126,21 +129,35 @@ def make_iteration_score():
     )
 
 
-def make_critique():
-    return Critique(
-        overall_score=7.8,
-        section_scores={"profile": 8.2, "experience_acme": 7.0},
+def make_writer_draft():
+    return WriterDraft(
+        writer="gpt",
+        section_id="experience_acme",
+        text="Led delivery of ...",
+        version=2,
+        pushback="The direction drops the only quantified outcome.",
         items=[
             CritiqueItem(
                 section="experience_acme",
                 severity="major",
                 issue="no quantified outcomes",
                 suggestion="add team size and delivery metrics",
-                accepted_by_orchestrator=True,
-                rejection_reason=None,
-                applied=True,
+                source_writer="gpt",
             )
         ],
+    )
+
+
+def make_orchestrator_decision():
+    return OrchestratorDecision(
+        section_id="experience_acme",
+        selected_base="synthesis",
+        direction="keep Claude's framing, take GPT's metrics",
+        keyword_coverage=0.79,
+        claude_quality=7.5,
+        gpt_quality=8.0,
+        converged=False,
+        synthesis_notes="Claude's opening line + GPT's quantified bullets",
         rubric_additions=["P&L ownership"],
     )
 
@@ -155,7 +172,7 @@ def make_pipeline_output():
         final_rubric=make_rubric(),
         final_cv_md="# Jane Doe\n\nSolution Architect...",
         converged=True,
-        convergence_reason="dual-signal: keyword_delta<0.05 and critique_delta<0.5",
+        convergence_reason="dual-signal: keyword_delta<0.05 and quality_delta<0.5",
         iterations=[make_iteration_score()],
         cost_breakdown={
             "anthropic_sonnet": 0.0441,
@@ -177,10 +194,12 @@ ALL_INSTANCES = [
     SectionRecommendation("skills", "cv.docx", "v2", 0.88, "best ML tooling"),
     FitGap("SC clearance", "hard_requirement", False, "blocking", "no CV mentions it"),
     make_fit_assessment(),
-    SectionScore("profile", "profile", 0.81, critique_score=8.2, converged=True, current_version=2),
+    SectionScore("profile", "profile", 0.81, claude_quality=8.2, gpt_quality=7.0,
+                 selected_writer="claude", converged=True, current_version=2),
     make_iteration_score(),
-    CritiqueItem("profile", "minor", "add cloud mention", "mention AWS"),
-    make_critique(),
+    CritiqueItem("profile", "minor", "add cloud mention", "mention AWS", source_writer="claude"),
+    make_writer_draft(),
+    make_orchestrator_decision(),
     ReasoningEntry(
         ts="2026-06-03T14:23:01Z",
         phase="refinement_loop",
@@ -278,9 +297,21 @@ def _field_names(cls):
     return {f.name for f in dataclasses.fields(cls)}
 
 
-def test_d07_critique_item_has_applied():
-    assert "applied" in _field_names(CritiqueItem)
-    assert "accepted_by_orchestrator" in _field_names(CritiqueItem)
+def test_d28_critique_item_is_writer_sourced():
+    """Dual-writer CritiqueItem: writers self-assess (source_writer); the old
+    orchestrator accept/apply fields are gone (no separate critique tool, D-28)."""
+    names = _field_names(CritiqueItem)
+    assert "source_writer" in names
+    assert {"accepted_by_orchestrator", "rejection_reason", "applied"}.isdisjoint(names)
+
+
+def test_d28_writer_draft_carries_items():
+    """WriterDraft holds the writer's self-flagged items — the canonical source
+    for the zero-major soft-stop / freeze check (D-28)."""
+    names = _field_names(WriterDraft)
+    assert {"writer", "text", "version", "pushback", "items"} <= names
+    wd = WriterDraft.from_dict(make_writer_draft().to_dict())
+    assert isinstance(wd.items[0], CritiqueItem)
 
 
 def test_d07_rubric_additions_are_typed():
@@ -305,5 +336,5 @@ def test_d11_critique_severity_is_two_level():
     """Severity definitions live in the prompt; the schema carries the string.
     Guard that both labels round-trip cleanly."""
     for sev in ("major", "minor"):
-        item = CritiqueItem("profile", sev, "issue", "suggestion")
+        item = CritiqueItem("profile", sev, "issue", "suggestion", source_writer="claude")
         assert CritiqueItem.from_dict(item.to_dict()).severity == sev

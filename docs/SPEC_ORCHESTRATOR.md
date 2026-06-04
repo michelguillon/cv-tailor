@@ -150,7 +150,7 @@ Convergence is declared when both deltas fall below threshold, or max_iterations
 
 **The loop termination table:**
 ```
-If keyword_delta < 0.05 AND critique_delta < 0.5:  convergence
+If keyword_delta < 0.05 AND quality_delta < 0.5:   convergence
 If iteration == max_iterations:                     hard stop
 If last critique returned 0 major items:            soft-stop permitted
 ```
@@ -400,10 +400,12 @@ class FitAssessment:
 class SectionScore:
     section_id: str
     section_type: str
-    keyword_coverage: float       # 0–1; proportion of rubric items present in this section
-    critique_score: float | None  # 0–10; None if section was frozen (static or converged)
-    converged: bool               # True = frozen for remaining iterations
-    current_version: int          # which draft version of this section is active
+    keyword_coverage: float      # 0–1; union coverage across section text (F-15)
+    claude_quality: float | None # orchestrator's score of Claude's draft (0–10); None if frozen
+    gpt_quality: float | None    # orchestrator's score of GPT's draft (0–10); None if frozen
+    selected_writer: str | None  # "claude"|"gpt"|"synthesis"; None if static or frozen
+    converged: bool              # True = frozen for remaining iterations
+    current_version: int         # version number of the selected draft written to disk
 
 @dataclass
 class IterationScore:
@@ -413,38 +415,65 @@ class IterationScore:
                                   #   the CV-level "fraction of the rubric covered
                                   #   anywhere". (Earlier draft said "weighted mean";
                                   #   union matches the 61→74→83% example below and F-11.)
-    critique_score: float | None  # mean of the critiqued (non-frozen) section scores;
+    critique_score: float | None  # mean of selected-draft quality across active sections;
                                   #   None when every non-static section is frozen.
-                                  #   NB: as easy sections freeze, this mean is taken over
-                                  #   the harder remaining sections, so it can dip even as
-                                  #   the CV improves — the 0.5 delta threshold absorbs that.
+                                  #   "selected draft" = whichever writer the orchestrator
+                                  #   chose (claude_quality or gpt_quality from SectionScore).
+                                  #   NB: as easy sections freeze, mean is over harder
+                                  #   survivors — can dip even as CV improves (F-16).
+                                  #   The 0.5 delta threshold absorbs this.
     keyword_delta: float          # vs previous iteration aggregate
-    critique_delta: float
+    quality_delta: float          # delta in critique_score (renamed from critique_delta
+                                  #   for clarity — same convergence threshold: < 0.5)
     sections_converged: int       # count of newly frozen sections this iteration
     sections_active: int          # count still being critiqued
 
 @dataclass
 class CritiqueItem:
     section: str
-    severity: str                 # "major" | "minor"
-                                  # major = materially weakens the application or contradicts JD
-                                  # minor = improvement opportunity; CV is acceptable without it
-                                  # (defined explicitly in the GPT critique system prompt;
-                                  #  labels must be consistent across iterations because the
-                                  #  soft-stop condition depends on zero major items)
+    severity: str                # "major" | "minor"
+                                 # major = materially weakens the application or contradicts JD
+                                 # minor = improvement opportunity; CV is acceptable without it
+                                 # Defined in both writer system prompts — consistent labels
+                                 # required because soft-stop depends on zero major items
     issue: str
     suggestion: str
-    accepted_by_orchestrator: bool
-    rejection_reason: str | None  # if not accepted
-    applied: bool                 # True if acceptance was reflected in next draft
-                                  # (accepted=True, applied=False is logged as an anomaly)
+    source_writer: str           # "claude" | "gpt" — which writer raised this item
 
 @dataclass
-class Critique:
-    overall_score: float          # 0–10
-    section_scores: dict[str, float]
-    items: list[CritiqueItem]
-    rubric_additions: list[str]   # new requirements surfaced
+class WriterDraft:
+    writer: str                  # "claude" | "gpt"
+    section_id: str
+    text: str
+    version: int                 # mirrors iteration number; v0 = Phase 2 initial draft
+    pushback: str | None         # writer's reasoning when disagreeing with orchestrator direction
+                                 # None on first iteration (no prior direction to push back on)
+    items: list[CritiqueItem]    # issues the writer flags in its own draft
+                                 # soft-stop and freeze depend on zero major items across
+                                 # both writers — these are the canonical source for that check
+
+@dataclass
+class OrchestratorDecision:
+    section_id: str
+    selected_base: str           # "claude" | "gpt" | "synthesis"
+    direction: str               # what both writers should focus on next iteration
+    synthesis_notes: str | None  # if selected_base == "synthesis": what to take from each
+    keyword_coverage: float      # scored against rubric on selected/synthesised text
+    claude_quality: float        # orchestrator's score of Claude's draft (0–10)
+    gpt_quality: float           # orchestrator's score of GPT's draft (0–10)
+    converged: bool              # orchestrator judges this section done (both drafts strong,
+                                 # zero major items) — consistent with loop soft-stop condition
+    rubric_additions: list[str]  # new requirements surfaced this decision (max 2, JD-validated)
+
+# Note: Critique class removed. Writers self-assess and return CritiqueItems
+# inside WriterDraft.items. There is no separate GPT critique call.
+
+@dataclass
+class LoopMemory:
+    rejected_suggestions: list[str]     # accumulates across iterations — prevents re-litigation
+    orchestrator_directions: list[str]  # one per completed iteration (writers see trajectory)
+    frozen_sections: list[str]          # section_ids excluded from further dual-write calls
+    iteration_scores: list[IterationScore]  # score history
 
 @dataclass
 class ReasoningEntry:
@@ -560,35 +589,89 @@ Section files written to `outputs/<run_id>/sections/` as checkpoints.
 
 ---
 
-### Phase 3 — Refinement Loop (Claude Sonnet orchestrates; GPT-4o-mini critiques)
+### Phase 3 — Refinement Loop (dual-writer; Claude Sonnet orchestrates)
 
 **Input:** Current section files, `JDAnalysis`, `ScoringRubric`, `budgets.yaml`
 **Output:** Updated section files, updated `ScoringRubric`, `IterationScore`, `ReasoningEntry` list
-**Models:** Claude Sonnet (orchestrator/reviser) + GPT-4o-mini (critique tool)
+**Models:** Claude Sonnet (writer + orchestrator) + GPT-4o-mini (writer)
 
-Each iteration operates at section granularity:
+Mirrors the manual workflow that produced the best real-world CV results: two
+independent writers with different priors, adjudicated by an orchestrator that
+can select, synthesise, or push both writers back for another pass.
 
-1. Score all active (non-frozen) sections against rubric → per-section `keyword_coverage`
-2. Call `critique_cv(active_sections, jd_analysis)` → GPT-4o-mini returns `Critique`
-   with `CritiqueItem` entries scoped to specific sections
-3. Orchestrator evaluates each `CritiqueItem`:
-   - Accept: revise that section; write `<section_id>_v(n+1).md`
-   - Reject: log reasoning in audit trail; section version unchanged
-4. Check length: flag if revised section exceeds `max_words` budget (major) or
-   falls below `min_words` (minor); treat as CritiqueItem for acceptance/rejection
-5. If critique surfaces new requirements → validate against JD, add to rubric
-   (max 2 additions per iteration), increment rubric version
-6. Mark sections with zero major critique items as `converged: True` → frozen
-   for remaining iterations (excluded from future critique calls)
-7. Log `ReasoningEntry` for all decisions including section freeze events
-8. Calculate per-section and aggregate deltas → check convergence
+**Each iteration, per active (non-frozen) section:**
 
-Loop terminates when: all active sections converged OR aggregate deltas below
-threshold OR max_iterations reached OR zero major items triggers soft-stop.
+```
+Step 1 — Dual write
+  Claude Writer      → write_section(...) → WriterDraft (text + items + pushback)
+  GPT-4o-mini Writer → write_section(...) → WriterDraft (text + items + pushback)
+  Both writers receive:
+    - current section text (source v0 or prior iteration's selected version)
+    - JD requirements + rubric
+    - word budget: clamp(source_word_count, min, max) per D-27/F-13
+    - orchestrator direction from prior iteration (None on iter 1)
+    - rejected_suggestions list (accumulates; prevents re-litigation)
+    - is_final_iteration: bool ("definitive version" prompt on last pass)
+  Each writer self-assesses and returns CritiqueItems in WriterDraft.items
 
-**Cost efficiency:** By iteration 2–3, most sections are frozen. The GPT
-critique call covers only active sections, substantially reducing token cost
-per iteration.
+Step 2 — Orchestrator adjudication (Claude Sonnet, orchestrator role)
+  Sees: both WriterDrafts (text + items), rubric, keyword scores
+  Produces OrchestratorDecision per section:
+    selected_base ("claude"|"gpt"|"synthesis"),
+    synthesis_notes (what to take from each, if synthesis),
+    direction for next iteration,
+    claude_quality + gpt_quality (0–10, same anchors as writer prompts),
+    keyword_coverage of selected text,
+    converged (True when both drafts strong + zero major items),
+    rubric_additions (max 2 total per iteration, JD-validated)
+  Selected/synthesised text written to disk as: <section_id>_v<n>.md
+  Per-writer drafts also written for inspection: <section_id>_<writer>_v<n>.md
+
+Step 3 — Writer pushback (if not final iteration)
+  Both writers read OrchestratorDecision + direction
+  May push back with explicit reasoning (WriterDraft.pushback: str | None)
+  Orchestrator reads both pushbacks; may revise direction or hold
+  One exchange only — pushback is not subject to further pushback
+  Revised direction feeds Step 1 of next iteration
+
+Step 4 — Convergence check
+  Per-section freeze: OrchestratorDecision.converged == True
+  Loop soft-stop: zero major items across both writers' WriterDraft.items
+  Both conditions are kept consistent — orchestrator is instructed to set
+  converged=True only when it also sees zero major items from both writers
+  Frozen sections excluded from all subsequent Steps 1–3
+```
+
+**Loop-level memory (LoopMemory — D-06 compatible structured state):**
+Forwarded into every writer and orchestrator call each iteration:
+```python
+@dataclass
+class LoopMemory:
+    rejected_suggestions: list[str]     # accumulates — prevents re-litigation
+    orchestrator_directions: list[str]  # one per completed iteration
+    frozen_sections: list[str]
+    iteration_scores: list[IterationScore]
+```
+
+**Prompt caching (D-31):**
+Anthropic `cache_control` breakpoints on stable blocks (system prompt, JD
+requirements, rubric). Variable content (current drafts, direction, LoopMemory)
+appended after the cached prefix. Breakpoints set once prompts are stable —
+not during prompt tuning. Note: in demo/Haiku dev the stable block may fall
+under Haiku's cache minimum (~2048 tokens) — caching is effectively active
+only in full/Sonnet mode. Instrument and report rather than assume savings.
+
+**Termination table (thresholds confirmed on real data — F-16):**
+```
+keyword_delta < 0.05 AND quality_delta < 0.5  →  convergence
+iteration == max_iterations                    →  hard stop
+zero major items (both writers, last iter)     →  soft-stop permitted
+```
+
+**Cost model:**
+Per active section per iteration: 2 writer calls + 1 orchestrator call + 2 pushback calls.
+Sections freeze progressively (F-16: 5–6 of 8–10 freeze after iter 1 on real data).
+Estimated full-mode run: ~$2–4. Accepted trade-off for dual-writer quality uplift.
 
 ---
 
@@ -738,9 +821,11 @@ cv-tailor/
 │   │   ├── phase5_validation.py        ← Haiku formatting gate
 │   │   └── phase6_output.py           ← HTML + markdown generation
 │   ├── tools/
-│   │   ├── critique.py        ← GPT-4o-mini critique tool (returns Critique)
-│   │   ├── scorer.py          ← keyword coverage scoring function
-│   │   └── rubric.py          ← ScoringRubric management + update logic
+│   │   ├── claude_writer.py     ← Claude Sonnet writer (draft + self-assessed items + pushback)
+│   │   ├── gpt_writer.py        ← GPT-4o-mini writer (draft + self-assessed items + pushback)
+│   │   ├── orchestrator_tool.py ← Claude Sonnet orchestrator role (adjudication + scoring)
+│   │   ├── scorer.py            ← keyword coverage (token-subset match per D-25/F-10)
+│   │   └── rubric.py            ← ScoringRubric management + JD-validation logic
 │   ├── models.py              ← all dataclasses (schemas §4)
 │   ├── config.py              ← RunConfig loader from config.yaml
 │   ├── audit.py               ← ReasoningEntry logger → run_log.jsonl
@@ -983,41 +1068,67 @@ Static sections copied verbatim. Writes section files to `outputs/<run_id>/secti
 *Verification:* section files exist; static sections match source; drafted sections
 respect word budget (within ~10%); aggregate keyword coverage higher than base CV.
 
-**Step 5 — Critique tool**
-Build `tools/critique.py` (GPT-4o-mini).
+**Step 5 — Writer tools + orchestrator tool (build and test in isolation)**
 
-Critique prompt design requirements:
-- Severity definitions explicit in prompt: major = materially weakens application
-  or contradicts JD; minor = improvement opportunity, CV acceptable without it
-- **Score anchors required:** `overall_score` must be calibrated with explicit
-  examples ("9 = only minor issues remain; 7 = one section still has a major
-  gap; 5 = multiple structural problems"). Without anchors, GPT will score most
-  drafts at 8+ from iteration 1, making critique_delta useless as a convergence
-  signal. (Learned from RFI project: LLM-as-judge consistently over-scores
-  without explicit rubric anchors.)
-- Length violations included as CritiqueItems: major if section exceeds max_words,
-  minor if materially below min_words
-- **Schema validation before use:** after receiving `Critique`, validate:
-  `overall_score` in 0-10, all `severity` in `{"major","minor"}`, all `section`
-  values are valid section_ids. Retry once on validation failure. Surface to
-  human if retry also fails — never let a partially-valid Critique enter the
-  accept/reject loop (a missing severity field would bypass the soft-stop condition).
+Build `tools/claude_writer.py`:
+- `write_section(...) → WriterDraft` — draft text + self-assessed `items: list[CritiqueItem]`
+- Word target = `clamp(source_word_count, budget.min_words, budget.max_words)` (D-27/F-13)
+- Severity definitions, score anchors, final-iteration signal, rejected_suggestions
+  forwarding all in prompt
+- Schema-validated + retry once (R-09)
 
-Test in isolation before wiring into the loop.
+Build `tools/gpt_writer.py`:
+- Same interface as `claude_writer.py`
+- OpenAI strict `json_schema` (severity enum enforced server-side — F-14)
+- Length-budget violations appended deterministically in code, not left to GPT (F-14)
+- Score anchors: "9–10 = publication-ready; 7–8 = one gap remains; 5–6 = multiple
+  structural issues; 3–4 = weak draft" (validated on real data F-14: weak 3.0, strong 8.0)
+- Schema-validated + retry once
 
-*Verification:* `Critique` schema valid; severity labels consistent; score varies
-across genuinely different draft quality levels (test with a deliberately weak
-draft vs a strong one).
+Build `tools/orchestrator_tool.py` (Claude Sonnet, orchestrator role):
+- `adjudicate(section_id, claude_draft, gpt_draft, rubric, jd, prior_scores) → OrchestratorDecision`
+- Same score anchors as writer prompts (scores must be on same scale)
+- Comparison prompt content-anchored: "evaluate against rubric and JD only —
+  do not prefer one writing style over another" (prevents Claude-favours-Claude bias)
+- Explicit tiebreak rule: "if scores within 0.5, prefer synthesis"
+- Schema-validated + retry once
 
-**Step 6 — Refinement loop (section-granular)**
-Build `phases/phase3_refinement.py` and `tools/rubric.py`.
-Wire: critique active sections → accept/reject per item → revise section →
-write new version file → score → freeze converged sections → check convergence.
-Test with `max_iterations=1` first.
+Build `tools/rubric.py`: rubric update + JD-validation logic. Test in isolation.
 
-*Verification:* single-iteration run produces valid per-section `IterationScore`;
-frozen sections excluded from iteration 2 critique call; section version files
-written correctly.
+Test all tools with a real section + real JD (Airwallex) before wiring.
+Use a gitignored driver (`tmp/step5_live.py`) for live API tests;
+keep `tests/test_phases.py` mocked and API-free.
+
+*Verification:*
+- [ ] Orchestrator selects the better of two meaningfully different drafts with coherent direction
+- [ ] `claude_quality` ≠ `gpt_quality` (scores discriminate)
+- [ ] Weak draft → major CritiqueItem in `WriterDraft.items`; strong → minor or none
+- [ ] `WriterDraft.pushback` is str when writer disagrees; None otherwise
+- [ ] All tools schema-validated and retry on failure
+- [ ] `test_schemas.py` green with `WriterDraft`, `OrchestratorDecision`, `LoopMemory` added
+
+**Step 6 — Refinement loop (dual-writer, section-granular)**
+Build `phases/phase3_refinement.py`.
+
+Wire per-iteration loop:
+1. Dual write: `claude_writer` + `gpt_writer` for all active sections
+2. Orchestrator adjudication: `orchestrator_tool` per section → `OrchestratorDecision`
+3. Write selected text to `<section_id>_v<n>.md`; per-writer drafts to `<section_id>_<writer>_v<n>.md`
+4. Pushback exchange (if not final iteration)
+5. Score: `IterationScore` (union keyword coverage + mean selected-draft quality)
+6. Freeze sections where `converged=True`; update `LoopMemory`
+7. Log `ReasoningEntry` for all decisions
+8. Check termination conditions
+
+Build with `max_iterations=1` first. Add prompt cache breakpoints after prompts
+are stable — not during tuning. Convergence thresholds confirmed (F-16) — no change.
+
+*Verification:*
+- [ ] Single-iteration: valid `OrchestratorDecision` per section; disk files written correctly
+- [ ] Multi-iteration: `quality_delta` decreasing or plateauing; convergence fires correctly
+- [ ] Frozen sections excluded from iteration 2 dual-write calls
+- [ ] `LoopMemory.rejected_suggestions` accumulates; `orchestrator_directions` grows by one/iter
+- [ ] `run_log.jsonl` complete and readable after a full demo-mode run
 
 **Step 7 — HITL, validation, and output generation**
 Build `phases/phase4_hitl.py` (section status display), `phases/phase5_validation.py`

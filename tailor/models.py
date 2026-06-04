@@ -37,7 +37,8 @@ __all__ = [
     "SectionScore",
     "IterationScore",
     "CritiqueItem",
-    "Critique",
+    "WriterDraft",
+    "OrchestratorDecision",
     "ReasoningEntry",
     "PipelineOutput",
 ]
@@ -242,47 +243,73 @@ class FitAssessment(Serializable):
 class SectionScore(Serializable):
     section_id: str
     section_type: str
-    keyword_coverage: float       # 0–1; proportion of rubric items present in this section
-    critique_score: float | None = None  # 0–10; None if section frozen (static or converged)
+    keyword_coverage: float       # 0–1; union coverage on the selected/synthesised text (F-15)
+    # Dual-writer scoring (D-28): the orchestrator scores BOTH drafts. None when the
+    # section is frozen (no writers ran this iteration) or static.
+    claude_quality: float | None = None   # 0–10; orchestrator's score of Claude's draft
+    gpt_quality: float | None = None      # 0–10; orchestrator's score of GPT's draft
+    selected_writer: str | None = None    # "claude" | "gpt" | "synthesis"; None if frozen/static
     converged: bool = False       # True = frozen for remaining iterations
-    current_version: int = 0      # which draft version of this section is active
+    current_version: int = 0      # version number of the selected draft on disk
 
 
 @dataclass
 class IterationScore(Serializable):
     iteration: int
-    keyword_coverage: float       # weighted mean across non-static sections
-    critique_score: float | None  # mean of non-frozen section scores
+    keyword_coverage: float       # UNION coverage across non-static sections (F-15)
+    critique_score: float | None  # mean of the SELECTED draft's quality across active
+                                  #   sections (D-28); None when all non-static are frozen
     keyword_delta: float          # vs previous iteration aggregate
-    critique_delta: float
+    quality_delta: float          # delta in critique_score (renamed from critique_delta, D-28;
+                                  #   same convergence threshold < 0.5, F-16)
     sections_converged: int       # count of newly frozen sections this iteration
-    sections_active: int          # count still being critiqued
+    sections_active: int          # count still being written/adjudicated
     section_scores: dict[str, SectionScore] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
-# Phase 3 — critique (GPT-4o-mini tool output)                                #
+# Phase 3 — dual-writer drafts, self-assessed items, orchestrator decision    #
+# (D-28: two writers + one orchestrator replace the single critique tool)     #
 # --------------------------------------------------------------------------- #
 
 @dataclass
 class CritiqueItem(Serializable):
+    """An issue a writer flags in its OWN draft (D-28). Both writers self-assess;
+    these items are the canonical source for the zero-major soft-stop / freeze."""
     section: str
-    severity: str                 # "major" | "minor" (defined explicitly in the GPT prompt;
-                                  #  the soft-stop condition depends on zero major items)
+    severity: str                 # "major" | "minor" (defined in both writer prompts; the
+                                  #  soft-stop condition depends on zero major items, D-11)
     issue: str
     suggestion: str
-    accepted_by_orchestrator: bool = False
-    rejection_reason: str | None = None   # if not accepted
-    applied: bool = False         # True if acceptance was reflected in next draft
-                                  # (accepted=True, applied=False is logged as an anomaly — D-07 #1)
+    source_writer: str            # "claude" | "gpt" — which writer raised this item
 
 
 @dataclass
-class Critique(Serializable):
-    overall_score: float          # 0–10
-    section_scores: dict[str, float] = field(default_factory=dict)
+class WriterDraft(Serializable):
+    writer: str                   # "claude" | "gpt"
+    section_id: str
+    text: str
+    version: int                  # mirrors the iteration number; v0 = Phase 2 initial draft
+    pushback: str | None = None   # writer's reasoning when disagreeing with the orchestrator's
+                                  #   direction; None on iteration 1 (no prior direction)
+    # Issues the writer flags in its own draft — soft-stop/freeze read majors from here (D-28).
     items: list[CritiqueItem] = field(default_factory=list)
-    rubric_additions: list[str] = field(default_factory=list)  # new requirements surfaced
+
+
+@dataclass
+class OrchestratorDecision(Serializable):
+    """The orchestrator's adjudication of two drafts for one section (D-28)."""
+    section_id: str
+    selected_base: str            # "claude" | "gpt" | "synthesis"
+    direction: str                # what both writers should focus on next iteration
+    keyword_coverage: float       # rubric coverage of the selected/synthesised text
+    claude_quality: float         # 0–10; orchestrator's score of Claude's draft
+    gpt_quality: float            # 0–10; orchestrator's score of GPT's draft
+    converged: bool               # section done: both drafts strong AND zero major items
+                                  #   (kept consistent with the loop soft-stop, D-28/D-05)
+    # Trailing optionals so the required fields above stay positional-friendly.
+    synthesis_notes: str | None = None        # what to take from each, when selected_base == "synthesis"
+    rubric_additions: list[str] = field(default_factory=list)  # surfaced this decision (max 2, JD-validated)
 
 
 # --------------------------------------------------------------------------- #
