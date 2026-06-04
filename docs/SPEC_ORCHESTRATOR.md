@@ -409,8 +409,15 @@ class SectionScore:
 class IterationScore:
     iteration: int
     section_scores: dict[str, SectionScore]   # section_id → SectionScore
-    keyword_coverage: float       # weighted mean across non-static sections
-    critique_score: float | None  # mean of non-frozen section scores
+    keyword_coverage: float       # UNION coverage across non-static sections (F-15):
+                                  #   the CV-level "fraction of the rubric covered
+                                  #   anywhere". (Earlier draft said "weighted mean";
+                                  #   union matches the 61→74→83% example below and F-11.)
+    critique_score: float | None  # mean of the critiqued (non-frozen) section scores;
+                                  #   None when every non-static section is frozen.
+                                  #   NB: as easy sections freeze, this mean is taken over
+                                  #   the harder remaining sections, so it can dip even as
+                                  #   the CV improves — the 0.5 delta threshold absorbs that.
     keyword_delta: float          # vs previous iteration aggregate
     critique_delta: float
     sections_converged: int       # count of newly frozen sections this iteration

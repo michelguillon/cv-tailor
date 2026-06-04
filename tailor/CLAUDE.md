@@ -16,20 +16,23 @@ The orchestrator and all phases/tools. Entry point: `python -m tailor`
   `ReasoningEntry` for every orchestrator decision; never feed it back into context.
 - `helpers.py` — the three provider clients + `call_with_retry()`. **This is the
   only module that touches a provider SDK directly.**
-- `phases/` — `phase0`…`phase6`. Deterministic, fixed order. The *only* agentic
-  region is `phase3_refinement.py` (accept/reject critique, extend rubric, decide
-  convergence).
-- `tools/` — LLM-as-tool wrappers (`critique.py` → GPT-4o-mini; `scorer.py`;
-  `rubric.py`). Each returns a typed object from `models.py`; the caller never
-  learns which provider ran.
+- `run_context.py` — per-run output dir, versioned section files, audit logger.
+  The checkpoint substrate every phase writes through (`write_section`,
+  `write_checkpoint`, `read_section`).
+- `phases/` — `phase0`…`phase6`. Deterministic, fixed order; the only agentic
+  region is `phase3_refinement.py`. Local conventions in `phases/CLAUDE.md`.
+- `tools/` — LLM-as-tool wrappers (`critique.py`, `scorer.py`, `rubric.py`). Each
+  returns a typed `models.py` object; the caller never learns which provider ran.
+  Local conventions in `tools/CLAUDE.md`.
 
 ## Rules specific to this package
 
-- A phase reads its inputs from the previous phase's checkpoint and writes its
-  own checkpoint to `outputs/<run_id>/` before returning.
-- Convergence is **dual-signal** (keyword_delta < 0.05 AND critique_delta < 0.5);
-  soft-stop is permitted **only** when the last critique had zero `major` items
-  (D-05, D-01). Don't add a third termination path without recording it.
-- Rubric additions: max 2 per iteration, each validated against the JD before
-  acceptance, tracked as `RubricAddition` with provenance (D-04).
-- Demo mode swaps the Sonnet orchestrator for Haiku via config — same interface.
+- **Checkpoint in, checkpoint out.** A phase reads its inputs from the previous
+  phase's checkpoint and writes its own to `outputs/<run_id>/` before returning
+  (R-06). Section drafts are versioned files on disk, never fields on
+  `PipelineOutput` (D-07 #3).
+- **Demo vs full is config, not branching.** Phases take the orchestrator model
+  (Haiku/dev, Sonnet/full) and thresholds from `RunConfig`; never hardcode a model
+  or `if mode == "demo"` (D-08, D-26).
+- **Audit ≠ context.** Log every orchestrator decision as a `ReasoningEntry` via
+  `audit.py`; never feed it back into the messages array (D-06).

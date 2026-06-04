@@ -79,7 +79,9 @@ def _draft_one(jd, rubric, section_type, target_words, source_text, *, model, cl
 def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=None) -> dict:
     """Draft every recommended section to disk. Returns a manifest dict.
 
-    manifest[section_id] = {static, version, word_count, source_cv, path}
+    manifest[section_id] = {static, version, word_count, source_cv, path, section_type}
+    The manifest is Phase 3's sole input contract: it carries section_type so the
+    refinement loop is fully checkpoint-driven and never re-reads the corpus.
     """
     if fit.recommended_sections is None:
         raise DraftError("no recommended_sections (no_fit outcome) — nothing to draft")
@@ -100,7 +102,7 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
                             f"{section_id} copied verbatim from {rec.source_cv}")
             manifest[section_id] = {
                 "static": True, "version": None, "word_count": len(src["document"].split()),
-                "source_cv": rec.source_cv, "path": str(path),
+                "source_cv": rec.source_cv, "path": str(path), "section_type": section_type,
             }
             continue
 
@@ -121,7 +123,7 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
                         f"{section_id} drafted from {rec.source_cv} (~{target}w target, {wc}w actual)")
         manifest[section_id] = {
             "static": False, "version": 0, "word_count": wc,
-            "source_cv": rec.source_cv, "path": str(path),
+            "source_cv": rec.source_cv, "path": str(path), "section_type": section_type,
         }
 
     ctx.write_checkpoint("phase2_draft_manifest", manifest)

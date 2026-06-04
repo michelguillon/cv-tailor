@@ -116,8 +116,9 @@ def test_drafts_nonstatic_and_copies_static(tmp_path):
     assert "EMEA" in ctx.read_section("profile", version=0)
     assert manifest["profile"] == {
         "static": False, "version": 0, "word_count": 6, "source_cv": "Figma",
-        "path": str(ctx.section_path("profile", version=0)),
+        "path": str(ctx.section_path("profile", version=0)), "section_type": "profile",
     }
+    assert manifest["interests"]["section_type"] == "interests"
 
 
 def test_manifest_checkpoint_written(tmp_path):

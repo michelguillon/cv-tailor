@@ -390,6 +390,9 @@ version_date catches intentional updates to the same file).
 
 ## Findings Log (populated during build)
 
+> Newest first within the build order; F-15/F-16 are Step 6 (refinement loop).
+
+
 *Entries added here when build reveals something that changes or confirms
 an architectural decision. Format: what was found, which decision it affects,
 what changed (if anything).*
@@ -454,6 +457,67 @@ treated as a full match, beyond that a graded penalty — applied to ranking onl
 **Links:** depends on [[F-06]] (single scalar seniority) and the canonical
 vocabulary in D-22. Revisit in Step 3 (Phase 1 fit assessment) — added to Open
 Questions.
+
+---
+
+### F-16 — Step 6: refinement loop validated live; convergence thresholds confirmed (Open Question #1 resolved)
+
+**What was verified (Phase 0→3, Haiku orchestrator + GPT-4o-mini critique, real
+JDs, demo wiring):** two real runs produced clean, well-behaved convergence:
+
+| JD        | active | it1 Δkw | it2 Δkw | it3 Δkw | Δcrit (it1→3) | frozen/iter | reason |
+|-----------|--------|---------|---------|---------|---------------|-------------|--------|
+| Airwallex | 8      | −0.032  | +0.050  | +0.017  | 6.75→6.0→6.0  | 5 / 1 / 1   | dual_signal @3 |
+| JPMC      | 10     | +0.235  | +0.065  | 0.000   | 6.30→6.0→6.0  | 6 / 1 / 2   | dual_signal @3 |
+
+**The thresholds (kw_delta < 0.05, crit_delta < 0.5) are confirmed — no change.**
+Real "still-improving" iterations show Δkw in 0.05–0.235; the plateau iteration
+shows Δkw ≤ 0.017. The 0.05 line sits cleanly in that gap. Both runs held through
+iteration 2 (genuine improvement) and converged at iteration 3 when both signals
+flattened — consistent with `max_iterations: 3` for full mode (the loop reaches
+natural convergence right at the cap on this corpus).
+
+**Three real dynamics observed, all matching D-05's predicted failure modes — and
+all absorbed by the dual signal:**
+1. **Critique score drifts DOWN as sections freeze.** Aggregate `critique_score`
+   is the mean over *active* sections only (D-12); once the easy sections freeze,
+   the mean is taken over the harder survivors, so it can fall (6.75→6.0) even as
+   the CV improves. `abs(critique_delta) < 0.5` tolerates this without a false
+   "regression" — and it is why the signal must be paired with keyword coverage,
+   never used alone.
+2. **Coverage can dip slightly (Airwallex it1: −0.032)** from rubric expansion +
+   rewording (the rubric grew v1→v3, adding keywords to the denominator). Net
+   coverage still rose (0.63→0.667). Confirms the "rubric expansion stall" mode is
+   real but bounded by the max-2-additions/iteration cap (D-04).
+3. **Freezing makes later iterations cheaper and focused (D-12 confirmed):** 5–6
+   of 8–10 sections froze after iteration 1; iteration 2+ critiques only the 1–4
+   survivors. Verified on disk: frozen sections stop gaining version files (most
+   sections end at v1, the never-converging `ai_projects` reaches v3).
+
+**Resolves Open Question #1.** Affects D-05 (thresholds) and D-12 (freeze
+economics). No code change — the calibration *validates* the pre-set thresholds.
+
+---
+
+### F-15 — Step 6: IterationScore.keyword_coverage is UNION coverage, not a mean (spec ambiguity resolved)
+
+**What was found:** SPEC §4 labelled `IterationScore.keyword_coverage` a "weighted
+mean across non-static sections". But a mean of *per-section* coverages is
+structurally low — each section covers a different subset of the rubric, so most
+per-section coverages are 0.1–0.3 and their mean would sit far below the SPEC
+§Phase-4 example progression (`61% → 74% → 83%`). That example, and the CV-level
+metric established in F-11, are **union coverage** (fraction of the rubric covered
+*anywhere* across the non-static sections).
+
+**Decision:** the aggregate `IterationScore.keyword_coverage` is `union_coverage`
+across the current text of all non-static sections — continuous with Phase 1's
+`composed_coverage` (the draft's coverage picks up where fit assessment left off)
+and the right scale for the 0.05 delta threshold (F-16 confirms 0.6–0.95 ranges).
+Per-*section* `SectionScore.keyword_coverage` stays as defined (this section's
+coverage of the whole rubric). SPEC §4 comment updated to match.
+
+**Affects:** D-05 (the convergence signal's scale), the SPEC schema comment. No
+decision reopened — a labelling fix grounded in F-11 and the SPEC's own example.
 
 ---
 
@@ -825,9 +889,11 @@ tests, and which are tested by inspection only.*
 
 ## Open Questions (resolved before closing the project)
 
-- [ ] Does the convergence threshold (keyword_delta < 0.05, critique_delta < 0.5) need
-      calibration after seeing real iteration data? Document the first real run's
-      score progression to validate.
+- [x] ~~Does the convergence threshold (keyword_delta < 0.05, critique_delta < 0.5) need
+      calibration after seeing real iteration data?~~ **Resolved (F-16):** validated on
+      two real runs (Airwallex, JPMC). Thresholds unchanged — real improving iterations
+      show Δkw 0.05–0.235, plateau iterations Δkw ≤ 0.017; the 0.05 line sits cleanly in
+      the gap. Both converged by dual-signal at iteration 3.
 - [x] ~~Is `mistral-small` the right model for Phase 0, or does structured extraction
       quality warrant `mistral-medium`?~~ **Resolved (F-09/D-24):** small + prompt
       fix, validated on 4 JDs — medium's accuracy at small's 4× speed and lower cost.
