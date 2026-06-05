@@ -1188,18 +1188,23 @@ Machine-readable. One JSON object per line. Same format as Week 2 session transc
 
 ### Cost breakdown (in run_log.jsonl footer)
 
+Model-level (D-08) and explicitly **estimated** list-price, never billed (F-08).
+Keys match `tailor/cost.py`'s `CostTracker.footer` (the breakdown is keyed by
+model: `anthropic_sonnet`/`anthropic_haiku`/`openai_gpt4o_mini`/`mistral_small`):
+
 ```json
 {
   "type": "run_complete",
-  "cost_breakdown": {
-    "mistral": 0.0018,
-    "anthropic": 0.0441,
-    "openai": 0.0089
+  "cost_breakdown_estimated_usd": {
+    "anthropic_haiku": 0.1023,
+    "mistral_small": 0.0003,
+    "openai_gpt4o_mini": 0.0022
   },
-  "total_usd": 0.0548,
-  "total_gbp": 0.0433,
-  "mode": "full",
-  "iterations_run": 3
+  "total_estimated_usd": 0.1045,
+  "total_estimated_gbp": 0.0826,
+  "mode": "demo",
+  "iterations_run": 1,
+  "note": "list-price estimate, not billed; Mistral runs free-tier (F-08)"
 }
 ```
 

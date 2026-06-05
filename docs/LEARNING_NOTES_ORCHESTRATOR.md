@@ -401,6 +401,44 @@ what changed (if anything).*
 
 ---
 
+### F-27 — Step 9: the deferred end-to-end test — one mock seam, fakes that count
+
+**What was built:** `tests/test_phases.py` — a fully-mocked `run_pipeline` pass
+(Phase 0→6, `AutoHITL`, demo mode), the E2E deferred from Step 8. 6 tests; suite
+181 → **187**, still zero API calls.
+
+**The seam that kept it small:** the pipeline already isolates every provider SDK
+behind three getters (`get_{mistral,anthropic,openai}_client`) and the corpus
+behind `all_sections` (F-26, R-05). So the *entire* run is faked by monkeypatching
+four names — `phase0`'s imported `get_mistral_client`, `helpers.get_anthropic_client`
+/ `get_openai_client` (which `claude_complete`/`gpt_complete` resolve at call time),
+and `run.all_sections`. One prompt-aware Anthropic fake dispatches on `tool_choice`
+name to serve six call sites (fit / draft / decision / pushback / rubric /
+formatting) plus the tool-less Phase 2 draft; one OpenAI fake serves the GPT writer;
+one Mistral fake serves Phase 0 — reusing the `SECTION TYPE:`/tool-name dispatch
+already proven in `test_phase3`. **The clean tool/provider boundary (D-02) is what
+makes a 7-call-site, 3-provider pipeline testable through 4 setattr lines.**
+
+**Cost accuracy without brittle hardcoding (§9 item 3):** the fakes emit *fixed*
+per-call usage (Anthropic 1000/100, OpenAI 500/50, Mistral 200/20) and **count
+calls** into a shared `rec` dict. The test then recomputes the expected footer from
+`rec × PRICES_USD_PER_MTOK` and asserts it equals `cost_breakdown_estimated_usd` —
+exact, yet robust to a change in how many times each provider is called (it reads
+the actual count, not a magic 13). This verifies the whole helpers→cost→footer
+chain end-to-end, not just `CostTracker` arithmetic (which `test_cost` already
+covers in isolation). The footer-shape assertion also pins the implemented §9 keys
+(`cost_breakdown_estimated_usd` / `total_estimated_usd` / `total_estimated_gbp` /
+`note`), closing the SPEC §9 example drift.
+
+**Freeze determinism asserted explicitly (§8):** the pipeline is run twice with
+identical fakes; `iteration_1.json`'s per-section `converged` flags + `sections_
+converged`/`active` match exactly (same input → same freeze). **Replay** is driven
+through the real click CLI (`CliRunner`) against the produced run dir, confirming it
+reads phase0/phase1 checkpoints + `iteration_*.json` + the `run_complete` footer +
+reasoning trace. **Affects D-08, §9; closes the Step 9 E2E gap (test-coverage note).**
+
+---
+
 ### F-26 — Step 8: pipeline + CLI — central cost capture and an injectable HITL handler
 
 **Two design choices that kept Step 8 small:**
@@ -1141,15 +1179,18 @@ final Sonnet validation (D-26), not yet run.
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
 
-- **181 tests, all deterministic / mocked (no API).** Every provider is faked;
+- **187 tests, all deterministic / mocked (no API).** Every provider is faked;
   LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
   F-16, F-21, F-25, F-26), not in the pytest suite.
 - **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.
 - **Tools** (test_writers, test_orchestrator, test_rubric, test_scorer): each
   dual-writer/orchestrator/rubric/scorer tool in isolation with mocked providers.
 - **Phases** (test_phase0/1/2/3/4/5/6): per-phase, mocked. Freeze logic is
-  deterministic (same input → same freeze). The fully-mocked **end-to-end** run
-  (all four providers in one pass) is the Step 9 gap — `test_phases.py`.
+  deterministic (same input → same freeze).
+- **End-to-end** (test_phases, 6 — Step 9, F-27): a fully-mocked `run_pipeline`
+  pass (Phase 0→6, all three SDK providers in one run). Asserts cv_final.md/.html,
+  a complete run_log (spine events + footer), exact cost footer from known token
+  counts, freeze determinism, and `replay`. Closes the Step 8 E2E gap.
 - **Pipeline** (test_cost, test_run): cost math + helpers→cost wiring; RunConfig
   mode-gating; HITL handlers.
 
@@ -1169,11 +1210,16 @@ tests, and which are tested by inspection only.*
       target over-inflates small role sections.~~ **Resolved (D-27/F-13):** draft
       target = `clamp(source_word_count, min, max)`; the median is a corpus stat /
       Phase-5 check, not a per-section drafting target.
-- [ ] **D-23 — seniority soft filter:** confirm the soft/band-based seniority
+- [x] ~~**D-23 — seniority soft filter:** confirm the soft/band-based seniority
       ranking (not hard pre-filter) against real Application Engineer / Deployment
-      Specialist JDs when Phase 1 retrieval is built. Verify a generic
-      `seniority: director` CV is not excluded by a JD titled "Senior". Tune the
-      band width and decide whether `job_specific` should tighten.
+      Specialist JDs when Phase 1 retrieval is built.~~ **Resolved (F-12):** Phase 1
+      validated on real JDs (Airwallex, JPMC) — seniority was NOT raised as a gap on
+      either, including the JPMC JD that carries no explicit title, so the generic
+      `seniority: director` CVs were never excluded. `build_where` (corpus/retrieval)
+      deliberately omits seniority from the ChromaDB `where` filter; `_SYSTEM` in
+      Phase 1 instructs Claude to treat seniority as a SOFT signal. The soft-filter
+      decision is confirmed; `seniority_filter_mode` stays `soft` for both cv_types
+      (tighten `job_specific` only if a future run shows a false positive).
 ---
 
 ## Reuse Analysis — What the RAG and RFI Projects Teach This Build
