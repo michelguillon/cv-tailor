@@ -1124,9 +1124,15 @@ isn't lost before the UI build.
 
 ## Cost Tracking (populated during build)
 
+All figures are **list-price estimates** (F-08), not billed; Mistral runs free-tier.
+
 | Run | Mode | Mistral | Anthropic Sonnet | Anthropic Haiku | OpenAI | Total USD |
-|-----|------|---------|-----------------|-----------------|--------|-----------|
-| — | — | — | — | — | — | — |
+|-----|------|---------|------------------|-----------------|--------|-----------|
+| Airwallex, full Phase 0→6, 1 iter (Step 8 live) | demo (Haiku) | 0.0003 | — | 0.1023 | 0.0022 | **0.1045** |
+| Airwallex, dry-run (Phase 0→1) | demo (Haiku) | 0.0003 | — | 0.0059 | — | **0.0062** |
+
+Full-mode (Sonnet, 3-iter) estimate is ~$2–4/run (D-28) — to be measured at the
+final Sonnet validation (D-26), not yet run.
 
 ---
 
@@ -1134,6 +1140,18 @@ isn't lost before the UI build.
 
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
+
+- **181 tests, all deterministic / mocked (no API).** Every provider is faked;
+  LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
+  F-16, F-21, F-25, F-26), not in the pytest suite.
+- **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.
+- **Tools** (test_writers, test_orchestrator, test_rubric, test_scorer): each
+  dual-writer/orchestrator/rubric/scorer tool in isolation with mocked providers.
+- **Phases** (test_phase0/1/2/3/4/5/6): per-phase, mocked. Freeze logic is
+  deterministic (same input → same freeze). The fully-mocked **end-to-end** run
+  (all four providers in one pass) is the Step 9 gap — `test_phases.py`.
+- **Pipeline** (test_cost, test_run): cost math + helpers→cost wiring; RunConfig
+  mode-gating; HITL handlers.
 
 ---
 
