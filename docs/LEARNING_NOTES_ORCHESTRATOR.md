@@ -401,6 +401,35 @@ what changed (if anything).*
 
 ---
 
+### F-33 — Stretch: `--docx` by harvesting the source CV's formatting conventions, rendered from the assembled markdown
+
+**What was built:** `tailor/phases/phase6_docx.py` + a `--docx` flag. It writes
+`cv_final.docx` (clean CV only) by (1) harvesting formatting *conventions* from a source
+CV in `data/cvs/` — body font/size, name size, heading size, heading-bold — and (2)
+rendering the **same** assembled markdown `assemble_markdown` produces for `cv_final.md`
+into styled Word paragraphs. Chosen over an in-place clone of one source file because the
+tailored CV reorders and mixes sections from several CVs (D-17), so no single source's
+layout represents it; conventions transfer, exact layout doesn't.
+
+**Why render from the markdown, not the manifest:** the assembled markdown is the
+canonical clean CV (§9). Rendering the docx from that same string guarantees `.docx` and
+`.md` never diverge, and decouples the renderer from `RunContext` — so it unit-tests
+against a built-in-process fixture `.docx`, no corpus and no API (5 tests).
+
+**Real-CV smoke (no spend) confirmed the harvest handles the real document family,
+which the fixture can't:** on `CV_…_Airwallex.docx` it read Calibri/11pt body (the font
+is a **theme** font — `Normal.font.name` is None — so harvesting falls back to the modal
+*run* font, which resolves it), an 18pt name, 16pt headings, and `heading_bold=False`.
+That last one is the corpus's documented quirk (F-04: "section headers and company names
+here are sized, not heading-styled") — the harvester reproduces *sized, not bold*
+headings rather than imposing bold, which is the whole point of mirroring conventions.
+
+**Reuse:** `corpus.docx_loader.load_docx` (table-aware — CV content lives in one table)
+supplies the size/bold/bullet signals; nothing new parses .docx. Provider-free,
+deterministic. **Closes the SPEC "Stretch — docx output" item.**
+
+---
+
 ### F-32 — UI Step 6: prod overlay — Compose concatenates `volumes`, and dev/prod must not share an image name
 
 **What was built:** `frontend/Dockerfile.prod` (multi-stage: `node:20-alpine` builds
@@ -1403,7 +1432,7 @@ Haiku here is only the formatting/validation gate (Sonnet is the writer+orchestr
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
 
-- **222 tests, all deterministic / mocked (no API).** Every provider is faked;
+- **227 tests, all deterministic / mocked (no API).** Every provider is faked;
   LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
   F-16, F-21, F-25, F-26), not in the pytest suite.
 - **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.
@@ -1417,6 +1446,10 @@ tests, and which are tested by inspection only.*
   counts, freeze determinism, and `replay`. Closes the Step 8 E2E gap.
 - **Pipeline** (test_cost, test_run): cost math + helpers→cost wiring; RunConfig
   mode-gating; HITL handlers.
+- **docx stretch** (test_docx, 5 — F-33): harvest conventions from a fixture .docx;
+  render assembled markdown to styled paragraphs (name/heading/role/bullet, **bold**
+  stripped to bold runs, List Bullet style); end-to-end harvest→render; template
+  resolution. Provider-free, no real CV.
 - **Web UI** (test_api): route shape; corpus endpoints (ChromaDB faked); run
   initiation + SSE replay; archive/replay + downloads; Session primitives (event
   buffer/seq, TTL, the thread handoff). Conversational HITL (UI Step 4): the

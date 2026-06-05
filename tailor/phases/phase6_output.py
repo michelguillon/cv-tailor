@@ -197,8 +197,10 @@ def _build_reasoning(ctx) -> list[dict]:
 
 
 def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
-                    config, template_dir: str | Path = TEMPLATE_DIR) -> dict:
-    """Write cv_final.md + cv_final.html. Returns {'md': path, 'html': path}."""
+                    config, template_dir: str | Path = TEMPLATE_DIR,
+                    source_docx=None) -> dict:
+    """Write cv_final.md + cv_final.html (+ cv_final.docx when `source_docx` is given,
+    the --docx stretch). Returns {'md', 'html'[, 'docx']} paths."""
     cv_md = assemble_markdown(ctx, manifest, config)
     md_path = ctx.output_dir / "cv_final.md"
     md_path.write_text(cv_md, encoding="utf-8")
@@ -226,4 +228,12 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
 
     ctx.audit.log_event("phase6_output", "output_written",
                         f"cv_final.md ({len(cv_md.split())} words) + cv_final.html")
-    return {"md": str(md_path), "html": str(html_path)}
+
+    out = {"md": str(md_path), "html": str(html_path)}
+    if source_docx is not None:                      # --docx stretch (clean CV only)
+        from tailor.phases import phase6_docx
+        docx_path = phase6_docx.write_cv_docx(cv_md, source_docx, ctx.output_dir / "cv_final.docx")
+        ctx.audit.log_event("phase6_output", "docx_written",
+                            f"cv_final.docx (formatting from {Path(source_docx).name})")
+        out["docx"] = str(docx_path)
+    return out

@@ -34,13 +34,15 @@ def cli():
 @click.option("--max-iterations", type=int, default=None, help="Override the mode's iteration cap.")
 @click.option("--dry-run", is_flag=True, help="Parse JD + assess fit only; no drafting (D-09).")
 @click.option("--yes", is_flag=True, help="Non-interactive: accept every HITL checkpoint.")
-def run(jd_path, demo, key, output_dir, max_iterations, dry_run, yes):
+@click.option("--docx", "docx", is_flag=True,
+              help="Also write cv_final.docx, formatting mirrored from a source CV (clean CV only).")
+def run(jd_path, demo, key, output_dir, max_iterations, dry_run, yes, docx):
     """Tailor a CV to a job description (the main workflow)."""
     mode = "demo" if demo else "full"
     hitl = AutoHITL() if yes else None
     try:
         summary = run_pipeline(jd_path, mode=mode, key=key, max_iterations=max_iterations,
-                               output_dir=output_dir, dry_run=dry_run, hitl=hitl)
+                               output_dir=output_dir, dry_run=dry_run, hitl=hitl, docx=docx)
     except ConfigError as exc:
         raise click.ClickException(str(exc))
     except PipelineStop as exc:
@@ -56,6 +58,8 @@ def run(jd_path, demo, key, output_dir, max_iterations, dry_run, yes):
     click.echo(f"  converged: {summary['converged']} ({summary['convergence_reason']}) "
                f"in {summary['iterations']} iteration(s)")
     click.echo(f"  CV:       {summary['cv_md']}")
+    if summary.get("cv_docx"):
+        click.echo(f"  CV (docx): {summary['cv_docx']}")
     click.echo(f"  Report:   {summary['cv_html']}")
     click.echo(f"  Cost:     ${summary['cost_estimated_usd']:.4f} (estimated)  {summary['cost_breakdown']}")
     if summary.get("cost_cap_exceeded"):

@@ -105,7 +105,7 @@ class TerminalHITL:
 
 def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
                  output_dir="outputs", dry_run=False, hitl=None, run_id=None,
-                 on_event=None) -> dict:
+                 on_event=None, docx=False) -> dict:
     """Run Phase 0→6 (or 0→1 for --dry-run). Returns a summary dict.
 
     `on_event` (optional) is called with a progress dict at each phase boundary —
@@ -197,9 +197,19 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
             phase5_validation.apply_corrections(ctx, corrections, result.manifest)
         emit("phase_complete", phase="phase5_validation", corrections=len(corrections))
 
-        # Phase 6 — output generation
+        # Phase 6 — output generation (+ cv_final.docx for --docx, formatting from a
+        # source CV in the corpus; D-13 static text is the person's own, so the source
+        # CV's look is the right reference — the stretch is clean CV only).
         emit("phase_start", phase="phase6_output", label="Output generation")
-        out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations, config=config)
+        source_docx = None
+        if docx:
+            from tailor.phases import phase6_docx
+            source_docx = phase6_docx.resolve_template(result.manifest)
+            if source_docx is None:
+                ctx.audit.log_event("phase6_output", "docx_skipped",
+                                    "no source .docx in data/cvs/; --docx skipped")
+        out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations,
+                              config=config, source_docx=source_docx)
         emit("phase_complete", phase="phase6_output")
 
         footer = _finalise(ctx, tracker, rc, iterations_run=len(result.iterations))
@@ -208,7 +218,7 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
             "converged": result.converged,
             "convergence_reason": result.convergence_reason,
             "iterations": len(result.iterations),
-            "cv_md": out["md"], "cv_html": out["html"],
+            "cv_md": out["md"], "cv_html": out["html"], "cv_docx": out.get("docx"),
             "cost_estimated_usd": footer["total_estimated_usd"],
             "cost_breakdown": footer["cost_breakdown_estimated_usd"],
         })

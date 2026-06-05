@@ -796,6 +796,8 @@ docker compose run --rm cli python -m tailor run --jd PATH [--demo] [--key KEY]
     --output-dir PATH      Where to write outputs (default: outputs/<run_id>/)
     --max-iterations N     Override config value
     --dry-run              Parse JD + assess fit only; no drafting or critique
+    --yes                  Non-interactive: accept every HITL checkpoint (AutoHITL)
+    --docx                 Also write cv_final.docx in the source CV's formatting (F-33)
 
 # Inspect a past run
 docker compose run --rm cli python -m tailor replay <run_id>
@@ -1169,9 +1171,13 @@ is deterministic (same input → same freeze decision in tests).
 
 *Verification:* `pytest tests/` passes; cost breakdown matches estimated spend.
 
-**Stretch — docx output**
-Add `--docx` flag. Assembles final CV into a Word document respecting the
-original CV's formatting conventions (use docx skill). Clean CV only.
+**Stretch — docx output** *(implemented, F-33)*
+`--docx` flag → `cv_final.docx`, clean CV only. Respects the source CV's formatting
+by **harvesting its conventions** (body font/size, name size, heading size/bold via
+the table-aware `corpus.docx_loader`) and rendering the *same* assembled markdown as
+`cv_final.md` into styled Word paragraphs (`tailor/phases/phase6_docx.py`) — not an
+in-place clone (the tailored CV mixes/reorders sections from several CVs, D-17).
+Deterministic; unit-tested against a fixture .docx.
 
 ---
 

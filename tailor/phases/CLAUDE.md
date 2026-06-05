@@ -65,6 +65,14 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   manifest carries `position` + `title` from Phase 2 (F-23). Highest version per
   section (or static). Jinja `templates/output.html`, 4 tabs (CV/Changes/Scores/
   Reasoning); word-level diffs via `difflib`. `cv_final.md` is the clean artefact.
+- **Phase 6 `--docx` (stretch, F-33):** `phase6_docx.py` renders the SAME assembled
+  markdown as `cv_final.md` into a styled `.docx`, applying formatting *conventions*
+  harvested from a source CV in `data/cvs/` (body font/size, name/heading size, heading
+  bold — via the table-aware `corpus.docx_loader`). Render from the markdown string, not
+  the manifest, so `.docx`/`.md` can't diverge and it tests without a `RunContext`. It is
+  convention-mirroring, NOT a layout clone (the tailored CV mixes sources, D-17). Keep it
+  provider-free and deterministic; static text stays the person's own (D-13).
+
 - **Experience role lines are structural, not drafted (F-29):** Phase 2
   (`_split_role_line`) peels the leading role/date line(s) off an experience section
   so the LLM never sees them (told "no heading", it drops them inconsistently);
