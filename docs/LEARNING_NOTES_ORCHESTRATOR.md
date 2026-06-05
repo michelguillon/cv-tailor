@@ -401,6 +401,58 @@ what changed (if anything).*
 
 ---
 
+### F-30 — Haiku vs Sonnet (D-26): the bigger model buys calibrated JUDGMENT, not better output, at this task scale
+
+**The controlled run (Airwallex, dual-writer loop, `max_iterations=3`, current code):**
+
+| | Haiku (demo) | Sonnet (full) |
+|---|---|---|
+| iterations run | 3 (hit the cap) | **2 (converged)** |
+| convergence | `max_iterations` (never plateaued) | **`dual_signal_converged`** |
+| quality trajectory | 7.63 → 7.69 → **8.25** (climbing) | 6.98 → **7.08** (flat) |
+| keyword coverage | 0.895 → 0.947 → 0.895 | 0.947 → 0.947 |
+| Δq at last iter | **+0.562** (> 0.5 → can't converge) | +0.100 (< 0.5 → converges) |
+| cost (est.) | **$0.33** | $0.79 |
+| cost / iteration | ~$0.11 | ~$0.40 (**~3.6×**) |
+| outcome | partial | partial |
+| output (profile/skills) | strong, on-brief | strong, on-brief |
+
+**The finding — the value is judgment, not output.** On the *artifact*, Haiku is
+competitive: its tailored profile/skills surface the same JD concepts (payments,
+fintech, EMEA, pre-sales, RFP, PoC), read well, and hit the same 0.947 coverage.
+Where Sonnet earns its ~3.6×-per-iteration premium is **calibration**:
+
+1. **Sonnet knows when to stop; Haiku doesn't.** Sonnet's scores are conservative and
+   *stable* (6.98 → 7.08), so the dual-signal plateau fires and it converges at iter 2.
+   Haiku scores *higher and keeps climbing* (7.63 → 8.25) — its Δq stays above the 0.5
+   threshold, so it never converges and runs to the cap. This is the R-08 LLM-judge
+   over-scoring tendency, live: the smaller model is the more optimistic, more volatile
+   judge, which makes its convergence signal noisier. Sonnet is the harsher, better-
+   calibrated scorer — exactly the property D-05’s termination logic depends on.
+2. **Cost crossover is subtler than "Sonnet is dearer."** Per iteration Sonnet costs
+   ~3.6× more, but it *converges in fewer iterations*. To actually settle, Haiku needed
+   a 4th iteration (at iter 3 only 5/8 sections had frozen, Δq still +0.56) — so
+   run-to-convergence Haiku ≈ $0.44 vs Sonnet $0.79. The gap is ~1.8×, not 8× (the raw
+   token-price ratio), because the better judge does less redundant work.
+3. **Quantitative metrics hide the gap.** Both land at coverage 0.947 and produce a
+   submittable CV; a metrics-only dashboard would call them equivalent. The real
+   differences are convergence behaviour, score calibration, and (F-12) outcome
+   steadiness — none visible in the headline numbers. *This is itself the lesson:* for
+   "is the bigger model worth it?", the honest evidence is in process quality
+   (does it know when it's done?), not the output score.
+
+**Practical conclusion (confirms D-26):** dev/iterate on **Haiku** — it's ~⅓ the
+cost and the output is genuinely close. Reserve **Sonnet** for the final pass where
+calibrated convergence and a steady verdict matter. The demo defaulting to Haiku is
+the right call; Sonnet is a deliberate, justified upgrade, not a default.
+
+**Caveats (honest):** single JD, one run per model (directional, not statistical);
+the Sonnet datapoint is F-28 (pre-title-fix, but that touches only experience role
+lines, not the profile/skills/scores compared here). A multi-JD, repeated-run sweep
+would harden the cost-crossover number. **Affects D-26, D-05, R-08; builds on F-21/F-28.**
+
+---
+
 ### F-29 — Experience role/date line is structural — split it out at draft time, re-attach at assembly (the drafter drops it)
 
 **What was found (reviewing the F-28 Sonnet CV):** Microsoft’s experience block had
@@ -1267,6 +1319,7 @@ All figures are **list-price estimates** (F-08), not billed; Mistral runs free-t
 
 | Run | Mode | Mistral | Anthropic Sonnet | Anthropic Haiku | OpenAI | Total USD |
 |-----|------|---------|------------------|-----------------|--------|-----------|
+| Airwallex, **3 iter (hit cap, no convergence)** — Haiku side of the D-26 comparison (F-30) | demo (Haiku) | 0.0003 | — | 0.3172 | 0.0128 | **0.3304** |
 | Airwallex, full Phase 0→6, **2 iter to dual-signal convergence** (D-26 validation, F-28) | **full (Sonnet)** | 0.0003 | **0.7636** | 0.0178 | 0.0089 | **0.7906** |
 | Airwallex, full Phase 0→6, 1 iter (Step 8 live) | demo (Haiku) | 0.0003 | — | 0.1023 | 0.0022 | **0.1045** |
 | Airwallex, dry-run (Phase 0→1) | demo (Haiku) | 0.0003 | — | 0.0059 | — | **0.0062** |
