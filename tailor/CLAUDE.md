@@ -10,12 +10,21 @@ The orchestrator and all phases/tools. Entry point: `python -m tailor`
   inheriting `Serializable`. Every new schema needs a round-trip test in
   `tests/test_schemas.py`. `to_dict`/`from_dict` are generic and type-hint
   driven — no per-class serialisation code.
-- `config.py` — `RunConfig` loaded from `config.yaml`. Mode differences are
-  config values, not `if mode == "demo"` branches.
+- `run.py` — `run_pipeline()` sequences Phase 0→6 + the cost footer; HITL
+  checkpoints are delegated to a handler (`TerminalHITL` for the CLI, `AutoHITL`
+  for tests / `--yes`) so phases only *render*, never read stdin.
+- `__main__.py` — the `python -m tailor` CLI (`run`, `replay`), click-based.
+- `config.py` — `load_config` + `resolve_run_config` → a `RunConfig`. Mode
+  differences are config values, not `if mode == "demo"` branches (D-08); full mode
+  is key-gated on `FULL_MODE_KEY` (§3.7).
 - `audit.py` — `AuditLogger` → `run_log.jsonl`. Pure, no API calls. Log a
   `ReasoningEntry` for every orchestrator decision; never feed it back into context.
+- `cost.py` — per-model cost **estimate** (D-08, F-08). `cost.track()` activates a
+  tracker; `helpers` notes usage into it on every call. Side-channel, like audit —
+  phases never touch it.
 - `helpers.py` — the three provider clients + `call_with_retry()`. **This is the
-  only module that touches a provider SDK directly.**
+  only module that touches a provider SDK directly** (and the one place usage is
+  captured for `cost.py`).
 - `run_context.py` — per-run output dir, versioned section files, audit logger.
   The checkpoint substrate every phase writes through (`write_section`,
   `write_checkpoint`, `read_section`).

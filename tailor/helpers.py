@@ -26,6 +26,8 @@ import openai
 from mistralai.client import Mistral
 from mistralai.client.errors import MistralError
 
+from tailor import cost
+
 __all__ = [
     "get_mistral_client",
     "get_anthropic_client",
@@ -173,6 +175,7 @@ def embed_texts(
         vectors.extend(item.embedding for item in resp.data)
         usage = getattr(resp, "usage", None)
         total_tokens += getattr(usage, "total_tokens", 0) or 0
+    cost.note(model, total_tokens, 0)
     return vectors, total_tokens
 
 
@@ -229,7 +232,15 @@ def claude_complete(
         kwargs["tools"] = tools
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
-    return call_with_retry(client.messages.create, retryable_exc=anthropic.APIError, **kwargs)
+    resp = call_with_retry(client.messages.create, retryable_exc=anthropic.APIError, **kwargs)
+    u = getattr(resp, "usage", None)
+    if u is not None:
+        # cached tokens count as input for the estimate (caching is a no-op at our scale, F-22)
+        in_tok = ((getattr(u, "input_tokens", 0) or 0)
+                  + (getattr(u, "cache_creation_input_tokens", 0) or 0)
+                  + (getattr(u, "cache_read_input_tokens", 0) or 0))
+        cost.note(model, in_tok, getattr(u, "output_tokens", 0) or 0)
+    return resp
 
 
 # --------------------------------------------------------------------------- #
@@ -259,4 +270,8 @@ def gpt_complete(
     }
     if response_format is not None:
         kwargs["response_format"] = response_format
-    return call_with_retry(client.chat.completions.create, retryable_exc=openai.APIError, **kwargs)
+    resp = call_with_retry(client.chat.completions.create, retryable_exc=openai.APIError, **kwargs)
+    u = getattr(resp, "usage", None)
+    if u is not None:
+        cost.note(model, getattr(u, "prompt_tokens", 0) or 0, getattr(u, "completion_tokens", 0) or 0)
+    return resp

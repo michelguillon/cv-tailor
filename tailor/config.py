@@ -8,13 +8,19 @@ section_type.
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from tailor.models import SectionBudget
 
-__all__ = ["load_config", "load_budgets"]
+__all__ = ["load_config", "load_budgets", "RunConfig", "resolve_run_config", "ConfigError"]
+
+
+class ConfigError(RuntimeError):
+    pass
 
 CONFIG_PATH = Path("config.yaml")
 BUDGETS_PATH = Path("budgets.yaml")
@@ -37,3 +43,57 @@ def load_budgets(path: str | Path = BUDGETS_PATH) -> dict[str, SectionBudget]:
         st: SectionBudget(section_type=st, **vals)
         for st, vals in data.items()
     }
+
+
+# --------------------------------------------------------------------------- #
+# RunConfig — resolved per-run behaviour (D-08, §3.7)                          #
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class RunConfig:
+    """The resolved knobs for one run: which models, how many iterations, the
+    convergence thresholds. Mode differences are config values, never `if mode ==`
+    branches in the phases (D-08). The orchestrator/writer model swaps Sonnet↔Haiku
+    by mode (D-26); the tool models (critique, validation, embeddings) are fixed."""
+    mode: str
+    orchestrator_model: str       # Claude writer + orchestrator (Haiku/demo, Sonnet/full)
+    gpt_model: str                # GPT writer (critique role)
+    validation_model: str         # Haiku: formatting gate + HITL free-text interpretation
+    jd_model: str                 # Mistral: JD analysis
+    embeddings_model: str         # Mistral: retrieval
+    max_iterations: int
+    cost_cap_usd: float | None
+    keyword_delta_threshold: float
+    critique_delta_threshold: float
+    max_rubric_additions: int
+
+
+def resolve_run_config(config: dict, *, mode: str = "demo", key: str | None = None,
+                       max_iterations: int | None = None) -> RunConfig:
+    """Build a RunConfig from config.yaml + the chosen mode. Full mode is key-gated
+    (§3.7): the passphrase must match `FULL_MODE_KEY` in the environment (no auth,
+    just a guard against an accidental expensive run). Demo needs no key."""
+    modes = config.get("modes", {})
+    if mode not in modes:
+        raise ConfigError(f"unknown mode {mode!r}; available: {sorted(modes)}")
+    m = modes[mode]
+    if mode == "full":
+        required = os.environ.get("FULL_MODE_KEY", "")
+        if not required:
+            raise ConfigError("full mode requires FULL_MODE_KEY set in the environment (.env)")
+        if key != required:
+            raise ConfigError("full mode key incorrect — pass --key <passphrase> (or use --demo)")
+    models, conv = config["models"], config["convergence"]
+    return RunConfig(
+        mode=mode,
+        orchestrator_model=m["orchestrator_model"],
+        gpt_model=models["critique"],
+        validation_model=models["validation"],
+        jd_model=models["jd_analysis"],
+        embeddings_model=models["embeddings"],
+        max_iterations=max_iterations or m["max_iterations"],
+        cost_cap_usd=m.get("cost_cap_usd"),
+        keyword_delta_threshold=conv["keyword_delta_threshold"],
+        critique_delta_threshold=conv["critique_delta_threshold"],
+        max_rubric_additions=config["rubric"]["max_additions_per_iteration"],
+    )

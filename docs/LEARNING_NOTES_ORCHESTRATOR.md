@@ -401,6 +401,46 @@ what changed (if anything).*
 
 ---
 
+### F-26 — Step 8: pipeline + CLI — central cost capture and an injectable HITL handler
+
+**Two design choices that kept Step 8 small:**
+
+1. **Cost is captured once, in `helpers`, not threaded through every tool.** Every
+   provider call already funnels through `claude_complete` / `gpt_complete` /
+   `embed_texts`, so each notes its usage into an active `CostTracker`
+   (`cost.track()` context, set by `run.py`). The dual-writer loop makes ~24+ calls
+   per iteration across 4 tools — threading a usage return out of each would have
+   touched every signature. A side-channel (like the audit log, D-06) is the right
+   shape: the orchestrator/phases stay oblivious. Cost is **model-level** (D-08) and
+   **estimated** list-price (F-08) — the footer says so explicitly and is never an
+   invoice. Cached tokens fold into the input estimate (caching is a no-op anyway,
+   F-22).
+2. **HITL is an injectable handler, not inline `input()`.** `run_pipeline` calls
+   `hitl.fit / .review / .formatting`; `TerminalHITL` reads stdin, `AutoHITL`
+   accepts everything (`--yes` / tests). The phases only ever *render* (Phase 1's
+   `render_fit_hitl`, Phase 4's `render_section_review`, Phase 5's
+   `render_corrections`) — so the whole pipeline is testable without a TTY, and the
+   same code serves the CLI and (later) the web backend's conversational HITL.
+
+Mode is config, not branching (D-08): `resolve_run_config` maps demo→Haiku/1-iter,
+full→Sonnet/3-iter, key-gated on `FULL_MODE_KEY` (§3.7). `--dry-run` stops after
+Phase 1 with phases 0–1 logged and no CV (D-09). **Affects D-08, D-09, §3.7, §6.**
+
+**Verified live (`python -m tailor run --jd data/jd.txt --demo --yes`):** Phase 0→6
+end-to-end, `cv_final.md` + `cv_final.html` written, footer **$0.1045 estimated**
+(`anthropic_haiku 0.1023`, `openai_gpt4o_mini 0.0022`) for one demo iteration.
+`replay` reproduces role/fit/iteration progression/cost from the checkpoints +
+`run_log.jsonl`. **Gap found and fixed:** Phase 0's Mistral call is the one provider
+call that doesn't go through a cost-noting helper (it uses the Mistral client
+directly via `call_with_retry`), so it was missing from the breakdown; `run.py` now
+notes its returned usage (Phase 1+ self-note via `claude_complete`/`gpt_complete`, so
+noting only Phase 0 avoids double-counting). Dry-run footer now correctly shows
+`mistral_small 0.000314` alongside `anthropic_haiku`. (Cleaner long-term: a
+`mistral_complete` helper so Phase 0 routes through the central capture point like
+the others — deferred, low value since Mistral is free-tier.)
+
+---
+
 ### F-25 — Step 7: validated live end-to-end (Phase 0→6)
 
 **What was verified (Airwallex JD, Haiku, 1 iteration, demo):** the full pipeline
