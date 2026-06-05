@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { CorpusPage } from "@/pages/CorpusPage";
+import { RunPage } from "@/pages/RunPage";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -39,11 +40,7 @@ export default function App() {
 
       <main className="mx-auto max-w-5xl px-6 py-8">
         {tab === "corpus" && <CorpusPage />}
-        {tab === "run" && (
-          <div className="text-muted-foreground">
-            The tailoring-run UI (paste a JD → watch it run → download) lands in UI Step 3.
-          </div>
-        )}
+        {tab === "run" && <RunPage />}
       </main>
     </div>
   );
