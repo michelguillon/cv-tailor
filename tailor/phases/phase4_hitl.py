@@ -19,19 +19,24 @@ from tailor.helpers import claude_complete
 from tailor.tools import claude_writer
 
 __all__ = ["render_section_review", "unresolved_list", "interpret_freetext",
-           "revise_section", "HITLError"]
+           "revise_section", "converged_at", "HITLError"]
 
 
 class HITLError(RuntimeError):
     pass
 
 
-def _converged_at(result, sid: str) -> int | None:
+def converged_at(result, sid: str) -> int | None:
+    """The iteration a section converged at, or None if it never did. Reused by the
+    terminal review render and the Web UI's checkpoint payload (§12.3)."""
     for it in result.iterations:
         s = it.section_scores.get(sid)
         if s is not None and s.converged:
             return it.iteration
     return None
+
+
+_converged_at = converged_at   # backward-compatible alias (used below)
 
 
 def unresolved_list(result) -> list[tuple[str, object]]:

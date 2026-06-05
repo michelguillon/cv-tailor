@@ -34,6 +34,7 @@ class StartRunRequest(BaseModel):
     mode: str = "demo"
     key: str | None = None
     max_iterations: int | None = None
+    auto: bool = False          # True = AutoHITL (no pauses); False = conversational HITL (UI Step 4)
 
 
 @router.get("")
@@ -107,7 +108,7 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
         raise HTTPException(status_code=500, detail="could not allocate a run id")
 
     launch_run(store, session, body.jd_text, mode=body.mode, key=body.key,
-               max_iterations=body.max_iterations)
+               max_iterations=body.max_iterations, auto=body.auto)
     return {"run_id": run_id, "mode": body.mode, "status": session.status}
 
 

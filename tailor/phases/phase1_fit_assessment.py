@@ -25,7 +25,8 @@ from tailor.helpers import claude_complete
 from tailor.models import FitAssessment, FitGap, SectionRecommendation
 from tailor.tools.scorer import coverage_report, keyword_coverage, normalise, union_coverage
 
-__all__ = ["assess_fit", "build_composition", "render_fit_hitl", "FitAssessmentError"]
+__all__ = ["assess_fit", "build_composition", "render_fit_hitl",
+           "interpret_fit_response", "FitAssessmentError"]
 
 GAP_TYPES = {"keyword", "experience", "hard_requirement", "seniority"}
 SEVERITIES = {"minor", "major", "blocking"}
@@ -304,3 +305,49 @@ def render_fit_hitl(fit: FitAssessment, jd) -> str:
             lines.append(f"    {mark} {g.requirement}  [{g.gap_type} / {g.severity} / {addr}]")
     lines += ["", "  Options: [p]roceed  [a]djust section mix  [s]top"]
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Free-text interpretation (Haiku) → proceed / stop (D-18, Web UI §12.3)       #
+# --------------------------------------------------------------------------- #
+
+_FIT_RESPONSE_TOOL = {
+    "name": "interpret_fit_decision",
+    "description": "Map the human's free-text reply about a fit assessment to a proceed/stop decision.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["proceed", "stop"],
+                       "description": "proceed = tailor the CV; stop = do not"},
+            "reason": {"type": "string", "description": "one short line paraphrasing the human's intent"},
+        },
+        "required": ["action"],
+    },
+}
+
+
+def interpret_fit_response(text: str, fit: FitAssessment, *, model: str, client=None) -> dict:
+    """Haiku maps a free-text fit reply to {action, reason}. For a `no_fit` outcome,
+    'proceed' means override-and-continue. The caller shows the result back before
+    the pipeline resumes (preview-before-apply, D-18). Retried once, then surfaced."""
+    context = f"The fit outcome was '{fit.outcome}'."
+    if fit.no_fit_reason:
+        context += f" Reason it may not fit: {fit.no_fit_reason}"
+    prompt = (
+        f"{context}\n\nThe human reviewing the assessment replied:\n\"{text}\"\n\n"
+        f"Decide whether to PROCEED with tailoring the CV or STOP here. Read hesitation, "
+        f"'not now', or 'maybe later' as stop; 'go ahead', 'try anyway', 'override' as proceed."
+    )
+    for _ in range(2):
+        resp = claude_complete(
+            model=model, system="You map a human's reply about a CV fit assessment to proceed or stop.",
+            messages=[{"role": "user", "content": prompt}],
+            tools=[_FIT_RESPONSE_TOOL], tool_choice={"type": "tool", "name": "interpret_fit_decision"},
+            max_tokens=150, client=client,
+        )
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use" and block.name == "interpret_fit_decision":
+                act = block.input.get("action")
+                if act in ("proceed", "stop"):
+                    return {"action": act, "reason": str(block.input.get("reason", "")).strip()}
+    raise FitAssessmentError("could not interpret the fit reply into proceed/stop")

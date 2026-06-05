@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink } from "lucide-react";
-import { api, RUN_EVENT_TYPES, type RunEvent } from "@/lib/api";
+import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { HitlPanel } from "@/components/HitlPanel";
 import { cn } from "@/lib/utils";
 
 const PHASES: { id: string; label: string }[] = [
@@ -38,6 +39,7 @@ export function RunPage() {
   const [jd, setJd] = useState("");
   const [mode, setMode] = useState<"demo" | "full">("demo");
   const [key, setKey] = useState("");
+  const [auto, setAuto] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -46,7 +48,11 @@ export function RunPage() {
   const [phaseNote, setPhaseNote] = useState<Record<string, string>>({});
   const [iterations, setIterations] = useState<IterationRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [hitl, setHitl] = useState<HitlReady | null>(null);
+  const [hitlBusy, setHitlBusy] = useState(false);
+  const [hitlLog, setHitlLog] = useState<string[]>([]);
 
+  const runIdRef = useRef<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const doneRef = useRef(false);
 
@@ -58,14 +64,32 @@ export function RunPage() {
     setIterations([]);
     setPhaseStatus({});
     setPhaseNote({});
+    setHitl(null);
+    setHitlBusy(false);
+    setHitlLog([]);
     doneRef.current = false;
   }
 
   function finish() {
     doneRef.current = true;
     setRunning(false);
+    setHitl(null);
+    setHitlBusy(false);
     esRef.current?.close();
     esRef.current = null;
+  }
+
+  async function decide(d: HitlDecision) {
+    const rid = runIdRef.current;
+    if (!rid) return;
+    setHitlBusy(true);
+    setHitl(null); // SSE re-publishes the next checkpoint (review loop) or the run resumes
+    try {
+      await api.submitHitl(rid, d);
+    } catch (e) {
+      setHitlLog((l) => [...l, `Failed to send: ${e instanceof Error ? e.message : String(e)}`]);
+      setHitlBusy(false);
+    }
   }
 
   function handleEvent(ev: RunEvent) {
@@ -94,7 +118,23 @@ export function RunPage() {
           },
         ]);
         break;
+      case "hitl_ready":
+        setHitl({ checkpoint: ev.checkpoint as HitlReady["checkpoint"], payload: ev.payload as Record<string, unknown> });
+        setHitlBusy(false);
+        break;
+      case "hitl_interpreted":
+        if (ev.checkpoint === "fit_assessment")
+          setHitlLog((l) => [...l, `Got it — ${String(ev.action)}${ev.reason ? ` (${String(ev.reason)})` : ""}.`]);
+        break;
+      case "hitl_applied":
+        setHitlLog((l) => [...l, `Revised ${String(ev.label ?? ev.section_id)} → v${String(ev.version)}.`]);
+        break;
+      case "hitl_error":
+        setHitlLog((l) => [...l, `Couldn't apply that: ${String(ev.message)}`]);
+        setHitlBusy(false);
+        break;
       case "run_complete":
+        setHitl(null);
         setSummary({
           outcome: ev.outcome as string,
           iterations: ev.iterations as number,
@@ -119,8 +159,9 @@ export function RunPage() {
     reset();
     setRunning(true);
     try {
-      const { run_id } = await api.startRun(jd, mode, mode === "full" ? key : undefined);
+      const { run_id } = await api.startRun(jd, mode, mode === "full" ? key : undefined, auto);
       setRunId(run_id);
+      runIdRef.current = run_id;
       const es = new EventSource(api.runStreamUrl(run_id));
       esRef.current = es;
       for (const t of RUN_EVENT_TYPES) {
@@ -176,6 +217,16 @@ export function RunPage() {
                 className="h-9 rounded-md border border-border bg-background px-3 text-sm"
               />
             )}
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={auto}
+                onChange={(e) => setAuto(e.target.checked)}
+                disabled={running}
+                className="h-4 w-4 rounded border-border"
+              />
+              Auto-run (skip my review)
+            </label>
             <Button onClick={() => void start()} disabled={running || !jd.trim()}>
               {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               {running ? "Running…" : "Start"}
@@ -210,6 +261,16 @@ export function RunPage() {
           </CardContent>
         </Card>
       )}
+
+      {hitlLog.length > 0 && (
+        <div className="space-y-1 text-xs text-muted-foreground">
+          {hitlLog.map((m, i) => (
+            <div key={i}>· {m}</div>
+          ))}
+        </div>
+      )}
+
+      {hitl && <HitlPanel checkpoint={hitl.checkpoint} payload={hitl.payload} busy={hitlBusy} onDecide={(d) => void decide(d)} />}
 
       {iterations.length > 0 && (
         <Card>

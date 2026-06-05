@@ -65,9 +65,10 @@ def test_unknown_run_404(client):
     assert client.get("/api/runs/does-not-exist").status_code == 404
 
 
-def test_hitl_route_still_stubbed(client):
-    # Conversational HITL resume lands in UI Step 4.
-    assert client.post("/api/runs/x/hitl").status_code == 501
+def test_hitl_unknown_run_404(client):
+    # UI Step 4: the route is live; an unknown run is a 404, a missing body is a 422.
+    assert client.post("/api/runs/x/hitl", json={"action": "proceed"}).status_code == 404
+    assert client.post("/api/runs/x/hitl").status_code == 422
 
 
 def test_stream_unknown_run_404(client):
@@ -160,6 +161,78 @@ def test_start_run_full_mode_requires_key(client, run_store, monkeypatch):
 
 def test_start_run_empty_jd_rejected(client, run_store):
     assert client.post("/api/runs", json={"jd_text": "   ", "mode": "demo"}).status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# conversational HITL (UI Step 4) — SSEHITL handoff through the API, no LLM     #
+# --------------------------------------------------------------------------- #
+
+def _await_status(client, run_id, status, timeout=3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = client.get(f"/api/runs/{run_id}").json()
+        if s["status"] == status:
+            return s
+        time.sleep(0.01)
+    raise AssertionError(f"run {run_id} never reached {status!r}")
+
+
+def _fake_run_pauses_at_fit(jd_path, *, on_event=None, run_id=None, hitl=None, **kw):
+    """Drive the real SSEHITL.fit handshake: publish the fit checkpoint, block on the
+    human's decision, then complete. No provider is touched (button path, no free text)."""
+    from types import SimpleNamespace
+    on_event({"type": "phase_start", "phase": "phase1_fit_assessment", "label": "Fit assessment"})
+    fit = SimpleNamespace(outcome="partial", overall_fit_score=0.6, no_fit_reason=None,
+                          skills_transferable=["cloud"], gaps=[], recommended_sections={})
+    jd = SimpleNamespace(role_title="Director, SE", company_context="Acme")
+    proceed = hitl.fit(fit, jd)                       # blocks until POST /hitl
+    outcome = "partial" if proceed else "stopped_by_human"
+    on_event({"type": "run_complete", "run_id": run_id, "outcome": outcome,
+              "cost_estimated_usd": 0.0, "iterations": 0})
+    return {"run_id": run_id, "outcome": outcome, "cost_estimated_usd": 0.0, "iterations": 0}
+
+
+def test_hitl_pause_then_resume_on_post(client, run_store, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pauses_at_fit)
+    rid = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "auto": False}).json()["run_id"]
+
+    sess = _await_status(client, rid, "awaiting_hitl")
+    assert sess["hitl_pending"]["checkpoint"] == "fit_assessment"
+    assert sess["hitl_pending"]["payload"]["role_title"] == "Director, SE"
+
+    r = client.post(f"/api/runs/{rid}/hitl", json={"action": "proceed"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+    s = _await_terminal(client, rid)
+    assert s["status"] == "complete" and s["result"]["outcome"] == "partial"
+
+
+def test_hitl_stop_decision_stops_the_run(client, run_store, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pauses_at_fit)
+    rid = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "auto": False}).json()["run_id"]
+    _await_status(client, rid, "awaiting_hitl")
+
+    assert client.post(f"/api/runs/{rid}/hitl", json={"action": "stop"}).status_code == 200
+    s = _await_terminal(client, rid)
+    assert s["result"]["outcome"] == "stopped_by_human"
+
+
+def test_hitl_submit_when_not_awaiting_is_409(client, run_store, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)   # never pauses
+    rid = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "auto": True}).json()["run_id"]
+    _await_terminal(client, rid)
+    assert client.post(f"/api/runs/{rid}/hitl", json={"action": "proceed"}).status_code == 409
+
+
+def test_auto_run_does_not_pause(client, run_store, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pauses_at_fit)
+    rid = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "auto": True}).json()["run_id"]
+    s = _await_terminal(client, rid)                 # AutoHITL.fit proceeds without a POST
+    assert s["status"] == "complete" and s["result"]["outcome"] == "partial"
 
 
 # --------------------------------------------------------------------------- #
@@ -290,6 +363,52 @@ def test_submit_hitl_without_pending_raises():
     s = Session(run_id="r")
     with pytest.raises(SessionError):
         s.submit_hitl({"proceed": True})
+
+
+def _spin_until(pred, timeout=2.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return
+        time.sleep(0.005)
+    raise AssertionError("condition not met in time")
+
+
+def test_sse_hitl_review_loop_apply_then_accept(monkeypatch):
+    """SSEHITL.review is multi-turn: apply an unresolved item (revision mocked), the
+    loop re-publishes the updated state, then 'accept' exits. No provider is touched."""
+    from types import SimpleNamespace
+
+    from api.runner import SSEHITL
+    from tailor.phases import phase4_hitl
+
+    item = SimpleNamespace(issue="weak verbs", severity="major", suggestion="punch it up")
+    result = SimpleNamespace(
+        manifest={"header": {"static": True, "version": 0, "label": "Header"},
+                  "profile": {"static": False, "version": 1, "label": "Profile"}},
+        iterations=[], unresolved={"profile": [item]}, convergence_reason="max_iterations")
+    calls = []
+    monkeypatch.setattr(phase4_hitl, "revise_section",
+                        lambda sid, instr, *a, **k: (calls.append((sid, instr)), (2, "new"))[1])
+
+    s = Session(run_id="r")
+    rc = SimpleNamespace(max_iterations=1, orchestrator_model="m", validation_model="v")
+    handler = SSEHITL(s, validation_model="v")
+    t = threading.Thread(target=lambda: handler.review(None, result, None, None, None, rc))
+    t.start()
+
+    _spin_until(lambda: s.status == "awaiting_hitl")
+    assert s.hitl_pending["payload"]["unresolved"][0]["index"] == 1
+    s.submit_hitl({"action": "apply_item", "index": 1})
+
+    _spin_until(lambda: any(e["type"] == "hitl_applied" for e in s.events))
+    _spin_until(lambda: s.status == "awaiting_hitl")    # loop re-published the next checkpoint
+    s.submit_hitl({"action": "accept"})
+
+    t.join(timeout=2)
+    assert not t.is_alive()
+    assert calls == [("profile", "punch it up")]
+    assert result.unresolved["profile"] == []          # the resolved item was dropped
 
 
 # --------------------------------------------------------------------------- #

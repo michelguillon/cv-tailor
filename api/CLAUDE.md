@@ -28,8 +28,22 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
 
 - `corpus.py` (`/api/corpus`) — Mode 1: stats, CV inventory, ingest (SSE), delete.
 - `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`.
-- `hitl.py` (`/api/runs/{id}/hitl`) — resume a paused run with the human's decision.
-  Shares the `/api/runs` prefix with `runs.py`; FastAPI merges them.
+- `hitl.py` (`/api/runs/{id}/hitl`) — resume a paused run with the human's decision
+  (a single action dict → `Session.submit_hitl`). Shares the `/api/runs` prefix with
+  `runs.py`; FastAPI merges them. Action shapes per checkpoint: SPEC §12.3 / F-31.
+
+## HITL handler (UI Step 4, F-31)
+
+`SSEHITL` (api/runner.py) implements the pipeline's `fit`/`review`/`formatting`
+handler interface — the *same* one as `AutoHITL`/`TerminalHITL`, so `tailor/run.py`
+is unchanged. Each method publishes a JSON payload via `Session.wait_hitl` and
+**blocks the pipeline thread** until `POST /hitl`. Free-text → Haiku → shown back
+via a `hitl_interpreted` event **before** applying (preview-before-apply, D-18);
+`review` is a **multi-turn loop** (apply item / interpret → preview → confirm /
+accept) because the preview must precede the revision. Interpretation + revision
+reuse `phase4_hitl.{interpret_freetext,revise_section}` / `phase1.interpret_fit_response`
+verbatim — no provider code in the endpoint. `POST /api/runs` takes `auto: bool`
+(default false = conversational; `auto:true` → `AutoHITL`, start-to-finish demo).
 
 ## Tests
 

@@ -401,6 +401,44 @@ what changed (if anything).*
 
 ---
 
+### F-31 — UI Step 4: conversational HITL is the SAME handler interface, paused over HTTP; preview-before-apply needs a multi-turn loop
+
+**What was built:** `api/runner.SSEHITL` implements the pipeline's existing HITL
+handler interface (`fit` / `review` / `formatting`) — the *same* contract as
+`AutoHITL` (tests/`--yes`) and `TerminalHITL` (CLI). Nothing in `tailor/run.py`
+changed: the pipeline already delegated checkpoints to a handler (F-26, the
+injectable-handler decision), so the Web UI was a third front end, not a new code
+path. Each method publishes a JSON checkpoint payload via `Session.wait_hitl(...)`
+and BLOCKS the pipeline thread until `POST /api/runs/{id}/hitl` calls
+`submit_hitl(...)` (the cross-thread handoff already existed from UI Step 1).
+
+**Finding 1 — preview-before-apply (D-18) forces a multi-turn checkpoint, not a
+single request/response.** The CLI's Phase-4 free-text path is *interpret → show
+back → "apply? y/n" → execute*. A single blocking `wait_hitl` can't express that:
+the human must see the Haiku interpretation **before** the revision runs. Resolved
+by making `SSEHITL.review` a **loop** — `apply_item` / `interpret` (→ sets a
+`preview`, re-publishes) / `apply_freetext` (confirm) / `accept` (exit) — each turn
+re-`wait_hitl`s with the updated state. Interpretation (Haiku) and revision (Claude
+writer) run **on the paused pipeline thread**, reusing `phase4_hitl.interpret_freetext`
+/ `revise_section` verbatim — no new tool, no provider code in the endpoint. Fit and
+formatting are single-turn (binary decisions); only section-review needs the loop.
+
+**Finding 2 — `auto` defaults to OFF (interactive), the inverse of the build note.**
+The resumption note suggested "AutoHITL … default-on." But conversational HITL is
+the *point* of Step 4 and the portfolio demo, so a default-on auto would hide it.
+Resolved: `POST /api/runs` takes `auto: bool = False`; the frontend has an
+"Auto-run (skip my review)" checkbox (unchecked by default) for the start-to-finish
+path. AutoHITL is still one flag away, so demo runs that shouldn't pause still can't
+strand on a checkpoint. **Affects the §12.6 UI Step 4 plan; builds on F-26.**
+
+**Reused, not rebuilt:** `phase4_hitl.{interpret_freetext,revise_section,unresolved_list}`,
+`phase1_fit_assessment.interpret_fit_response` (new, mirrors the Phase-4 interpreter
+for proceed/stop), and `phase5_validation.render_corrections`’s data. Tests exercise
+the handshake with **zero real API calls**: the fit pause/resume goes through the live
+`SSEHITL.fit` (button path, no LLM); the review loop mocks only `revise_section`.
+
+---
+
 ### F-30 — Haiku vs Sonnet (D-26): the bigger model buys calibrated JUDGMENT, not better output, at this task scale
 
 **The controlled run (Airwallex, dual-writer loop, `max_iterations=3`, current code):**

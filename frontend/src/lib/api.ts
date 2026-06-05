@@ -92,6 +92,24 @@ export interface RunEvent {
   [key: string]: unknown;
 }
 
+// Conversational HITL (SPEC §12.3). `hitl_ready` carries the checkpoint + a payload;
+// the human's decision is POSTed back as a HitlDecision. Payload fields are read by
+// the HitlPanel per checkpoint, so they're kept loose here.
+export type HitlCheckpoint = "fit_assessment" | "section_review" | "formatting";
+
+export interface HitlReady {
+  checkpoint: HitlCheckpoint;
+  payload: Record<string, unknown>;
+}
+
+export interface HitlDecision {
+  action: string;
+  text?: string;
+  index?: number;
+  section_id?: string;
+  instruction?: string;
+}
+
 export const api = {
   health: () => get<{ status: string; service: string }>("/health"),
   corpusStats: () => get<CorpusStats>("/corpus/stats"),
@@ -100,8 +118,10 @@ export const api = {
     del<{ deleted: string; sections_removed: number }>(
       `/corpus/cvs/${encodeURIComponent(filename)}`,
     ),
-  startRun: (jd_text: string, mode: string, key?: string) =>
-    post<StartRunResponse>("/runs", { jd_text, mode, key: key || null }),
+  startRun: (jd_text: string, mode: string, key?: string, auto = false) =>
+    post<StartRunResponse>("/runs", { jd_text, mode, key: key || null, auto }),
+  submitHitl: (runId: string, body: HitlDecision) =>
+    post<{ ok: boolean; status: string }>(`/runs/${encodeURIComponent(runId)}/hitl`, body),
   runStreamUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/stream`,
   archiveRuns: () => get<ArchiveRun[]>("/runs/archive"),
   runDetail: (runId: string) => get<RunDetail>(`/runs/${encodeURIComponent(runId)}/detail`),
@@ -119,4 +139,8 @@ export const RUN_EVENT_TYPES = [
   "run_complete",
   "stopped",
   "error",
+  "hitl_ready",        // pipeline paused — render a checkpoint panel
+  "hitl_interpreted",  // Haiku read free text — shown back before applying
+  "hitl_applied",      // a section was revised
+  "hitl_error",        // an action could not be applied (re-published, try again)
 ] as const;

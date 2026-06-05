@@ -1367,6 +1367,22 @@ as the CLI. Haiku interprets free-text; Sonnet executes if revision is needed.
 cv-tailor message shows the diff. Two buttons only: **Approve** / **Reject**.
 No free-text. Haiku not needed — binary decision maps directly to pipeline state.
 
+**Decision protocol (implemented, F-31).** Each `hitl_ready` event carries a
+`checkpoint` + a JSON `payload`; the human's reply is `POST /api/runs/{id}/hitl`
+with a single action dict. `SSEHITL` (api/runner.py) runs these on the paused
+pipeline thread — the same handler interface as the CLI's `TerminalHITL`:
+
+- `fit_assessment`: `{action: proceed|override|stop}` or `{action: freetext, text}`
+  (Haiku → proceed/stop, shown back via a `hitl_interpreted` event before resuming).
+- `section_review` (multi-turn loop): `{action: accept}` to proceed; `{action:
+  apply_item, index}` to apply an unresolved item; `{action: interpret, text}` →
+  Haiku interpretation re-published as `payload.preview` (preview-before-apply,
+  D-18) → `{action: apply_freetext, section_id, instruction}` to confirm.
+- `formatting`: `{action: approve|reject}` (binary; no LLM).
+
+`POST /api/runs` also takes `auto: bool` (default **false** = conversational HITL).
+`auto:true` uses `AutoHITL` for the start-to-finish demo path (F-31).
+
 ---
 
 ### 12.4 — Output panel
