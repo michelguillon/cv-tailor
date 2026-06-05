@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { CorpusPage } from "@/pages/CorpusPage";
 import { RunPage } from "@/pages/RunPage";
+import { RunsPage } from "@/pages/RunsPage";
 import { cn } from "@/lib/utils";
 
 const TABS = [
   { id: "corpus", label: "Corpus" },
   { id: "run", label: "Tailor a CV" },
+  { id: "runs", label: "Runs" },
 ] as const;
 
 export default function App() {
@@ -41,6 +43,7 @@ export default function App() {
       <main className="mx-auto max-w-5xl px-6 py-8">
         {tab === "corpus" && <CorpusPage />}
         {tab === "run" && <RunPage />}
+        {tab === "runs" && <RunsPage />}
       </main>
     </div>
   );

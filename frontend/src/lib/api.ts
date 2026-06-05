@@ -65,6 +65,25 @@ export interface StartRunResponse {
   status: string;
 }
 
+export interface ArchiveRun {
+  run_id: string;
+  mode: string | null;
+  role_title: string | null;
+  outcome: string | null;
+  fit_score: number | null;
+  iterations: number | null;
+  cost_estimated_usd: number | null;
+  cost_breakdown?: Record<string, number> | null;
+  has_md: boolean;
+  has_html: boolean;
+}
+
+export interface RunDetail extends ArchiveRun {
+  iteration_scores: Array<Record<string, unknown>>;
+  reasoning: Array<Record<string, unknown>>;
+  cv_md: string | null;
+}
+
 // Progress events streamed over SSE (SPEC §12.2). `type` discriminates; the rest
 // of the fields depend on the type (kept loose — the Run page reads by type).
 export interface RunEvent {
@@ -84,6 +103,11 @@ export const api = {
   startRun: (jd_text: string, mode: string, key?: string) =>
     post<StartRunResponse>("/runs", { jd_text, mode, key: key || null }),
   runStreamUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/stream`,
+  archiveRuns: () => get<ArchiveRun[]>("/runs/archive"),
+  runDetail: (runId: string) => get<RunDetail>(`/runs/${encodeURIComponent(runId)}/detail`),
+  reportUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/report`,
+  fileUrl: (runId: string, name: string) =>
+    `${BASE}/runs/${encodeURIComponent(runId)}/files/${encodeURIComponent(name)}`,
 };
 
 // The progress events the Run page reacts to (also used to register SSE listeners).

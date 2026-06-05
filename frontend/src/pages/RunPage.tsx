@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Check, Circle, Play, AlertTriangle } from "lucide-react";
+import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink } from "lucide-react";
 import { api, RUN_EVENT_TYPES, type RunEvent } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,7 @@ export function RunPage() {
   const [key, setKey] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
 
   const [phaseStatus, setPhaseStatus] = useState<Record<string, PhaseStatus>>({});
   const [phaseNote, setPhaseNote] = useState<Record<string, string>>({});
@@ -119,6 +120,7 @@ export function RunPage() {
     setRunning(true);
     try {
       const { run_id } = await api.startRun(jd, mode, mode === "full" ? key : undefined);
+      setRunId(run_id);
       const es = new EventSource(api.runStreamUrl(run_id));
       esRef.current = es;
       for (const t of RUN_EVENT_TYPES) {
@@ -258,9 +260,23 @@ export function RunPage() {
             <span className="ml-auto font-medium tabular-nums">
               ${summary.cost?.toFixed(4)} <span className="text-muted-foreground">est.</span>
             </span>
-            <p className="w-full text-xs text-muted-foreground">
-              The output panel (clean CV, changes, scores, reasoning) lands in UI Step 5.
-            </p>
+            {runId && (
+              <div className="flex w-full flex-wrap gap-2 pt-1">
+                <a href={api.reportUrl(runId)} target="_blank" rel="noreferrer">
+                  <Button variant="outline" size="sm">
+                    <ExternalLink className="h-4 w-4" /> Open report
+                  </Button>
+                </a>
+                <a href={api.fileUrl(runId, "cv_final.md")}>
+                  <Button variant="ghost" size="sm">
+                    <Download className="h-4 w-4" /> cv_final.md
+                  </Button>
+                </a>
+                <span className="self-center text-xs text-muted-foreground">
+                  (also under the Runs tab)
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
