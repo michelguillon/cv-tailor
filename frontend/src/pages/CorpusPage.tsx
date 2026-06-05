@@ -64,6 +64,17 @@ export function CorpusPage() {
         <Stat label="Last ingested" value={stats?.last_ingested ?? "—"} />
       </div>
 
+      {cvs.length === 0 && (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            No CVs ingested yet. Seed the corpus from the host:
+            <pre className="mt-3 inline-block rounded-md bg-muted px-3 py-2 text-left text-xs">
+              docker compose run --rm cli python -m corpus.ingest --cv-dir data/cvs/
+            </pre>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="space-y-3">
         {cvs.map((cv) => {
           const expanded = open === cv.filename;

@@ -1,14 +1,28 @@
 # cv-tailor — homeserver (M720q) prod overlay (SPEC §7.5).
 # Layered on top of docker-compose.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Differences from dev: the backend drops --reload; the frontend is the nginx image
+# (multi-stage build, not the Vite dev server); both restart unless stopped. The
+# backend keeps the repo bind-mount so host data/, outputs/, .env persist (the
+# homeserver runs from the cloned repo).
+#
+# NB: Compose CONCATENATES the `volumes:` list across overlay files (it can't subtract),
+# so the dev frontend's ./frontend:/app + /app/node_modules mounts survive into the
+# merged prod config. They're inert here — nginx serves /usr/share/nginx/html (the
+# baked bundle), never /app — so the production bundle is what ships (F-32).
 services:
   backend:
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000   # no --reload
     restart: unless-stopped
 
-  # frontend: added in the UI phase.
-  # Dockerfile.prod is multi-stage (Node build → nginx-alpine, ~30 MB).
-  # nginx serves the static bundle on :3000 and proxies /api/* to backend:8000.
-  # IMPORTANT (learned from the RFI project): nginx.conf must set
-  #   proxy_buffering off;
-  # on the /api/ location, or SSE streams buffer and the progress feed stalls.
+  # Multi-stage build (Node → nginx-alpine). nginx serves the static bundle on :3000
+  # and proxies /api/* → backend:8000. nginx.conf sets `proxy_buffering off` on /api/
+  # so SSE streams (run progress + HITL) aren't buffered (RFI entry 26; SPEC §12.3).
+  frontend:
+    image: cv-tailor-frontend-prod    # distinct from the dev image so a prod build
+                                       # doesn't clobber the Vite-dev-server image
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped

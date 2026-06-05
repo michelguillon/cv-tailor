@@ -401,6 +401,35 @@ what changed (if anything).*
 
 ---
 
+### F-32 — UI Step 6: prod overlay — Compose concatenates `volumes`, and dev/prod must not share an image name
+
+**What was built:** `frontend/Dockerfile.prod` (multi-stage: `node:20-alpine` builds
+the Vite bundle → `nginx:1.27-alpine` serves it, no Node in the final ~50 MB image),
+`frontend/nginx.conf` (SPA `try_files` fallback + `/api/` proxy to `backend:8000` with
+`proxy_buffering off` for SSE), and the completed `docker-compose.prod.yml` overlay.
+Smoke-tested: `/` → 200 SPA, `/api/health` → proxied 200, arbitrary route → index.html.
+
+**Finding 1 — Compose CONCATENATES the `volumes:` list across `-f` overlays; it can't
+subtract.** The dev frontend bind-mounts `./frontend:/app` + an anonymous
+`/app/node_modules` for hot reload. A prod overlay `volumes: []` is a **no-op** —
+`docker compose config` showed the dev mounts still present in the merged result.
+Resolved by *not fighting it*: the mounts are **inert** under nginx (it serves
+`/usr/share/nginx/html`, the baked bundle — never `/app`), so the production bundle is
+what ships. Verified by serving the built stack, not by reasoning. (A
+`docker-compose.override.yml` split would remove them, but that contradicts SPEC §7.5's
+two-file structure and changes the documented dev flow — not worth it.)
+
+**Finding 2 — dev and prod frontend services must NOT share an image name.** Both
+default to `cv-tailor-frontend` (Compose `<project>-<service>`), so a prod build
+**clobbered** the dev Vite image — a later `docker compose run --rm frontend npm run
+build` then hit nginx's entrypoint (`npm: not found`). Resolved with an explicit
+`image: cv-tailor-frontend-prod` on the prod service. The backend doesn't have this
+problem (dev and prod build the *same* Dockerfile, so the shared name is correct).
+**Affects SPEC §7.5/§12.6** (the overlay example lacked both the explicit image name
+and the volumes note).
+
+---
+
 ### F-31 — UI Step 4: conversational HITL is the SAME handler interface, paused over HTTP; preview-before-apply needs a multi-turn loop
 
 **What was built:** `api/runner.SSEHITL` implements the pipeline's existing HITL

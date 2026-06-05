@@ -949,12 +949,17 @@ services:
     restart: unless-stopped
 
   frontend:
+    image: cv-tailor-frontend-prod  # distinct name so a prod build doesn't clobber
+                                     # the dev Vite image (same default name) — F-32
     build:
       context: ./frontend
-      dockerfile: Dockerfile.prod   # multi-stage: Node build → nginx-alpine (~30 MB)
+      dockerfile: Dockerfile.prod   # multi-stage: Node build → nginx-alpine (~50 MB)
     restart: unless-stopped
     # nginx serves static bundle on :3000, proxies /api/* to backend:8000
-    # nginx.conf: proxy_buffering off for SSE streams
+    # nginx.conf: proxy_buffering off for SSE streams.
+    # NB: Compose concatenates volumes across -f files, so the dev frontend mounts
+    # survive into the merged prod config — inert under nginx (serves the baked
+    # bundle at /usr/share/nginx/html, not /app), so the production bundle ships (F-32).
 ```
 
 **Deployment to homeserver (M720q):**

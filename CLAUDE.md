@@ -29,8 +29,11 @@ docker compose run --rm cli python -m corpus.ingest --cv-dir data/cvs/
 docker compose run --rm cli python -m tailor run --jd data/jd.txt --demo
 ```
 
-One image, three entry points (CLI / FastAPI backend / pytest). `frontend` and
-the prod multi-stage build land in the UI phase.
+One image, three entry points (CLI / FastAPI backend / pytest). The Web UI
+(`api/` + `frontend/`) runs alongside: `docker compose up backend frontend` →
+http://localhost:3000. Production is a two-file overlay (multi-stage nginx
+frontend, no `--reload`): `docker compose -f docker-compose.yml -f
+docker-compose.prod.yml up -d --build` (SPEC §7.5, F-32).
 
 ## Load-bearing conventions (don't break these)
 
