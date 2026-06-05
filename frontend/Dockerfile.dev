@@ -1,0 +1,9 @@
+# Vite dev server (SPEC §7.5). Source is bind-mounted by compose; node_modules is
+# baked here and preserved over the mount by an anonymous volume (/app/node_modules).
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]

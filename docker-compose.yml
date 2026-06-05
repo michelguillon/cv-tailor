@@ -23,9 +23,17 @@ services:
     volumes:
       - .:/app
     env_file: .env
-    # NOTE: api/main.py is added in the UI phase; the image builds now but this
-    # service only runs once the backend exists.
+    # The Web UI backend (SPEC §12). Run with the frontend: docker compose up backend frontend
 
-  # frontend: added in the UI phase (needs frontend/Dockerfile.dev).
-  # Defined in SPEC §7.5; omitted here so `docker compose build` does not fail
-  # on a missing build context before the React app exists.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev      # Vite dev server
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app               # edits on host visible immediately
+      - /app/node_modules             # keep the image's node_modules over the bind-mount
+    depends_on:
+      - backend
+    # → http://localhost:3000 ; proxies /api → backend:8000 (vite.config.ts)
