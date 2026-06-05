@@ -5,6 +5,7 @@ session primitives (event buffer + seq, TTL cleanup, the HITL thread handoff) th
 the async SSE/HITL flow (UI Steps 3–4) is built on.
 """
 
+import json
 import threading
 import time
 
@@ -12,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.routers.corpus as corpus_router
+import api.routers.runs as runs_router
 from api.main import app
 from api.session import Session, SessionError, SessionStore
 
@@ -158,6 +160,62 @@ def test_start_run_full_mode_requires_key(client, run_store, monkeypatch):
 
 def test_start_run_empty_jd_rejected(client, run_store):
     assert client.post("/api/runs", json={"jd_text": "   ", "mode": "demo"}).status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# archive / replay + output (UI Step 5) — fake outputs/ on disk                #
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def archive_dir(tmp_path, monkeypatch):
+    out = tmp_path / "outputs"
+    rd = out / "run_demo"
+    rd.mkdir(parents=True)
+    (rd / "run_log.jsonl").write_text(
+        "\n".join([
+            json.dumps({"phase": "phase0", "event": "jd_analysed", "reasoning": "Director, SE"}),
+            json.dumps({"type": "run_complete", "mode": "demo", "iterations_run": 1,
+                        "total_estimated_usd": 0.1,
+                        "cost_breakdown_estimated_usd": {"anthropic_haiku": 0.1}}),
+        ]) + "\n", encoding="utf-8")
+    (rd / "phase0_jd_analysis.json").write_text(json.dumps({"role_title": "Director, SE"}), encoding="utf-8")
+    (rd / "phase1_fit_assessment.json").write_text(
+        json.dumps({"outcome": "partial", "overall_fit_score": 0.58}), encoding="utf-8")
+    (rd / "iteration_1.json").write_text(json.dumps({"iteration": 1, "keyword_coverage": 0.9}), encoding="utf-8")
+    (rd / "cv_final.md").write_text("# CV\nclean cv text", encoding="utf-8")
+    (rd / "cv_final.html").write_text("<html><body>full report</body></html>", encoding="utf-8")
+    monkeypatch.setattr(runs_router, "OUTPUT_DIR", str(out))
+    return out
+
+
+def test_archive_lists_completed_runs(client, archive_dir):
+    runs = client.get("/api/runs/archive").json()
+    assert len(runs) == 1
+    r = runs[0]
+    assert r["run_id"] == "run_demo" and r["role_title"] == "Director, SE"
+    assert r["outcome"] == "partial" and r["cost_estimated_usd"] == 0.1
+    assert r["has_md"] and r["has_html"]
+
+
+def test_run_detail_replay_payload(client, archive_dir):
+    d = client.get("/api/runs/run_demo/detail").json()
+    assert d["role_title"] == "Director, SE" and d["outcome"] == "partial"
+    assert len(d["iteration_scores"]) == 1 and d["iteration_scores"][0]["iteration"] == 1
+    assert any(e.get("event") == "jd_analysed" for e in d["reasoning"])
+    assert "clean cv text" in d["cv_md"]
+
+
+def test_run_report_and_download(client, archive_dir):
+    rep = client.get("/api/runs/run_demo/report")
+    assert rep.status_code == 200 and "full report" in rep.text
+    md = client.get("/api/runs/run_demo/files/cv_final.md")
+    assert md.status_code == 200 and "clean cv text" in md.text
+    assert client.get("/api/runs/run_demo/files/evil.sh").status_code == 404   # not downloadable
+
+
+def test_archive_unknown_run_404(client, archive_dir):
+    assert client.get("/api/runs/nope/detail").status_code == 404
+    assert client.get("/api/runs/nope/report").status_code == 404
 
 
 def test_corpus_delete_removes_sections(client, monkeypatch):

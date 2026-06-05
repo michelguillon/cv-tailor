@@ -14,15 +14,19 @@ import asyncio
 import json
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from api import archive
 from api.runner import launch_run
 from api.session import TERMINAL, SessionError
 from tailor.config import ConfigError, load_config, resolve_run_config
 from tailor.run_context import new_run_id
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
+
+OUTPUT_DIR = "outputs"
 
 
 class StartRunRequest(BaseModel):
@@ -38,12 +42,46 @@ def list_runs(request: Request) -> list[dict]:
     return [s.public() for s in sorted(sessions, key=lambda s: s.created_at, reverse=True)]
 
 
+# NB: declared before "/{run_id}" so the literal path isn't captured as a run id.
+@router.get("/archive")
+def list_archive() -> list[dict]:
+    """All completed runs on disk (replay/showcase) — works for preserved demo runs."""
+    return archive.list_runs(OUTPUT_DIR)
+
+
 @router.get("/{run_id}")
 def get_run(run_id: str, request: Request) -> dict:
     session = request.app.state.sessions.get(run_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
     return session.public()
+
+
+@router.get("/{run_id}/detail")
+def run_detail(run_id: str) -> dict:
+    """Replay payload from outputs/<run_id>/: summary + iteration scores + reasoning + cv_md."""
+    detail = archive.run_detail(OUTPUT_DIR, run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"no output for run {run_id!r}")
+    return detail
+
+
+@router.get("/{run_id}/report")
+def run_report(run_id: str):
+    """The Phase-6 HTML report (4 tabs), served inline for the output panel iframe."""
+    path = archive.run_file(OUTPUT_DIR, run_id, "cv_final.html")
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"no report for run {run_id!r}")
+    return FileResponse(path, media_type="text/html")
+
+
+@router.get("/{run_id}/files/{name}")
+def run_download(run_id: str, name: str):
+    """Download cv_final.md or cv_final.html as an attachment."""
+    path = archive.run_file(OUTPUT_DIR, run_id, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"no file {name!r} for run {run_id!r}")
+    return FileResponse(path, filename=name)
 
 
 @router.post("", status_code=201)
