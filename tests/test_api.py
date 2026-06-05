@@ -235,6 +235,87 @@ def test_auto_run_does_not_pause(client, run_store, monkeypatch):
     assert s["status"] == "complete" and s["result"]["outcome"] == "partial"
 
 
+def test_hitl_ready_is_streamed_then_run_resumes(client, run_store, monkeypatch):
+    """End-to-end through HTTP: the SSE stream delivers hitl_ready while paused; a
+    concurrent POST /hitl resumes the run and the stream then carries run_complete."""
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pauses_at_fit)
+    rid = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "auto": False}).json()["run_id"]
+
+    def resume():
+        _await_status(client, rid, "awaiting_hitl")
+        client.post(f"/api/runs/{rid}/hitl", json={"action": "proceed"})
+
+    t = threading.Thread(target=resume)
+    t.start()
+    with client.stream("GET", f"/api/runs/{rid}/stream") as resp:    # closes once the run is terminal
+        assert resp.status_code == 200
+        body = "".join(resp.iter_text())
+    t.join(timeout=3)
+    assert "hitl_ready" in body and "fit_assessment" in body and "run_complete" in body
+
+
+def test_sse_hitl_review_freetext_preview_then_apply(monkeypatch):
+    """Free text → Haiku interpret (mocked) → re-published as a preview → confirm-apply.
+    Proves preview-before-apply: the interpretation is visible before the revision runs."""
+    from types import SimpleNamespace
+
+    from api.runner import SSEHITL
+    from tailor.phases import phase4_hitl
+
+    result = SimpleNamespace(
+        manifest={"profile": {"static": False, "version": 1, "label": "Profile"}},
+        iterations=[], unresolved={}, convergence_reason="converged")
+    monkeypatch.setattr(phase4_hitl, "interpret_freetext",
+                        lambda text, res, **k: {"section_id": "profile", "instruction": "make it punchier"})
+    calls = []
+    monkeypatch.setattr(phase4_hitl, "revise_section",
+                        lambda sid, instr, *a, **k: (calls.append((sid, instr)), (2, "new"))[1])
+
+    s = Session(run_id="r")
+    rc = SimpleNamespace(max_iterations=1, orchestrator_model="m", validation_model="v")
+    handler = SSEHITL(s, validation_model="v")
+    t = threading.Thread(target=lambda: handler.review(None, result, None, None, None, rc))
+    t.start()
+
+    _spin_until(lambda: s.status == "awaiting_hitl")
+    s.submit_hitl({"action": "interpret", "text": "punchier please"})
+
+    # loop re-publishes a checkpoint carrying the pending interpretation (no revision yet)
+    _spin_until(lambda: s.status == "awaiting_hitl" and s.hitl_pending["payload"].get("preview"))
+    assert calls == []                                       # nothing applied during preview
+    preview = s.hitl_pending["payload"]["preview"]
+    assert preview == {"section_id": "profile", "instruction": "make it punchier", "label": "Profile"}
+
+    s.submit_hitl({"action": "apply_freetext", "section_id": "profile", "instruction": "make it punchier"})
+    _spin_until(lambda: any(e["type"] == "hitl_applied" for e in s.events))
+    _spin_until(lambda: s.status == "awaiting_hitl")
+    s.submit_hitl({"action": "accept"})
+
+    t.join(timeout=2)
+    assert calls == [("profile", "make it punchier")]
+
+
+def test_sse_hitl_formatting_approve_and_reject():
+    """The formatting checkpoint is binary: approve → apply (True), reject → skip (False)."""
+    from api.runner import SSEHITL
+
+    corrections = {"profile": {"corrections": ["en-dash → em-dash"], "original": "a", "corrected": "b"}}
+    length = {"total_words": 100, "budget_words": 120, "over_budget": False, "longest": []}
+
+    for action, expected in (("approve", True), ("reject", False)):
+        s = Session(run_id="r")
+        handler = SSEHITL(s, validation_model="v")
+        out = {}
+        t = threading.Thread(target=lambda: out.__setitem__("v", handler.formatting(corrections, length)))
+        t.start()
+        _spin_until(lambda: s.status == "awaiting_hitl")
+        assert s.hitl_pending["payload"]["corrections"][0]["section_id"] == "profile"
+        s.submit_hitl({"action": action})
+        t.join(timeout=2)
+        assert out["v"] is expected
+
+
 # --------------------------------------------------------------------------- #
 # archive / replay + output (UI Step 5) — fake outputs/ on disk                #
 # --------------------------------------------------------------------------- #

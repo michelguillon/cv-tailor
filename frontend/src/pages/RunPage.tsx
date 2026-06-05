@@ -82,8 +82,7 @@ export function RunPage() {
   async function decide(d: HitlDecision) {
     const rid = runIdRef.current;
     if (!rid) return;
-    setHitlBusy(true);
-    setHitl(null); // SSE re-publishes the next checkpoint (review loop) or the run resumes
+    setHitlBusy(true); // keep the panel visible (greyed, "Sending…") until the SSE resolves it
     try {
       await api.submitHitl(rid, d);
     } catch (e) {
@@ -96,6 +95,11 @@ export function RunPage() {
     switch (ev.type) {
       case "phase_start":
         setPhaseStatus((p) => ({ ...p, [ev.phase as string]: "running" }));
+        // Advancing to a new phase means any prior checkpoint is resolved — clear its
+        // panel. A within-phase checkpoint (review/formatting) re-appears via hitl_ready,
+        // which is emitted *after* its phase_start, so this never hides a live panel.
+        setHitl(null);
+        setHitlBusy(false);
         break;
       case "phase_complete": {
         const phase = ev.phase as string;

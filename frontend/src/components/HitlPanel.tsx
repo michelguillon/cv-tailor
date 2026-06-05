@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, Send, Check, X, Wand2, AlertTriangle } from "lucide-react";
+import { MessageSquare, Send, Check, X, Wand2, AlertTriangle, Loader2 } from "lucide-react";
 import type { HitlCheckpoint, HitlDecision } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,11 @@ export function HitlPanel({
           {checkpoint === "fit_assessment" && "Fit assessment — your call"}
           {checkpoint === "section_review" && "Section review — your call"}
           {checkpoint === "formatting" && "Formatting — your call"}
+          {busy && (
+            <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending…
+            </span>
+          )}
         </div>
         {checkpoint === "fit_assessment" && <FitBody payload={payload} busy={busy} onDecide={onDecide} />}
         {checkpoint === "section_review" && <ReviewBody payload={payload} busy={busy} onDecide={onDecide} />}

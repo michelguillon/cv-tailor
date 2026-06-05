@@ -1403,7 +1403,7 @@ Haiku here is only the formatting/validation gate (Sonnet is the writer+orchestr
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
 
-- **191 tests, all deterministic / mocked (no API).** Every provider is faked;
+- **222 tests, all deterministic / mocked (no API).** Every provider is faked;
   LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
   F-16, F-21, F-25, F-26), not in the pytest suite.
 - **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.
@@ -1417,6 +1417,13 @@ tests, and which are tested by inspection only.*
   counts, freeze determinism, and `replay`. Closes the Step 8 E2E gap.
 - **Pipeline** (test_cost, test_run): cost math + helpers→cost wiring; RunConfig
   mode-gating; HITL handlers.
+- **Web UI** (test_api): route shape; corpus endpoints (ChromaDB faked); run
+  initiation + SSE replay; archive/replay + downloads; Session primitives (event
+  buffer/seq, TTL, the thread handoff). Conversational HITL (UI Step 4): the
+  `SSEHITL` handshake — fit pause/resume + stop through the live handler, the
+  multi-turn review loop (apply-item and free-text preview→apply, revision mocked),
+  the binary formatting checkpoint, `auto` skipping pauses, and `hitl_ready` reaching
+  the browser over the live SSE stream while paused — all with zero real API calls.
 
 ---
 
