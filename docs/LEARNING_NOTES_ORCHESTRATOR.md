@@ -462,6 +462,17 @@ output time), the Phase 2 manifest now carries `position` and `title` per sectio
 (alongside `section_type`), the same enrichment pattern used for Phase 3. **Affects
 D-17, D-07 #3.**
 
+**Follow-up (display disambiguation):** experience role-groups are split per
+company AND per role (D-21), so two role-groups at one employer (e.g. AppNexus /
+Xandr: Director + Solution Consultant — the `/` is the acquisition rename, kept on
+purpose) would collapse to one identical line in the status / Changes / Scores
+displays, which show only a label. The manifest now also carries a `label`
+(`"{company} — {role}"` for experience, else the title); the CV **heading** stays
+the company alone (the role is already in the body's bold line, so the CV body was
+never ambiguous), while the status/table displays use `label`. The corpus already
+had both fields — experience metadata carries `company` and a role `title`
+(sectioniser); Phase 2 was just taking `company` and dropping the role.
+
 ---
 
 ### F-22 — Step 6 (dual-writer): prompt caching wired correctly but a no-op at this prompt scale (measured)

@@ -117,9 +117,35 @@ def test_drafts_nonstatic_and_copies_static(tmp_path):
     assert manifest["profile"] == {
         "static": False, "version": 0, "word_count": 6, "source_cv": "Figma",
         "path": str(ctx.section_path("profile", version=0)), "section_type": "profile",
-        "position": 0, "title": "profile",
+        "position": 0, "title": "profile", "label": "profile",
     }
     assert manifest["interests"]["section_type"] == "interests"
+
+
+def test_experience_label_disambiguates_role_at_same_company(tmp_path):
+    """Two role-groups at one employer get distinct labels (company — role); the
+    CV heading stays the company alone (role is in the body). See memory/F-23."""
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+
+    def exp(section_id, role):
+        s = sec("AI", section_id, "experience", f"{role} bullets")
+        s["company"] = "AppNexus / Xandr"
+        s["title"] = role
+        return s
+
+    sections = [exp("experience_appnexus_director", "Director, Solutions Engineering"),
+                exp("experience_appnexus_consultant", "Solution Consultant")]
+    recommended = {"experience_appnexus_director": rec("experience_appnexus_director", "AI"),
+                   "experience_appnexus_consultant": rec("experience_appnexus_consultant", "AI")}
+    manifest = draft_sections(fit(recommended), jd(), rubric(), sections, budgets(), ctx,
+                              model="m", client=fake_claude())
+
+    d = manifest["experience_appnexus_director"]
+    c = manifest["experience_appnexus_consultant"]
+    assert d["title"] == "AppNexus / Xandr" and c["title"] == "AppNexus / Xandr"     # heading: company
+    assert d["label"] == "AppNexus / Xandr — Director, Solutions Engineering"        # disambiguated
+    assert c["label"] == "AppNexus / Xandr — Solution Consultant"
+    assert d["label"] != c["label"]
 
 
 def test_manifest_checkpoint_written(tmp_path):

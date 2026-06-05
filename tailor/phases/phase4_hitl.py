@@ -62,8 +62,8 @@ def render_section_review(result, *, max_iterations: int | None = None) -> str:
     manifest = result.manifest
     for sid in sorted(manifest):
         m = manifest[sid]
-        title = m.get("title") or sid
-        label = title if len(title) <= 34 else title[:31] + "…"
+        disp = m.get("label") or m.get("title") or sid
+        label = disp if len(disp) <= 34 else disp[:31] + "…"
         if m["static"]:
             lines.append(f"  — {label:36} static")
             continue
@@ -78,8 +78,8 @@ def render_section_review(result, *, max_iterations: int | None = None) -> str:
     if items:
         lines += ["", f"  Unresolved items ({len(items)}):"]
         for i, (sid, it) in enumerate(items, 1):
-            title = manifest[sid].get("title") or sid
-            lines.append(f"  [{i}] {title}: \"{it.issue}\" ({it.severity})")
+            disp = manifest[sid].get("label") or manifest[sid].get("title") or sid
+            lines.append(f"  [{i}] {disp}: \"{it.issue}\" ({it.severity})")
         lines += [
             "",
             "  Options:",
@@ -115,7 +115,7 @@ def interpret_freetext(text: str, result, *, model: str, client=None) -> dict:
     """Haiku interprets free text into {section_id, instruction}. Validated against
     the manifest's non-static sections; retried once (R-09). Shown to the human
     before execution (preview-before-apply)."""
-    editable = {sid: result.manifest[sid].get("title") or sid
+    editable = {sid: result.manifest[sid].get("label") or result.manifest[sid].get("title") or sid
                 for sid in result.manifest if not result.manifest[sid]["static"]}
     listing = "\n".join(f"  - {sid} ({title})" for sid, title in editable.items())
     prompt = (

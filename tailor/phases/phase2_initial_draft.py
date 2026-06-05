@@ -80,9 +80,10 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
     """Draft every recommended section to disk. Returns a manifest dict.
 
     manifest[section_id] = {static, version, word_count, source_cv, path,
-                            section_type, position, title}
+                            section_type, position, title, label}
     The manifest is the input contract for Phase 3 (section_type → no corpus
-    re-read) and Phase 6 (position + title → checkpoint-driven assembly/headings).
+    re-read) and Phase 6 (position + title/label → checkpoint-driven assembly).
+    `title` is the CV heading; `label` disambiguates status/table displays.
     """
     if fit.recommended_sections is None:
         raise DraftError("no recommended_sections (no_fit outcome) — nothing to draft")
@@ -98,7 +99,15 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
         section_type = src["section_type"]
         # Carried for Phase 6 assembly (order) + headings, so output is checkpoint-driven.
         position = src.get("position", 0)
-        title = src.get("company") or src.get("title") or section_id
+        # `title` = the CV heading (company for experience — the role is already in the
+        # body's bold line, so the CV body isn't ambiguous). `label` disambiguates the
+        # status/Changes/Scores displays, where two role-groups at one employer would
+        # otherwise collapse to one identical line (e.g. two "AppNexus / Xandr" — the
+        # `/` is the acquisition, legitimate; the two ROLES are what must be told apart).
+        company = src.get("company")
+        role = src.get("title", "")
+        title = company or role or section_id
+        label = f"{company} — {role}" if (company and role and role != company) else title
 
         if src["static"]:
             path = ctx.write_section(section_id, src["document"], static=True)
@@ -107,7 +116,7 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
             manifest[section_id] = {
                 "static": True, "version": None, "word_count": len(src["document"].split()),
                 "source_cv": rec.source_cv, "path": str(path), "section_type": section_type,
-                "position": position, "title": title,
+                "position": position, "title": title, "label": label,
             }
             continue
 
@@ -129,7 +138,7 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
         manifest[section_id] = {
             "static": False, "version": 0, "word_count": wc,
             "source_cv": rec.source_cv, "path": str(path), "section_type": section_type,
-            "position": position, "title": title,
+            "position": position, "title": title, "label": label,
         }
 
     ctx.write_checkpoint("phase2_draft_manifest", manifest)

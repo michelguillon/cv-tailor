@@ -120,8 +120,9 @@ def _build_changes(ctx, manifest, config) -> list[dict]:
     changes = []
     for sid in _ordered_ids(manifest, config):
         m = manifest[sid]
+        disp = m.get("label") or m.get("title") or sid
         if m["static"]:
-            changes.append({"sid": sid, "title": m.get("title") or sid, "static": True,
+            changes.append({"sid": sid, "title": disp, "static": True,
                             "versions": ["static"], "diff_html": "(copied verbatim)"})
             continue
         versions = _section_versions(ctx, manifest, sid)
@@ -129,7 +130,7 @@ def _build_changes(ctx, manifest, config) -> list[dict]:
             continue
         first, last = versions[0][1], versions[-1][1]
         changes.append({
-            "sid": sid, "title": m.get("title") or sid, "static": False,
+            "sid": sid, "title": disp, "static": False,
             "versions": [lbl for lbl, _ in versions],
             "diff_html": _word_diff_html(first, last) if len(versions) > 1 else _md_to_html(last),
         })
@@ -151,7 +152,8 @@ def _build_scores(manifest, iterations, config) -> dict:
                     "claude": s.claude_quality, "gpt": s.gpt_quality,
                     "selected": s.selected_writer, "converged": s.converged,
                 })
-        rows.append({"sid": sid, "title": manifest[sid].get("title") or sid, "cells": cells})
+        rows.append({"sid": sid, "title": manifest[sid].get("label") or manifest[sid].get("title") or sid,
+                     "cells": cells})
     aggregate = [{
         "iteration": it.iteration,
         "coverage": round(it.keyword_coverage, 3),
