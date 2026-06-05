@@ -71,6 +71,8 @@ class RefinementResult:
     convergence_reason: str
     manifest: dict
     memory: LoopMemory
+    # section_id → open writer items for sections that never converged (Phase 4 HITL)
+    unresolved: dict = field(default_factory=dict)
 
 
 def _selected_quality(decision) -> float:
@@ -124,6 +126,7 @@ def refine(
     mem = LoopMemory()
 
     iterations: list[IterationScore] = []
+    latest_items: dict[str, list] = {}    # section_id → last iteration's writer items
     prev_keyword = _aggregate_keyword_coverage(ctx, manifest, rubric)
     prev_quality: float | None = None
     converged, reason = False, ""
@@ -193,7 +196,8 @@ def refine(
             mem.orchestrator_directions.append(f"iter{n} {sid}: {new_direction}")
 
             # 4. freeze: orchestrator converged AND zero major items across both drafts
-            majors = [it for it in (cd.items + gd.items) if it.severity == "major"]
+            latest_items[sid] = cd.items + gd.items
+            majors = [it for it in latest_items[sid] if it.severity == "major"]
             major_total += len(majors)
             do_freeze = decision.converged and not majors
             if do_freeze:
@@ -275,10 +279,24 @@ def refine(
         if reason:
             break
 
+    # unresolved = open items on sections that never converged (Phase 4 HITL), deduped by issue
+    unresolved: dict[str, list] = {}
+    for sid in nonstatic:
+        if sid in frozen:
+            continue
+        seen, deduped = set(), []
+        for it in latest_items.get(sid, []):
+            if it.issue not in seen:
+                seen.add(it.issue)
+                deduped.append(it)
+        if deduped:
+            unresolved[sid] = deduped
+
     audit.log_event("refinement", "loop_end", f"converged={converged} ({reason})",
                     rubric_version=rubric.version)
     return RefinementResult(iterations=iterations, final_rubric=rubric, converged=converged,
-                            convergence_reason=reason, manifest=manifest, memory=mem)
+                            convergence_reason=reason, manifest=manifest, memory=mem,
+                            unresolved=unresolved)
 
 
 def _selected_quality_for(s: SectionScore) -> float | None:

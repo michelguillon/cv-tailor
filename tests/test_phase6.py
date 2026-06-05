@@ -1,0 +1,86 @@
+"""Phase 6 output-generation tests (deterministic, no API). Step 7."""
+
+from pathlib import Path
+
+from tailor.models import FitAssessment, IterationScore, JDAnalysis, ScoringRubric, SectionScore
+from tailor.phases.phase6_output import assemble_markdown, generate_output
+from tailor.run_context import RunContext
+
+CONFIG = {"cv_sections": ["header", "profile", "skills", "experience", "ai_projects",
+                          "education", "languages", "certifications", "interests"]}
+
+
+def man(static, version, stype, position, title, wc):
+    return {"static": static, "version": version, "section_type": stype, "position": position,
+            "title": title, "word_count": wc, "source_cv": "X", "path": ""}
+
+
+def setup(ctx):
+    ctx.write_section("header", "Michel Guillon\nlondon · email@x.com", static=True)
+    ctx.write_section("profile", "Original profile alpha", version=0)
+    ctx.write_section("profile", "Tailored profile alpha beta", version=1)
+    ctx.write_section("skills", "- python\n- aws", version=0)
+    ctx.write_section("experience_acme", "Led delivery at Acme", version=0)
+    return {
+        "header": man(True, None, "header", 0, "header", 2),
+        "profile": man(False, 1, "profile", 1, "Profile", 4),
+        "skills": man(False, 0, "skills", 2, "Core Skills", 2),
+        "experience_acme": man(False, 0, "experience", 3, "Acme", 4),
+    }
+
+
+def jd():
+    return JDAnalysis("...", "Director, SE", "director", ["lead EMEA"], [], "payments", ["technical"])
+
+
+def iters():
+    ss = {
+        "profile": SectionScore("profile", "profile", 0.5, claude_quality=8.0, gpt_quality=6.0,
+                                selected_writer="claude", converged=True, current_version=1),
+        "skills": SectionScore("skills", "skills", 0.5, claude_quality=7.0, gpt_quality=7.0,
+                               selected_writer="synthesis", converged=True, current_version=0),
+        "experience_acme": SectionScore("experience_acme", "experience", 0.4, claude_quality=6.0,
+                                        gpt_quality=6.5, selected_writer="gpt", converged=False, current_version=0),
+    }
+    return [IterationScore(1, 0.6, 7.0, 0.1, 0.0, 2, 1, section_scores=ss)]
+
+
+def test_assemble_markdown_order_and_headings(tmp_path):
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    md = assemble_markdown(ctx, manifest, CONFIG)
+    # header first (no heading), then Profile, Skills, Acme — by (type order, position)
+    assert md.index("Michel Guillon") < md.index("## Profile") < md.index("## Core Skills") < md.index("## Acme")
+    assert "## header" not in md                       # header rendered without a heading
+    assert "Tailored profile alpha beta" in md         # latest version used (v1, not v0)
+
+
+def test_generate_output_writes_md_and_html(tmp_path):
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    ctx.audit.log_event("refinement", "section_adjudicated", "profile chose claude", iteration=1)
+    fit = FitAssessment(outcome="partial", overall_fit_score=0.74)
+    rubric = ScoringRubric(2, ["alpha", "beta"], [], [], "t", "t", [])
+
+    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)
+
+    assert Path(out["md"]).exists() and Path(out["html"]).exists()
+    html = Path(out["html"]).read_text(encoding="utf-8")
+    # 4 tabs present
+    for tab in ("CV", "Changes", "Scores", "Reasoning"):
+        assert tab in html
+    # profile v0→v1 diff produced an insertion; scores show the selected writer + freeze
+    assert "<ins>" in html
+    assert "synthesis" in html and "frozen" in html
+    # reasoning trace rendered the audit event
+    assert "section_adjudicated" in html
+
+
+def test_static_section_marked_verbatim_in_changes(tmp_path):
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    fit = FitAssessment(outcome="strong", overall_fit_score=0.9)
+    rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
+    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)
+    html = Path(out["html"]).read_text(encoding="utf-8")
+    assert "copied verbatim" in html

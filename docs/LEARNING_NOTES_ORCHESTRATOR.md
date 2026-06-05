@@ -401,6 +401,69 @@ what changed (if anything).*
 
 ---
 
+### F-25 — Step 7: validated live end-to-end (Phase 0→6)
+
+**What was verified (Airwallex JD, Haiku, 1 iteration, demo):** the full pipeline
+runs Phase 0→6 and writes `cv_final.md` (738 words) + `cv_final.html` (32 KB). The
+assembled CV is correct — header rendered without a heading, then Profile → Core
+Skills → experience companies in chronological order (Utiq → Microsoft → Appnexus),
+real tailored content. Phase 4 renders section status with company titles and lists
+18 unresolved writer items — and the items are genuinely useful (the writers flag
+that the Microsoft role is PM-not-presales and Xandr is adtech-not-fintech: real fit
+tensions, surfaced for the human, exactly what HITL is for).
+
+**Two dynamics confirmed:** (1) **per-section vs assembled length are different
+checks** — individual sections were flagged over their per-section `max_words`
+(AI Projects 63/70w vs a 44w budget) while the assembled total (705w) sits under the
+two-page envelope (1188w); both checks are needed. (2) With `max_iterations=1`, few
+sections converge (zero-major + orchestrator bar), so the unresolved list is long —
+expected; a full 3-iteration run resolves most. **Confirms D-28, D-14; Step 7 gates
+met.**
+
+---
+
+### F-24 — Step 7: Phase 4/5 adapted to the dual-writer model (HITL sources, free-text execution, formatting scope)
+
+**What was found / decided** — the SPEC's Phase 4/5 prose predated the dual-writer
+rewrite, so three things needed resolving and recording:
+
+1. **"Unresolved items" come from the writers' self-assessment.** The dual-writer
+   loop has no separate critique object, so Phase 4's unresolved list is the open
+   `CritiqueItem`s (both writers, last iteration) on sections that never converged
+   — surfaced via a new `RefinementResult.unresolved` (deduped by issue text). The
+   "quality" progression line is the **selected** draft's quality, not a single
+   critique score.
+2. **Free-text [e] executes as one Claude writer pass.** Haiku interprets the human's
+   text into `{section_id, instruction}` (shown back first — preview-before-apply,
+   D-18), then `tools/claude_writer.write_section` runs with the instruction as its
+   `direction`. The SPEC said "Sonnet executes" — same tool, model from `RunConfig`
+   (Haiku/dev, Sonnet/full, D-26); no new revise tool.
+3. **Phase 5 formats non-static sections only.** Static sections are the person's
+   verbatim content (D-13) — left untouched. The assembled-length envelope is the
+   sum of per-section `max_words`; accepted corrections are written as the next
+   version so Phase 6's "highest version" assembly picks them up. **Affects D-13,
+   D-18, D-28.**
+
+---
+
+### F-23 — Step 7: Phase 6 assembly order under section-mixing (manifest carries position + title)
+
+**What was found:** SPEC §5 Phase 6 said "order by `CVSection.position` from the base
+CV metadata" — but there is no single base CV under section-mixing (D-17): each
+section can come from a different CV, and positions across CVs aren't comparable.
+
+**Decision:** order by **(config `cv_sections` type index, then source `position`)**.
+section_type is the primary, reliable key (header → profile → skills → experience →
+…); `position` is only a within-type tiebreak, which matters mainly for the
+experience block. Cross-CV experience ordering is imperfect but deterministic — good
+enough for a first cut; the Phase 1 HITL section-mix (and a future reorder control)
+can refine it. To keep Phase 6 **checkpoint-driven** (D-07 #3 — no corpus re-query at
+output time), the Phase 2 manifest now carries `position` and `title` per section
+(alongside `section_type`), the same enrichment pattern used for Phase 3. **Affects
+D-17, D-07 #3.**
+
+---
+
 ### F-22 — Step 6 (dual-writer): prompt caching wired correctly but a no-op at this prompt scale (measured)
 
 **What was measured (probe, Haiku, two identical back-to-back calls):**

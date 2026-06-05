@@ -46,3 +46,22 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   (F-15). Aggregate `critique_score` is the mean of the **selected** draft's
   quality over *active* sections, so it can dip as easy sections freeze — expected,
   absorbed by the 0.5 threshold (F-16).
+
+## phase4_hitl / phase5_validation / phase6_output — review, format, emit (Step 7)
+
+- **Phases provide render + logic; `run.py` owns the terminal `input()`** — same
+  split as Phase 1's `render_fit_hitl` (no `stdin` in a phase → testable).
+- **Phase 4 (HITL, D-18):** "unresolved" = the writers' self-assessed items on
+  sections that never converged (`RefinementResult.unresolved`, deduped by issue).
+  Free-text `[e]` → Haiku interprets to `{section_id, instruction}` (shown back
+  first), then ONE `claude_writer` pass executes it (no new revise tool). Quality
+  line = the **selected** draft's quality (F-24).
+- **Phase 5:** Haiku formatting on **non-static** sections only (static stays
+  verbatim, D-13); yes/no diff; accepted corrections write the next version.
+  Assembled-length envelope = sum of per-section `max_words` (distinct from the
+  per-section length check — both exist, F-25).
+- **Phase 6:** checkpoint-driven (D-07 #3) — reads section files + the manifest,
+  never the corpus. Order = (config `cv_sections` type index, then `position`); the
+  manifest carries `position` + `title` from Phase 2 (F-23). Highest version per
+  section (or static). Jinja `templates/output.html`, 4 tabs (CV/Changes/Scores/
+  Reasoning); word-level diffs via `difflib`. `cv_final.md` is the clean artefact.

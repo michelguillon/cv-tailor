@@ -684,38 +684,36 @@ Estimated full-mode run: ~$2–4. Accepted trade-off for dual-writer quality upl
 **Input:** Final section files, `IterationScore` list, unresolved critique items
 **Output:** Human-confirmed or adjusted sections
 
-Terminal display (CLI mode):
+Terminal display (CLI mode). Under the dual-writer loop, the quality line is the
+**selected** draft's quality, and "unresolved items" are the writers'
+self-assessed items on sections that never converged (surfaced via
+`RefinementResult.unresolved`):
 ```
 ─── Refinement complete ───────────────────────────────────
-  Iterations:      3 / 3 (max reached)
+  Iterations:       3 / 3  (max_iterations)
   Keyword coverage: 61% → 74% → 83%
-  Critique score:   6.2 → 7.8 → 8.4
+  Quality (sel.):   6.2 → 7.8 → 8.4
 
   Section status:
-  ✓ profile              converged iter 1  (v2)
-  ✓ skills               converged iter 1  (v2)
-  ✓ experience_acme      converged iter 2  (v3)
-  ~ experience_barclays  active     iter 3  (v3)  ← did not converge
-  ✓ ai_projects          converged iter 2  (v2)
-  — education            static
-  — interests            static
+  ✓ Profile              converged iter 1  (v1)
+  ~ Barclays             active            (v3)  ← did not converge
+  — Interests            static
 
-  Unresolved items (2):
-  [1] experience_barclays: "quantify team size" (minor)
-  [2] profile: "add cloud platform mention" (minor)
+  Unresolved items (1):
+  [1] Barclays: "quantify team size" (minor)
 
   Options:
   [a] Accept all and proceed
-  [b] Apply suggestion [1] only
-  [c] Apply suggestion [2] only
+  [b..] Apply unresolved item by number (e.g. b1)
   [d] Leave all unresolved and proceed
   [e] Something else — describe what you want
 ```
 
-Option [e] accepts free-text: the input is interpreted by Claude Haiku into a
-structured revision instruction, then passed to Claude Sonnet for execution.
-This is the escape hatch that makes the HITL genuinely conversational rather
-than constrained multiple-choice.
+Option [e] accepts free-text: Claude Haiku interprets it into a structured
+`{section_id, instruction}` (shown back to the human first — preview-before-apply),
+then a single Claude **writer** pass executes the revision (reusing
+`tools/claude_writer.py`, not a new tool). This is the conversational escape
+hatch (F-24).
 
 In the web UI, this entire checkpoint is a conversational HITL (see §UI).
 
@@ -747,8 +745,12 @@ not at all. In the web UI: two buttons, Approve / Reject.
 
 **Assembly:** Reads section files from `outputs/<run_id>/sections/`. For each
 section_id, uses the highest accepted version (or static copy). Orders sections
-by `CVSection.position` from the base CV metadata. Assembles into a single
-document before rendering.
+by **(config `cv_sections` type order, then source `position`)** — both carried in
+the Phase 2 manifest, so assembly is checkpoint-driven and never re-queries the
+corpus. (The original "position from the base CV" doesn't apply under
+section-mixing — sources differ per section; section_type is the primary key and
+`position` only a within-type tiebreak, mainly the experience block. F-23.)
+Assembles into a single document before rendering.
 
 HTML structure:
 ```

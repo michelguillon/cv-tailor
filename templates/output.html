@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cv-tailor — {{ role_title }}</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --line:#e2e2e2; --accent:#2b6cb0;
+          --add:#1a7f37; --addbg:#e6ffec; --del:#cf222e; --delbg:#ffebe9; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         color: var(--fg); margin: 0; background: #fafafa; }
+  header { padding: 18px 28px; border-bottom: 1px solid var(--line); background: #fff; }
+  header h1 { margin: 0 0 4px; font-size: 19px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  nav { display: flex; gap: 4px; padding: 0 28px; background: #fff; border-bottom: 1px solid var(--line);
+        position: sticky; top: 0; }
+  nav button { border: none; background: none; padding: 12px 16px; font: inherit; cursor: pointer;
+               color: var(--muted); border-bottom: 2px solid transparent; }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  main { max-width: 860px; margin: 0 auto; padding: 28px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  .cv h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--accent);
+           border-bottom: 1px solid var(--line); padding-bottom: 4px; margin: 22px 0 10px; }
+  .cv ul { margin: 6px 0 6px 18px; padding: 0; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 12px 0; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; }
+  .card .vers { color: var(--muted); font-size: 12px; font-weight: 400; }
+  ins { background: var(--addbg); color: var(--add); text-decoration: none; }
+  del { background: var(--delbg); color: var(--del); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+  th { background: #f4f4f4; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: #eef; color: #339; }
+  .frozen { color: var(--add); }
+  details { margin: 6px 0; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .entry { border-left: 2px solid var(--line); padding: 4px 0 4px 12px; margin: 6px 0; font-size: 13px; }
+  .entry .ev { font-weight: 600; }
+  .entry .it { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ role_title }}</h1>
+  <div class="meta">Fit: {{ outcome }} ({{ '%.0f'|format(fit_score * 100) }}%) ·
+    run {{ run_id }} · rubric v{{ rubric.version }}</div>
+</header>
+<nav>
+  <button class="tab-btn active" data-tab="cv">CV</button>
+  <button class="tab-btn" data-tab="changes">Changes</button>
+  <button class="tab-btn" data-tab="scores">Scores</button>
+  <button class="tab-btn" data-tab="reasoning">Reasoning</button>
+</nav>
+<main>
+  <section id="cv" class="tab active cv">{{ cv_html|safe }}</section>
+
+  <section id="changes" class="tab">
+    {% for c in changes %}
+    <div class="card">
+      <h3>{{ c.title }} <span class="vers">{{ c.versions|join(' → ') }}</span></h3>
+      <div>{{ c.diff_html|safe }}</div>
+    </div>
+    {% endfor %}
+  </section>
+
+  <section id="scores" class="tab">
+    <table>
+      <tr><th>Section</th>{% for n in scores.iterations %}<th>iter {{ n }}</th>{% endfor %}</tr>
+      {% for row in scores.rows %}
+      <tr>
+        <td>{{ row.title }}</td>
+        {% for cell in row.cells %}
+          {% if cell is none %}<td class="num">—</td>
+          {% else %}<td class="num">
+            {{ '%.2f'|format(cell.coverage) }}
+            {% if cell.claude is not none %}<br><span class="pill">{{ cell.selected }}</span>
+              C{{ cell.claude }}/G{{ cell.gpt }}{% endif %}
+            {% if cell.converged %}<br><span class="frozen">✓ frozen</span>{% endif %}
+          </td>{% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      <tr><th>Aggregate (coverage / quality)</th>
+        {% for a in scores.aggregate %}
+          <td class="num">{{ '%.2f'|format(a.coverage) }} /
+            {{ a.quality if a.quality is not none else '—' }}<br>
+            <span class="it">Δkw {{ a.keyword_delta }} · Δq {{ a.quality_delta }}</span></td>
+        {% endfor %}
+      </tr>
+    </table>
+  </section>
+
+  <section id="reasoning" class="tab">
+    {% for group in reasoning %}
+    <details {% if loop.first %}open{% endif %}>
+      <summary>{{ group.phase }} ({{ group.entries|length }})</summary>
+      {% for e in group.entries %}
+      <div class="entry">
+        <span class="ev">{{ e.event }}</span>
+        {% if e.iteration is not none %}<span class="it">· iter {{ e.iteration }}</span>{% endif %}
+        <div>{{ e.reasoning }}</div>
+      </div>
+      {% endfor %}
+    </details>
+    {% endfor %}
+  </section>
+</main>
+<script>
+  document.querySelectorAll('.tab-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('.tab-btn').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      document.getElementById(b.dataset.tab).classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>

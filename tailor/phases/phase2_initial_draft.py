@@ -79,9 +79,10 @@ def _draft_one(jd, rubric, section_type, target_words, source_text, *, model, cl
 def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=None) -> dict:
     """Draft every recommended section to disk. Returns a manifest dict.
 
-    manifest[section_id] = {static, version, word_count, source_cv, path, section_type}
-    The manifest is Phase 3's sole input contract: it carries section_type so the
-    refinement loop is fully checkpoint-driven and never re-reads the corpus.
+    manifest[section_id] = {static, version, word_count, source_cv, path,
+                            section_type, position, title}
+    The manifest is the input contract for Phase 3 (section_type → no corpus
+    re-read) and Phase 6 (position + title → checkpoint-driven assembly/headings).
     """
     if fit.recommended_sections is None:
         raise DraftError("no recommended_sections (no_fit outcome) — nothing to draft")
@@ -95,6 +96,9 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
         if src is None:
             raise DraftError(f"source section not found: {rec.source_cv}/{section_id}")
         section_type = src["section_type"]
+        # Carried for Phase 6 assembly (order) + headings, so output is checkpoint-driven.
+        position = src.get("position", 0)
+        title = src.get("company") or src.get("title") or section_id
 
         if src["static"]:
             path = ctx.write_section(section_id, src["document"], static=True)
@@ -103,6 +107,7 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
             manifest[section_id] = {
                 "static": True, "version": None, "word_count": len(src["document"].split()),
                 "source_cv": rec.source_cv, "path": str(path), "section_type": section_type,
+                "position": position, "title": title,
             }
             continue
 
@@ -124,6 +129,7 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
         manifest[section_id] = {
             "static": False, "version": 0, "word_count": wc,
             "source_cv": rec.source_cv, "path": str(path), "section_type": section_type,
+            "position": position, "title": title,
         }
 
     ctx.write_checkpoint("phase2_draft_manifest", manifest)

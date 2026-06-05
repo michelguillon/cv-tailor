@@ -117,6 +117,7 @@ def test_drafts_nonstatic_and_copies_static(tmp_path):
     assert manifest["profile"] == {
         "static": False, "version": 0, "word_count": 6, "source_cv": "Figma",
         "path": str(ctx.section_path("profile", version=0)), "section_type": "profile",
+        "position": 0, "title": "profile",
     }
     assert manifest["interests"]["section_type"] == "interests"
 
