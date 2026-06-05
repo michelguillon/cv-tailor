@@ -401,6 +401,72 @@ what changed (if anything).*
 
 ---
 
+### F-28 — Sonnet validation (D-26): dual-signal convergence FIRED; freezing did nothing; synthesis is responsive, not a reflex; cost far under estimate
+
+**What was run (the deferred D-26 final validation):** full mode — **Claude Sonnet**
+writer + orchestrator, GPT-4o-mini writer, Mistral Phase 0, Airwallex JD,
+`max_iterations=3`, `--yes`. One live run. The whole point was to see the
+Haiku→Sonnet delta and watch the things F-21 deferred.
+
+| it | coverage | Δkw     | quality | Δq      | newly_frozen | active | selected bases (of 8) |
+|----|----------|---------|---------|---------|--------------|--------|------------------------|
+| 1  | 0.947    | +0.105  | 6.975   | +0.000  | 0            | 8      | synthesis 8            |
+| 2  | 0.947    | +0.000  | 7.075   | +0.100  | 0            | 8      | synthesis 4, claude 4  |
+
+Converged at **iteration 2** by `dual_signal_converged` (Δkw 0.000 < 0.05 AND Δq
+0.100 < 0.5) — it did NOT run to the cap. **Cost $0.79 estimated** (Sonnet $0.764,
+Haiku $0.018 formatting/validation, GPT $0.009, Mistral $0.0003).
+
+**Five things this validated or corrected:**
+
+1. **Dual-signal convergence actually fired (resolves the F-21 deferral).** F-21’s
+   demo run hit the iteration cap before convergence could be observed; here, with a
+   third iteration available, the loop converged *on its own* at iter 2 because both
+   signals plateaued. The termination table (D-05) is now observed end-to-end, not
+   just unit-tested.
+
+2. **Freezing did ZERO work — yet the loop still terminated.** `section_frozen`
+   events: **0**. Sonnet’s orchestrator never set `converged=True` on any section
+   (an even stricter bar than Haiku’s — F-21 froze 2, F-16’s single-writer loop froze
+   5–6). So every section was re-drafted both iterations, and the *only* thing that
+   stopped the loop was the aggregate dual-signal plateau. This is the strongest
+   possible evidence for D-05’s two-independent-paths design: when the per-section
+   freeze path contributes nothing, the aggregate-plateau path is the safety net that
+   prevents running to the cap. A single-signal or freeze-only design would have run
+   the full 3 iterations here for no quality gain.
+
+3. **Synthesis is responsive, not a reflex (resolves F-21’s watch item).** Demo/Haiku
+   synthesised 14/16 (87.5%) and the worry was synthesis-as-default. Sonnet:
+   iter 1 **8/8 synthesis**, iter 2 **4/8 synthesis + 4/8 claude** → 12/16 (75%),
+   and the *trend* is what matters: as the two drafts converge across iterations the
+   orchestrator increasingly takes one verbatim instead of merging. Early divergent
+   drafts → synthesis; stabilised drafts → pick. That trajectory is what "earned, not
+   reflex" looks like. (Claude-verbatim picks rose; GPT was never picked outright on
+   this JD — consistent with Claude-as-primary-writer, D-03/D-28.)
+
+4. **The rubric JD-validation guard (D-04) is load-bearing under Sonnet.** Sonnet’s
+   orchestrator proposed **30+** rubric additions across the run; `rubric.py`
+   **rejected every one** as "not implied by the JD" (0 accepted, rubric stayed v1).
+   Coverage was already 0.947, so unchecked additions would only have inflated the
+   denominator and made the score dishonest. The verbose-critique-inflates-the-rubric
+   failure mode D-04 predicted is real and model-dependent (Haiku barely proposed
+   any; Sonnet proposes freely) — the cap + JD-validation is exactly what keeps the
+   convergence signal meaningful. *Calibration note:* a few proposals named real JD
+   concepts (EMEA scope, payments domain) yet were rejected as already-covered/not-core;
+   the guard errs conservative, which protects the score — acceptable, worth a glance
+   if a future JD genuinely needs a mid-loop addition and never gets one.
+
+5. **Steadier verdict + cost far under estimate.** Outcome **partial** (fit 0.579,
+   7 typed gaps) — the steady, nuanced read F-12 predicted Sonnet would give, vs
+   Haiku’s STRONG/PARTIAL wobble on this borderline JD (D-26 delta confirmed).
+   And **$0.79 ≪ the ~$2–4 D-28 estimate**: because it converged at iter 2 (not 3)
+   on 8 active sections, real full-mode spend on this corpus is sub-$1. The D-28
+   estimate was conservative; the realistic figure for an Airwallex-scale run is
+   ~$0.8. **Affects D-05, D-04, D-26, D-28; resolves the F-21 deferrals.** cv_final.md
+   = 968 words (under the two-page envelope, F-25).
+
+---
+
 ### F-27 — Step 9: the deferred end-to-end test — one mock seam, fakes that count
 
 **What was built:** `tests/test_phases.py` — a fully-mocked `run_pipeline` pass
@@ -615,9 +681,10 @@ and coverage dipped −0.043 from rubric expansion — the bounded effect D-05 p
    sub-1.0 steps) — the orchestrator's per-section `direction` carried forward (D-30)
    is doing visible work.
 
-**Deferred:** a 3-iteration live run to watch dual-signal convergence actually fire
-under the new design (here `max_iterations=2` hit the cap first). Folds into the
-final Sonnet validation. **Affects D-28, D-05; confirms F-16.**
+**Deferred → now resolved (F-28):** the 3-iteration Sonnet validation ran and dual-signal
+convergence fired at iteration 2; the synthesis-bias watch (14/16 here) resolved —
+Sonnet synthesises 12/16 and the share *drops* across iterations (earned, not reflex).
+**Affects D-28, D-05; confirms F-16.**
 
 ---
 
@@ -1166,11 +1233,14 @@ All figures are **list-price estimates** (F-08), not billed; Mistral runs free-t
 
 | Run | Mode | Mistral | Anthropic Sonnet | Anthropic Haiku | OpenAI | Total USD |
 |-----|------|---------|------------------|-----------------|--------|-----------|
+| Airwallex, full Phase 0→6, **2 iter to dual-signal convergence** (D-26 validation, F-28) | **full (Sonnet)** | 0.0003 | **0.7636** | 0.0178 | 0.0089 | **0.7906** |
 | Airwallex, full Phase 0→6, 1 iter (Step 8 live) | demo (Haiku) | 0.0003 | — | 0.1023 | 0.0022 | **0.1045** |
 | Airwallex, dry-run (Phase 0→1) | demo (Haiku) | 0.0003 | — | 0.0059 | — | **0.0062** |
 
-Full-mode (Sonnet, 3-iter) estimate is ~$2–4/run (D-28) — to be measured at the
-final Sonnet validation (D-26), not yet run.
+The full-mode Sonnet run came in at **$0.79**, well under the ~$2–4 D-28 estimate
+(F-28): it converged at iteration 2 (not the 3-iteration cap) on 8 active sections,
+so the conservative estimate overstated realistic spend on this corpus by ~3–5×.
+Haiku here is only the formatting/validation gate (Sonnet is the writer+orchestrator).
 
 ---
 
