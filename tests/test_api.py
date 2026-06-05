@@ -63,11 +63,13 @@ def test_unknown_run_404(client):
     assert client.get("/api/runs/does-not-exist").status_code == 404
 
 
-def test_stubbed_routes_return_501(client):
-    # Routes exist (shape fixed) but their behaviour lands in later UI steps.
-    assert client.post("/api/runs").status_code == 501
-    assert client.get("/api/runs/x/stream").status_code == 501
+def test_hitl_route_still_stubbed(client):
+    # Conversational HITL resume lands in UI Step 4.
     assert client.post("/api/runs/x/hitl").status_code == 501
+
+
+def test_stream_unknown_run_404(client):
+    assert client.get("/api/runs/does-not-exist/stream").status_code == 404
 
 
 # --------------------------------------------------------------------------- #
@@ -92,6 +94,70 @@ def test_corpus_cvs_inventory_ordered(client, corpus_patched):
     assert cv["target_role"] == "Solutions Engineer" and cv["seniority"] == "director"
     assert [s["section_id"] for s in cv["sections"]] == ["header", "profile", "experience_ms"]  # by position
     assert cv["sections"][0]["static"] is True
+
+
+# --------------------------------------------------------------------------- #
+# run initiation + SSE progress (UI Step 3) — pipeline mocked                  #
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def run_store(tmp_path):
+    """Isolate the app's SessionStore in a tmp dir for run tests."""
+    prev = app.state.sessions
+    app.state.sessions = SessionStore(base_dir=tmp_path / "sessions")
+    try:
+        yield app.state.sessions
+    finally:
+        app.state.sessions = prev
+
+
+def _fake_run_pipeline(jd_path, *, on_event=None, run_id=None, **kw):
+    on_event({"type": "phase_start", "phase": "phase0_jd_analysis", "label": "JD analysis"})
+    on_event({"type": "phase_complete", "phase": "phase0_jd_analysis", "role_title": "Director, SE"})
+    on_event({"type": "run_complete", "run_id": run_id, "outcome": "partial",
+              "cost_estimated_usd": 0.1, "iterations": 1})
+    return {"run_id": run_id, "mode": kw.get("mode", "demo"), "outcome": "partial",
+            "cost_estimated_usd": 0.1, "iterations": 1}
+
+
+def _await_terminal(client, run_id, timeout=3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = client.get(f"/api/runs/{run_id}").json()
+        if s["status"] in ("complete", "error", "stopped"):
+            return s
+        time.sleep(0.01)
+    raise AssertionError(f"run {run_id} did not terminate")
+
+
+def test_start_run_launches_and_completes(client, run_store, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
+    r = client.post("/api/runs", json={"jd_text": "tailor my cv", "mode": "demo"})
+    assert r.status_code == 201
+    rid = r.json()["run_id"]
+    s = _await_terminal(client, rid)
+    assert s["status"] == "complete" and s["result"]["outcome"] == "partial"
+
+
+def test_stream_replays_progress_events(client, run_store, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
+    rid = client.post("/api/runs", json={"jd_text": "x", "mode": "demo"}).json()["run_id"]
+    _await_terminal(client, rid)
+    with client.stream("GET", f"/api/runs/{rid}/stream") as resp:
+        assert resp.status_code == 200
+        body = "".join(resp.iter_text())
+    assert "phase_start" in body and "run_complete" in body and "Director, SE" in body
+
+
+def test_start_run_full_mode_requires_key(client, run_store, monkeypatch):
+    monkeypatch.delenv("FULL_MODE_KEY", raising=False)
+    assert client.post("/api/runs", json={"jd_text": "x", "mode": "full"}).status_code == 400
+
+
+def test_start_run_empty_jd_rejected(client, run_store):
+    assert client.post("/api/runs", json={"jd_text": "   ", "mode": "demo"}).status_code == 400
 
 
 def test_corpus_delete_removes_sections(client, monkeypatch):

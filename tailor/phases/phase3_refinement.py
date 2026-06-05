@@ -117,8 +117,16 @@ def refine(
     max_rubric_additions: int = 2,
     claude_client=None,
     openai_client=None,
+    on_event=None,
 ) -> RefinementResult:
-    """Run the dual-writer refinement loop. See the module docstring for the flow."""
+    """Run the dual-writer refinement loop. See the module docstring for the flow.
+
+    `on_event` (optional) is called with a progress dict per adjudicated section and
+    per completed iteration — the Web UI SSE hook (SPEC §12.2). No-op for the CLI."""
+    def emit(type_, **fields):
+        if on_event is not None:
+            on_event({"type": type_, **fields})
+
     audit = ctx.audit
     section_types = {sid: m["section_type"] for sid, m in manifest.items()}
     nonstatic = [sid for sid, m in manifest.items() if not m["static"]]
@@ -206,6 +214,9 @@ def refine(
                 audit.log_event("refinement", "section_frozen",
                                 f"{sid} converged at iteration {n} (orchestrator + zero major)",
                                 iteration=n, rubric_version=rubric.version)
+            emit("section_update", section_id=sid, iteration=n, version=n,
+                 selected=decision.selected_base, converged=do_freeze,
+                 keyword_coverage=decision.keyword_coverage)
 
             # 5. per-section score
             section_scores[sid] = SectionScore(
@@ -256,6 +267,9 @@ def refine(
         iterations.append(iter_score)
         ctx.write_checkpoint(f"iteration_{n}", iter_score)
         ctx.write_checkpoint(f"loop_memory_{n}", mem.to_dict())
+        emit("iteration_complete", iteration=n, keyword_coverage=agg_keyword,
+             quality=agg_quality, keyword_delta=keyword_delta, quality_delta=quality_delta,
+             frozen=newly_frozen, active=remaining_active)
         audit.log_event("refinement", "iteration_scored",
                         f"iter {n}: coverage {agg_keyword}, quality {agg_quality}, "
                         f"Δkw {keyword_delta}, Δq {quality_delta}, "

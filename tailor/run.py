@@ -104,8 +104,17 @@ class TerminalHITL:
 # --------------------------------------------------------------------------- #
 
 def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
-                 output_dir="outputs", dry_run=False, hitl=None, run_id=None) -> dict:
-    """Run Phase 0→6 (or 0→1 for --dry-run). Returns a summary dict."""
+                 output_dir="outputs", dry_run=False, hitl=None, run_id=None,
+                 on_event=None) -> dict:
+    """Run Phase 0→6 (or 0→1 for --dry-run). Returns a summary dict.
+
+    `on_event` (optional) is called with a progress dict at each phase boundary —
+    the hook the Web UI's SSE stream consumes (SPEC §12.2). It is a no-op for the
+    CLI (None), so the pipeline stays identical; never let an emit raise."""
+    def emit(type_, **fields):
+        if on_event is not None:
+            on_event({"type": type_, **fields})
+
     config = load_config()
     budgets = load_budgets()
     rc = resolve_run_config(config, mode=mode, key=key, max_iterations=max_iterations)
@@ -119,6 +128,7 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # Phase 0 — JD analysis (Mistral). This one provider call doesn't go through a
         # cost-noting helper (it uses the Mistral client directly), so note its usage
         # here. Phase 1+ go through claude_complete/gpt_complete, which note themselves.
+        emit("phase_start", phase="phase0_jd_analysis", label="JD analysis")
         jd, rubric, jd_usage = analyse_jd(jd_text, model=rc.jd_model)
         if jd_usage is not None:
             cost.note(rc.jd_model, getattr(jd_usage, "prompt_tokens", 0) or 0,
@@ -127,49 +137,70 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         ctx.write_checkpoint("phase0_rubric", rubric)
         ctx.audit.log_event("phase0", "jd_analysed", f"{jd.role_title} ({jd.seniority_level})",
                             rubric_version=rubric.version)
+        emit("phase_complete", phase="phase0_jd_analysis",
+             role_title=jd.role_title, seniority=jd.seniority_level)
 
         # Phase 1 — fit assessment (RAG + Claude)
+        emit("phase_start", phase="phase1_fit_assessment", label="Fit assessment")
         sections = all_sections(config)
         fit, _ = assess_fit(jd, rubric, model=rc.orchestrator_model, config=config, sections=sections)
         ctx.write_checkpoint("phase1_fit_assessment", fit)
+        emit("phase_complete", phase="phase1_fit_assessment",
+             outcome=fit.outcome, fit_score=round(fit.overall_fit_score, 3), hitl_required=True)
         proceed = hitl.fit(fit, jd)
 
         if dry_run:
             summary["outcome"] = fit.outcome
             summary["dry_run"] = True
             _finalise(ctx, tracker, rc, iterations_run=0)
+            emit("run_complete", run_id=ctx.run_id, outcome=fit.outcome, dry_run=True)
             return summary
         if not proceed:
             ctx.audit.log_event("phase1", "stopped_by_human",
                                 f"human stopped at fit ({fit.outcome})")
             _finalise(ctx, tracker, rc, iterations_run=0)
+            emit("stopped", phase="phase1_fit_assessment", outcome=fit.outcome)
             raise PipelineStop(f"stopped at fit assessment (outcome: {fit.outcome})")
 
         # Phase 2 — initial draft (Claude)
+        emit("phase_start", phase="phase2_initial_draft", label="Initial draft")
         manifest = draft_sections(fit, jd, rubric, sections, budgets, ctx,
                                   model=rc.orchestrator_model)
+        emit("phase_complete", phase="phase2_initial_draft", sections=len(manifest))
 
-        # Phase 3 — dual-writer refinement loop
+        # Phase 3 — dual-writer refinement loop (emits per-section + per-iteration events)
+        emit("phase_start", phase="phase3_refinement", label="Refinement loop",
+             max_iterations=rc.max_iterations)
         result = refine(manifest, jd, rubric, budgets, ctx,
                         model=rc.orchestrator_model, gpt_model=rc.gpt_model,
                         max_iterations=rc.max_iterations,
                         keyword_delta_threshold=rc.keyword_delta_threshold,
                         critique_delta_threshold=rc.critique_delta_threshold,
-                        max_rubric_additions=rc.max_rubric_additions)
+                        max_rubric_additions=rc.max_rubric_additions,
+                        on_event=on_event)
         rubric = result.final_rubric
+        emit("phase_complete", phase="phase3_refinement",
+             converged=result.converged, convergence_reason=result.convergence_reason,
+             iterations=len(result.iterations))
 
         # Phase 4 — human review (HITL)
+        emit("phase_start", phase="phase4_hitl", label="Human review")
         hitl.review(ctx, result, jd, rubric, budgets, rc)
+        emit("phase_complete", phase="phase4_hitl")
 
         # Phase 5 — formatting validation (Haiku) + assembled length check
+        emit("phase_start", phase="phase5_validation", label="Formatting")
         corrections = phase5_validation.validate_formatting(ctx, result.manifest,
                                                             model=rc.validation_model)
         length = phase5_validation.assembled_length_check(result.manifest, budgets)
         if corrections and hitl.formatting(corrections, length):
             phase5_validation.apply_corrections(ctx, corrections, result.manifest)
+        emit("phase_complete", phase="phase5_validation", corrections=len(corrections))
 
         # Phase 6 — output generation
+        emit("phase_start", phase="phase6_output", label="Output generation")
         out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations, config=config)
+        emit("phase_complete", phase="phase6_output")
 
         footer = _finalise(ctx, tracker, rc, iterations_run=len(result.iterations))
         summary.update({
@@ -183,6 +214,11 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         })
         if rc.cost_cap_usd and footer["total_estimated_usd"] > rc.cost_cap_usd:
             summary["cost_cap_exceeded"] = True
+        emit("run_complete", run_id=ctx.run_id, outcome=fit.outcome,
+             converged=result.converged, convergence_reason=result.convergence_reason,
+             iterations=len(result.iterations),
+             cost_estimated_usd=footer["total_estimated_usd"],
+             cost_breakdown=footer["cost_breakdown_estimated_usd"])
     return summary
 
 
