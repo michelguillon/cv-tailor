@@ -401,6 +401,37 @@ what changed (if anything).*
 
 ---
 
+### F-22 — Step 6 (dual-writer): prompt caching wired correctly but a no-op at this prompt scale (measured)
+
+**What was measured (probe, Haiku, two identical back-to-back calls):**
+
+| prefix | input tok | cache_create (call 1) | cache_read (call 2) |
+|--------|-----------|-----------------------|----------------------|
+| real writer prefix (system + role/JD/rubric) | 534 | 0 | 0 |
+| 4202-token control | — | 4202 | 4202 |
+
+The control proves the wiring: a stable prefix over the minimum writes the cache on
+call 1 and reads it 100% on call 2. But our **real** prefix is only ~534 tokens —
+under *both* Anthropic minimums (Sonnet 1024, Haiku 2048) — so caching does **not
+engage** at current sizes, on either tier (not just Haiku, as earlier assumed).
+
+**Decision:** keep the wiring. It is correct, costless when below the minimum (no
+error, `cache_creation == 0`), engages automatically if prompts grow (longer JDs /
+system prompts / more rubric keywords), and OpenAI caches qualifying prefixes with
+no code. **Do not pad prompts to force a hit:** the only cacheable bulk is the
+~534-token prefix; the variable content (the two drafts, the source section) is what
+dominates token cost and can't be cached, so even an active cache would save
+sub-cent per iteration. The SPEC's earlier "~60% input cost reduction" framing is
+withdrawn — it was an assumption; this is the measurement.
+
+**Affects D-31.** Portfolio angle: the honest version of "add caching" is to wire it
+correctly *and measure it*, then report a no-op rather than claim a saving — the
+same measure-don't-assume discipline as R-08/F-14 (score anchors) and F-10 (scorer
+on real data). How Anthropic (explicit `cache_control`, advisory) and OpenAI
+(automatic, prefix-based) differ is itself the learning.
+
+---
+
 ### F-21 — Step 6 (dual-writer): loop validated live; thresholds hold; synthesis dominates selection
 
 **What was verified (Phase 0→3, Haiku writer+orchestrator + GPT-4o-mini writer,
@@ -1518,3 +1549,9 @@ fills.
 **Caveat:** rubric updates mid-loop invalidate the rubric cache block. Rubric
 placed after system prompt but before per-section variable content — a rubric
 update invalidates one cache level, not the system prompt cache.
+
+**Outcome (F-22):** implemented and measured. Wiring is correct (a 4202-token
+control caches and reads back 100%), but the real stable prefix is ~534 tokens —
+under both provider minimums — so it's a **no-op at this prompt scale**, on Sonnet
+as well as Haiku. Kept because it's costless and scales automatically; not worth
+padding prompts to force, since the cacheable bulk is small.

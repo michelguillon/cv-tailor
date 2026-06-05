@@ -18,7 +18,8 @@ __all__ = [
     "SEVERITY_DEFS",
     "word_target",
     "length_items",
-    "build_writer_user_prompt",
+    "jd_rubric_block",
+    "section_user_prompt",
 ]
 
 SEVERITIES = {"major", "minor"}
@@ -80,28 +81,32 @@ def length_items(section_id: str, text: str, budget, writer: str) -> list[Critiq
     return []
 
 
-def build_writer_user_prompt(
-    section_id, section_text, jd, rubric, budget, direction, rejected_suggestions, is_final
-) -> str:
-    """The variable (non-cacheable) half of a writer prompt: this section, the JD
-    requirements, current direction, and loop memory. System + score scaffolding
-    is the stable half (cached separately, D-31)."""
+def jd_rubric_block(jd, rubric) -> str:
+    """The STABLE half of a writer/orchestrator prompt (role + JD requirements +
+    rubric). Identical across every section within an iteration, so it's the cache
+    prefix (D-31): a writer call for section 8 reuses section 1's cached block. A
+    rubric extension changes this block (and only this block) — the system prompt
+    cache above it still hits."""
+    return (
+        f"ROLE: {jd.role_title} ({jd.seniority_level})\n"
+        f"JD KEY REQUIREMENTS:\n" + "\n".join(f"  - {r}" for r in jd.key_requirements) + "\n\n"
+        f"RUBRIC required keywords: {rubric.required_keywords}\n"
+        f"RUBRIC nice-to-have: {rubric.nice_to_have_keywords}"
+    )
+
+
+def section_user_prompt(section_id, section_text, budget, direction, rejected_suggestions, is_final) -> str:
+    """The VARIABLE half: this section's source, target length, direction, and loop
+    memory. Appended after the cached prefix, so it never pollutes the cache."""
     target = word_target(section_text, budget)
     parts = [
-        f"ROLE: {jd.role_title} ({jd.seniority_level})",
         f"SECTION TYPE: {section_id}",
         f"TARGET WORDS: ~{target} (stay close to the source length; do not pad)",
-        "",
-        "JD KEY REQUIREMENTS:",
-        *(f"  - {r}" for r in jd.key_requirements),
-        "",
-        f"RUBRIC required keywords: {rubric.required_keywords}",
-        f"RUBRIC nice-to-have: {rubric.nice_to_have_keywords}",
     ]
     if direction:
         parts += ["", f"ORCHESTRATOR'S DIRECTION FOR THIS SECTION: {direction}"]
     if rejected_suggestions:
-        parts += ["", "ALREADY CONSIDERED AND REJECTED — do not re-raise these:",
+        parts += ["", "ALREADY CONSIDERED — do not just re-raise these:",
                   *(f"  - {s}" for s in rejected_suggestions)]
     if is_final:
         parts += ["", "This is the FINAL pass — produce your definitive version."]

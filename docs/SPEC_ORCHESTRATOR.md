@@ -654,12 +654,16 @@ class LoopMemory:
 ```
 
 **Prompt caching (D-31):**
-Anthropic `cache_control` breakpoints on stable blocks (system prompt, JD
-requirements, rubric). Variable content (current drafts, direction, LoopMemory)
-appended after the cached prefix. Breakpoints set once prompts are stable —
-not during prompt tuning. Note: in demo/Haiku dev the stable block may fall
-under Haiku's cache minimum (~2048 tokens) — caching is effectively active
-only in full/Sonnet mode. Instrument and report rather than assume savings.
+Anthropic `cache_control` breakpoints on the stable prefix (system prompt, then
+role + JD requirements + rubric); variable content (drafts, direction, LoopMemory)
+in the user message after the prefix. OpenAI caches qualifying prefixes
+automatically (stable content placed first). **Measured, not assumed (F-22):** the
+real stable prefix is only ~534 tokens — under *both* provider minimums (Sonnet
+1024, Haiku 2048) — so caching is currently a **no-op** at this prompt scale. The
+wiring is proven correct (a 4202-token control gives a 100% cache read) and engages
+automatically if prompts grow; it is kept because it is costless below the minimum
+and scales without change. Don't pad prompts to force it: the cacheable bulk is
+small, so even when active the saving is sub-cent per iteration.
 
 **Termination table (thresholds confirmed on real data — F-16):**
 ```

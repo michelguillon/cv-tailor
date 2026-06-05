@@ -16,14 +16,15 @@ Structured output is forced via a tool call and validated; retry once, then rais
 
 from __future__ import annotations
 
-from tailor.helpers import claude_complete
+from tailor.helpers import cached, claude_complete
 from tailor.models import CritiqueItem, WriterDraft
 from tailor.tools.writer_common import (
     SEVERITIES,
     SEVERITY_DEFS,
     TRUTHFULNESS_RULES,
-    build_writer_user_prompt,
+    jd_rubric_block,
     length_items,
+    section_user_prompt,
 )
 
 __all__ = ["write_section", "pushback", "WriterError"]
@@ -101,12 +102,15 @@ def write_section(
 ) -> WriterDraft:
     """Draft one section as Claude. Returns a validated WriterDraft (pushback=None;
     pushback is a separate exchange). `version` mirrors the iteration number."""
-    user = build_writer_user_prompt(section_id, section_text, jd, rubric, budget,
-                                    direction, rejected_suggestions, is_final)
+    # Cached stable prefix (system + role/JD/rubric), variable section in the user
+    # message (D-31). Prefix is identical across all sections this iteration.
+    system = [cached(_SYSTEM), cached(jd_rubric_block(jd, rubric))]
+    user = section_user_prompt(section_id, section_text, budget,
+                               direction, rejected_suggestions, is_final)
     data = None
     for _ in range(2):
         resp = claude_complete(
-            model=model, system=_SYSTEM, messages=[{"role": "user", "content": user}],
+            model=model, system=system, messages=[{"role": "user", "content": user}],
             tools=[_DRAFT_TOOL], tool_choice={"type": "tool", "name": "submit_draft"},
             max_tokens=max(512, len(section_text.split()) * 8), client=client,
         )

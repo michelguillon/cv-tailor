@@ -21,9 +21,10 @@ JD-validates and caps them via tools/rubric.py.
 
 from __future__ import annotations
 
-from tailor.helpers import claude_complete
+from tailor.helpers import cached, claude_complete
 from tailor.models import OrchestratorDecision
 from tailor.tools.scorer import keyword_coverage
+from tailor.tools.writer_common import jd_rubric_block
 
 __all__ = ["adjudicate", "read_pushbacks", "SCORE_ANCHORS", "OrchestratorError"]
 
@@ -124,10 +125,9 @@ def adjudicate(
 ) -> tuple[OrchestratorDecision, str]:
     """Compare the two drafts. Returns (OrchestratorDecision, selected_text)."""
     final_note = "\nThis is the FINAL pass — make your definitive selection; no further iterations." if is_final else ""
+    # Cached stable prefix (system + role/JD/rubric); only the two drafts vary (D-31).
+    system = [cached(_SYSTEM), cached(jd_rubric_block(jd, rubric))]
     user = (
-        f"ROLE: {jd.role_title} ({jd.seniority_level})\n"
-        f"JD KEY REQUIREMENTS:\n" + "\n".join(f"  - {r}" for r in jd.key_requirements) + "\n\n"
-        f"RUBRIC required keywords: {rubric.required_keywords}\n\n"
         f"--- CLAUDE DRAFT ---\n{claude_draft.text}\n\n"
         f"--- GPT DRAFT ---\n{gpt_draft.text}\n\n"
         f"Adjudicate this section.{final_note}"
@@ -135,7 +135,7 @@ def adjudicate(
     data, problems = None, []
     for _ in range(2):
         resp = claude_complete(
-            model=model, system=_SYSTEM, messages=[{"role": "user", "content": user}],
+            model=model, system=system, messages=[{"role": "user", "content": user}],
             tools=[_DECISION_TOOL], tool_choice={"type": "tool", "name": "submit_decision"},
             max_tokens=1500, client=client,
         )

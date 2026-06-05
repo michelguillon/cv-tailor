@@ -35,6 +35,7 @@ __all__ = [
     "embed_query",
     "claude_complete",
     "gpt_complete",
+    "cached",
     "RETRYABLE_STATUS",
 ]
 
@@ -185,11 +186,24 @@ def embed_query(text: str, *, model: str, client: Mistral | None = None) -> list
 # Claude (Anthropic — orchestrator/reasoner; Haiku in dev/demo, Sonnet in full) #
 # --------------------------------------------------------------------------- #
 
+def cached(text: str) -> dict:
+    """An Anthropic system/content text block marked for ephemeral prompt caching (D-31).
+
+    Pass a list of these as `system=` to set cache breakpoints on a stable prefix
+    (e.g. `[cached(SYSTEM), cached(jd_rubric_block)]` → two breakpoints). Anthropic
+    caches the cumulative prefix up to each marked block; blocks below the model's
+    minimum (1024 tokens for Sonnet, 2048 for Haiku) are simply not cached — no
+    error, just `cache_creation_input_tokens == 0` (F-22). OpenAI needs no equivalent:
+    it caches qualifying prefixes automatically.
+    """
+    return {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+
+
 def claude_complete(
     *,
     model: str,
     messages: list[dict],
-    system: str | None = None,
+    system: str | list[dict] | None = None,
     max_tokens: int = 2048,
     temperature: float = 0.0,
     tools: list[dict] | None = None,
