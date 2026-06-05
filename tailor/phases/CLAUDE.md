@@ -16,9 +16,17 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   the schema, **retry once, then surface** — never let partial output flow
   downstream (R-09). On a hard failure, prefer leaving state unchanged over
   corrupting it (see `tools/rubric.py`).
-- **The drafter/reviser must never fabricate.** Phases 2 and 3 change emphasis,
-  ordering, and wording only — never invent employers, titles, dates, or metrics.
-  This rule is stated in the prompt *and* relied on in review.
+- **The drafter/reviser must never fabricate (F-34).** Phases 2 and 3 change
+  emphasis, ordering, and wording only — never invent employers, titles, dates, or
+  metrics, **never inject a role headline/tagline, never relabel a role's nature or
+  claim a sector/domain not in the source, and never insert a JD/rubric keyword the
+  source doesn't already evidence** (an unsupported keyword is fabrication, not
+  coverage — the keyword list is a relevance guide, NOT a checklist). The rules live
+  in `tools/writer_common.TRUTHFULNESS_RULES` (shared by both writers) and are
+  *enforced* by the orchestrator, which sees the source and gates fabrication —
+  fabrication caps a draft's score and blocks convergence (F-34). Why this matters:
+  `keyword_coverage` is a scored target, so without these guards a fluent model games
+  it by fabricating (Goodhart).
 - **HITL is preview-before-apply** (Phases 1, 4, 5): show what changes, then ask.
 
 ## phase3_refinement.py — the dual-writer agentic loop (D-28, D-01, D-05, D-12)

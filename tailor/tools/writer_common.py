@@ -29,11 +29,21 @@ SEVERITIES = {"major", "minor"}
 _UNDER_BUDGET_FRACTION = 0.7
 
 TRUTHFULNESS_RULES = """\
-HARD RULES (a CV tool that fabricates is worse than useless):
-- Do NOT invent or alter employers, job titles, dates, companies, metrics, or \
-facts. Change emphasis, ordering, and wording only.
-- Keep every claim traceable to the SOURCE section. If a keyword or requirement \
-isn't supported, leave it out — never fabricate experience to match the JD.
+HARD RULES — a CV that fabricates is worse than useless. Tailoring means SELECTING and \
+RE-EMPHASISING the candidate's real content for this role; it is NEVER inventing or \
+re-labelling it. Every claim must be traceable to the SOURCE section below.
+- Do NOT invent or alter employers, job titles, dates, companies, metrics, or facts.
+- Do NOT assert a job identity, role, or seniority the source doesn't state, and do NOT \
+add a headline, title, or positioning tagline to a section (e.g. never open a section with \
+"Solutions Engineering and Pre-Sales Leader — …"). Describe what was actually done; the \
+real role title is handled separately and must not be restated or reframed in the body.
+- Do NOT claim an industry, sector, or domain the source doesn't state — e.g. do not \
+recast adtech, identity, ad-platform, or semiconductor work as "fintech", "payments", or \
+"financial services". The candidate's actual domains are the only ones you may name.
+- Use a JD or rubric keyword ONLY where the source already demonstrates that exact thing, \
+in your own grounded words. Inserting an unsupported term — or bolting a JD phrase onto a \
+real achievement ("…through executive communication with C-level stakeholders") when the \
+source doesn't show it — is FABRICATION, not coverage. When in doubt, leave it out.
 - Preserve the source's structure: if it uses bullet points, return bullet points."""
 
 SEVERITY_DEFS = """\
@@ -88,10 +98,14 @@ def jd_rubric_block(jd, rubric) -> str:
     rubric extension changes this block (and only this block) — the system prompt
     cache above it still hits."""
     return (
-        f"ROLE: {jd.role_title} ({jd.seniority_level})\n"
-        f"JD KEY REQUIREMENTS:\n" + "\n".join(f"  - {r}" for r in jd.key_requirements) + "\n\n"
-        f"RUBRIC required keywords: {rubric.required_keywords}\n"
-        f"RUBRIC nice-to-have: {rubric.nice_to_have_keywords}"
+        f"ROLE BEING TARGETED: {jd.role_title} ({jd.seniority_level})\n"
+        f"WHAT THIS JD VALUES (priorities to surface ONLY where the source genuinely "
+        f"supports them):\n" + "\n".join(f"  - {r}" for r in jd.key_requirements) + "\n\n"
+        f"JD-RELEVANT TERMS — these are a relevance guide, NOT a checklist to insert. Use a "
+        f"term only where the source already evidences it, in your own words; an unsupported "
+        f"term is fabrication, not coverage:\n"
+        f"  priority: {rubric.required_keywords}\n"
+        f"  nice-to-have: {rubric.nice_to_have_keywords}"
     )
 
 

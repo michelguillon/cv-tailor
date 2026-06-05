@@ -401,6 +401,48 @@ what changed (if anything).*
 
 ---
 
+### F-34 — The keyword-coverage incentive drove fabrication; fixed with stronger writer rules, a reframed keyword block, and a source-grounded orchestrator gate
+
+**The failure (real Airwallex run, demo):** the tailored CV invented a "Solutions
+Engineering and Pre-Sales Leader" headline on the profile and *every* experience block,
+recast "Senior Product Manager" as a solutions-engineering role, and claimed **fintech /
+payments / financial-services** sector experience the candidate doesn't have (their domains
+are adtech / identity / semiconductor). Root cause: the rubric's `required_keywords` are the
+JD's phrases verbatim, and `keyword_coverage` against them is a **scored optimization target**
+(drives drafting + convergence). A fluent model maximises a counted metric by *fabricating* —
+classic Goodhart. The `TRUTHFULNESS_RULES` were a soft instruction losing to a hard metric,
+and three specific gaps let it through:
+1. the keyword list read as a **checklist to insert** ("RUBRIC required keywords: …");
+2. the writer rules didn't forbid the actual moves seen — injecting a role headline/tagline,
+   relabelling a role's nature, or claiming a *sector* not in the source;
+3. **the orchestrator adjudicated "truthfulness" blind** — `adjudicate()` got only the two
+   drafts, never the SOURCE, so it couldn't tell a fabricated claim from a real one and a
+   fluent fabrication scored well and converged.
+
+**The fix (A+B+C, prompt + one plumbing change; no metric overhaul):**
+- **A.** `TRUTHFULNESS_RULES` (writer_common, shared by both writers in **Phase 2 and 3**)
+  now explicitly bans headlines/taglines, role-identity/seniority assertions, sector/domain
+  relabelling, and inserting any JD keyword the source doesn't already evidence ("unsupported
+  keyword = fabrication, not coverage").
+- **B.** `jd_rubric_block` reframed from "required keywords" → "a relevance guide, NOT a
+  checklist; use a term only where the source evidences it."
+- **C.** `adjudicate()` now receives `source_text` (the section the writers drafted from) and
+  is told to judge truthfulness FIRST: fabrication caps a draft at 4/10, blocks `converged`,
+  and the direction must cut the unsupported content. The source rides in the user message,
+  not the cache prefix (it varies per section, D-31).
+
+**Verified:** a fresh demo run on the same JD — headline injection gone, titles truthful
+(Solution Consulting, not Solutions Engineering), no fintech/payments claims, Skills grounded,
+bullets restored. **Affects D-04/D-05/D-25; the core anti-fabrication invariant.**
+
+**Caveats / deferred:** C grounds against the *iteration's input* (the Phase-2 draft on
+iter 1), not the raw corpus section — A+B prevent origination upstream, so the pair holds, but
+a future hardening could persist the original corpus text as the ground truth. The deeper
+Goodhart fix (stop `keyword_coverage` itself from rewarding unsupported keywords) was
+explicitly deferred — revisit if fabrication resurfaces.
+
+---
+
 ### F-33 — Stretch: `--docx` by harvesting the source CV's formatting conventions, rendered from the assembled markdown
 
 **What was built:** `tailor/phases/phase6_docx.py` + a `--docx` flag. It writes
@@ -1432,7 +1474,7 @@ Haiku here is only the formatting/validation gate (Sonnet is the writer+orchestr
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
 
-- **227 tests, all deterministic / mocked (no API).** Every provider is faked;
+- **228 tests, all deterministic / mocked (no API).** Every provider is faked;
   LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
   F-16, F-21, F-25, F-26), not in the pytest suite.
 - **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.

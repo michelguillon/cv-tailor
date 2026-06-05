@@ -173,11 +173,12 @@ def refine(
             _write_writer_draft(ctx, cd)
             _write_writer_draft(ctx, gd)
 
-            # 2. adjudicate → write selected text as v(n)
+            # 2. adjudicate → write selected text as v(n). Pass the source the writers
+            #    drafted from so the orchestrator can gate fabrication (Fix C / F-34).
             prior = section_scores.get(sid)
             decision, selected_text = orchestrator_tool.adjudicate(
-                sid, cd, gd, rubric, jd, prior_score=prior, is_final=is_final,
-                model=model, client=claude_client)
+                sid, cd, gd, rubric, jd, source_text=current, prior_score=prior,
+                is_final=is_final, model=model, client=claude_client)
             ctx.write_section(sid, selected_text, version=n)
             manifest[sid]["version"] = n
             manifest[sid]["word_count"] = len(selected_text.split())

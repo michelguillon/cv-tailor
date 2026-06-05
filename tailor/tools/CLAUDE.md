@@ -31,7 +31,11 @@ target (D-27/F-13), and the deterministic length-budget items (D-14) — applied
   interface; OpenAI strict `json_schema` enforces the severity enum server-side.
 - **`orchestrator_tool.py`** — Claude as the editor with two manuscripts. Scores
   both (0–10, explicit anchors so it can't over-score — R-08/F-14), selects or
-  **synthesises**, sets `direction`, judges `converged`. `adjudicate()` returns
+  **synthesises**, sets `direction`, judges `converged`. It is given the **SOURCE
+  section** (`source_text`, the text the writers tailored from) and judges
+  truthfulness FIRST — fabrication (invented title/sector/identity, or an unsupported
+  JD keyword) caps a draft at 4/10 and blocks `converged` (F-34). The source rides in
+  the user message, not the cache prefix (it varies per section, D-31). `adjudicate()` returns
   `(OrchestratorDecision, selected_text)` — the decision is a summary (no draft
   text; drafts live on disk, D-07 #3), `selected_text` is what the loop
   checkpoints. Pure claude/gpt picks use the chosen draft verbatim (no rewrite

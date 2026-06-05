@@ -74,6 +74,25 @@ def test_synthesis_without_final_text_is_invalid():
                    model="m", client=fake_claude(bad, bad))
 
 
+def test_source_text_is_passed_to_the_orchestrator_for_grounding():
+    """Fix C / F-34: the orchestrator must see the SOURCE the writers drafted from, so it
+    can check each draft against it and gate fabrication."""
+    captured = {}
+
+    def create(**kwargs):
+        captured["user"] = kwargs["messages"][0]["content"]
+        block = types.SimpleNamespace(type="tool_use", name="submit_decision",
+                                      input=decision(base="claude"))
+        return types.SimpleNamespace(content=[block],
+                                     usage=types.SimpleNamespace(input_tokens=1, output_tokens=1))
+
+    client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    adjudicate("profile", draft("claude", "a"), draft("gpt", "b"), rubric(), jd(),
+               source_text="ADTECH IDENTITY WORK — NO FINTECH", model="m", client=client)
+    assert "ADTECH IDENTITY WORK — NO FINTECH" in captured["user"]
+    assert "ground truth" in captured["user"].lower()
+
+
 def test_read_pushbacks_no_objection_returns_direction_without_calling():
     dec = types.SimpleNamespace(direction="keep going")
 

@@ -45,19 +45,32 @@ Score each draft 0–10, calibrated — do NOT over-score:
 
 _SYSTEM = f"""\
 You are the orchestrator adjudicating two independent drafts of ONE CV section for \
-a specific role: one by the Claude writer, one by the GPT writer. Compare them on \
-fit to the JD, truthfulness, concreteness, and structure.
+a specific role: one by the Claude writer, one by the GPT writer. You are given the \
+SOURCE section both writers tailored from. Judge TRUTHFULNESS first, then fit to the \
+JD, concreteness, and structure.
+
+GROUNDING (this overrides everything else): every claim in a draft must be supported by \
+the SOURCE. Treat as FABRICATION — and a major problem — any of: an invented or altered \
+title, metric, or date; an asserted job identity, seniority, headline, or tagline the \
+source doesn't state (e.g. opening with "Solutions Engineering and Pre-Sales Leader — "); \
+a claimed industry/sector/domain not in the source (e.g. calling non-fintech work \
+"fintech"/"payments"/"financial services"); or a JD/rubric keyword inserted where the \
+source gives no evidence. A draft that fabricates scores at most 4/10 however well it \
+fits the JD, must NOT be marked converged, and its direction must be to CUT the \
+unsupported content.
 
 {SCORE_ANCHORS}
 
 Then decide:
-- selected_base: "claude" or "gpt" if one is clearly stronger; "synthesis" if the \
-best version combines parts of each — and if so, WRITE the merged section in \
-final_text (truthful merge only; invent nothing).
-- direction: one or two sentences telling BOTH writers what to focus on next \
-iteration (the single most valuable improvement). If the section is done, say so.
-- converged: true only when BOTH drafts are strong AND no major issue remains — \
-this is what freezes the section, so hold the bar.
+- selected_base: "claude" or "gpt" if one is clearly stronger — prefer the more faithful \
+draft; "synthesis" if the best version combines parts of each — and if so, WRITE the \
+merged section in final_text using ONLY source-supported content (invent nothing).
+- direction: one or two sentences telling BOTH writers the single most valuable \
+improvement for next iteration; if a draft fabricated, the direction is to remove the \
+unsupported claim(s). If the section is done, say so.
+- converged: true ONLY when both drafts are strong, fully grounded in the source (no \
+unsupported claim, identity, sector, or keyword), AND no major issue remains — this \
+freezes the section, so hold the bar.
 - rubric_additions: up to two atomic requirements the JD clearly implies but that \
 aren't in the keyword list (or [] — these are validated against the JD afterward).
 Call submit_decision exactly once."""
@@ -121,13 +134,19 @@ def _validate(data: dict) -> list[str]:
 
 def adjudicate(
     section_id, claude_draft, gpt_draft, rubric, jd, *,
-    prior_score=None, is_final=False, model, client=None,
+    source_text="", prior_score=None, is_final=False, model, client=None,
 ) -> tuple[OrchestratorDecision, str]:
-    """Compare the two drafts. Returns (OrchestratorDecision, selected_text)."""
+    """Compare the two drafts. Returns (OrchestratorDecision, selected_text).
+
+    `source_text` is the section both writers tailored from — the ground truth the
+    orchestrator checks each draft against to catch fabrication (Fix C). It must NOT
+    join the cache prefix (it varies per section), so it lives in the user message."""
     final_note = "\nThis is the FINAL pass — make your definitive selection; no further iterations." if is_final else ""
-    # Cached stable prefix (system + role/JD/rubric); only the two drafts vary (D-31).
+    # Cached stable prefix (system + role/JD/rubric); the source + two drafts vary (D-31).
     system = [cached(_SYSTEM), cached(jd_rubric_block(jd, rubric))]
     user = (
+        f"SOURCE SECTION (ground truth — every claim in a draft must trace to here):\n"
+        f"{source_text or '(source unavailable — judge truthfulness conservatively)'}\n\n"
         f"--- CLAUDE DRAFT ---\n{claude_draft.text}\n\n"
         f"--- GPT DRAFT ---\n{gpt_draft.text}\n\n"
         f"Adjudicate this section.{final_note}"
