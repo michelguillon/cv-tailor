@@ -752,6 +752,12 @@ section-mixing — sources differ per section; section_type is the primary key a
 `position` only a within-type tiebreak, mainly the experience block. F-23.)
 Assembles into a single document before rendering.
 
+Experience **role/date lines** are re-attached here, not drafted (F-29): the
+company heading is the section `title`, and the role line(s) live in the manifest's
+`role_line` (split off at Phase 2 so the drafter can't drop them). They render bold
+between the heading and the bulleted body — this is what keeps two role-groups at
+one employer (D-21) distinct and preserves job titles + dates verbatim.
+
 HTML structure:
 ```
 [CV tab]        Clean assembled CV — printable view

@@ -13,12 +13,18 @@ of the original spec doesn't apply under section-mixing (sources differ per
 section), so we order by section_type first and use the source `position` only as
 a within-type tiebreak (mainly the experience block); cross-CV positions are
 imperfect but deterministic (F-23).
+
+Experience role/date lines (F-29): the company heading is the section `title`
+(F-23); the role line lives in `manifest[sid]["role_line"]`, split out at Phase 2
+so the drafter can't drop it, and re-attached here (bold) between the heading and
+the body. This is what keeps two role-groups at one employer (D-21) distinct.
 """
 
 from __future__ import annotations
 
 import difflib
 import html
+import re
 from pathlib import Path
 
 import jinja2
@@ -26,6 +32,14 @@ import jinja2
 from tailor.audit import read_entries
 
 __all__ = ["assemble_markdown", "generate_output"]
+
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _inline(text: str) -> str:
+    """Escape, then render markdown **bold** as <strong> — used for the experience
+    role/date lines re-attached at assembly (F-29) and any bold in section text."""
+    return _BOLD.sub(r"<strong>\1</strong>", html.escape(text))
 
 TEMPLATE_DIR = Path("templates")
 TEMPLATE_NAME = "output.html"
@@ -55,8 +69,17 @@ def assemble_markdown(ctx, manifest: dict, config: dict) -> str:
         body = _latest_text(ctx, manifest, sid).strip()
         if m["section_type"] == "header":
             blocks.append(body)               # name + contact: no heading
+            continue
+        heading = f"## {m.get('title') or sid}"
+        # Re-attach the experience role/date line(s) the drafter never saw (F-29) —
+        # bold, one per line, between the company heading and the bulleted body.
+        # This is what makes two role-groups at one employer distinct (D-21/F-23).
+        role_line = m.get("role_line")
+        if role_line:
+            role_md = "\n".join(f"**{ln.strip()}**" for ln in role_line.splitlines() if ln.strip())
+            blocks.append(f"{heading}\n\n{role_md}\n\n{body}")
         else:
-            blocks.append(f"## {m.get('title') or sid}\n\n{body}")
+            blocks.append(f"{heading}\n\n{body}")
     return "\n\n".join(blocks) + "\n"
 
 
@@ -72,18 +95,18 @@ def _md_to_html(md: str) -> str:
         if line.startswith("## "):
             if in_ul:
                 out.append("</ul>"); in_ul = False
-            out.append(f"<h2>{html.escape(line[3:])}</h2>")
+            out.append(f"<h2>{_inline(line[3:])}</h2>")
         elif line.lstrip().startswith(("- ", "* ")):
             if not in_ul:
                 out.append("<ul>"); in_ul = True
-            out.append(f"<li>{html.escape(line.lstrip()[2:])}</li>")
+            out.append(f"<li>{_inline(line.lstrip()[2:])}</li>")
         elif not line:
             if in_ul:
                 out.append("</ul>"); in_ul = False
         else:
             if in_ul:
                 out.append("</ul>"); in_ul = False
-            out.append(f"<p>{html.escape(line)}</p>")
+            out.append(f"<p>{_inline(line)}</p>")
     if in_ul:
         out.append("</ul>")
     return "\n".join(out)

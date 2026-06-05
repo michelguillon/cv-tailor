@@ -148,6 +148,32 @@ def test_experience_label_disambiguates_role_at_same_company(tmp_path):
     assert d["label"] != c["label"]
 
 
+def test_experience_role_line_split_out_and_stored(tmp_path):
+    """The leading role/date line of an experience section is kept OUT of the
+    drafted body (the LLM never sees it, so it can't drop it — F-29) and stored
+    verbatim in the manifest for deterministic re-attachment at assembly."""
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    doc = "Senior Product Manager (Apr 2022 – Mar 2024)\n- Built X\n- Shipped Y"
+    s = sec("AI", "experience_ms", "experience", doc)
+    s["company"] = "Microsoft"; s["title"] = "Senior Product Manager"
+    bud = {"experience": SectionBudget("experience", 23, 187, 108)}
+    manifest = draft_sections(fit({"experience_ms": rec("experience_ms", "AI")}), jd(), rubric(),
+                              [s], bud, ctx, model="m",
+                              client=fake_claude("- Built X for EMEA\n- Shipped Y"))
+    assert manifest["experience_ms"]["role_line"] == "Senior Product Manager (Apr 2022 – Mar 2024)"
+    body = ctx.read_section("experience_ms", version=0)
+    assert "Senior Product Manager" not in body          # role line is not in the draftable body
+
+
+def test_nonexperience_section_has_no_role_line_key(tmp_path):
+    """Only experience sections carry role_line (keeps the manifest contract tight)."""
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = draft_sections(fit({"profile": rec("profile", "AI")}), jd(), rubric(),
+                              [sec("AI", "profile", "profile", "Original profile")], budgets(), ctx,
+                              model="m", client=fake_claude())
+    assert "role_line" not in manifest["profile"]
+
+
 def test_manifest_checkpoint_written(tmp_path):
     ctx = RunContext.create(run_id="r", base_dir=tmp_path)
     sections = [sec("AI", "profile", "profile", "p")]

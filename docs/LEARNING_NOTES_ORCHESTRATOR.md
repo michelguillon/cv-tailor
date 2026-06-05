@@ -401,6 +401,40 @@ what changed (if anything).*
 
 ---
 
+### F-29 — Experience role/date line is structural — split it out at draft time, re-attach at assembly (the drafter drops it)
+
+**What was found (reviewing the F-28 Sonnet CV):** Microsoft’s experience block had
+**no job title**, and the two AppNexus/Xandr role-groups (D-21) rendered as two
+identical `## Appnexus / Xandr` blocks — the second looked missing. Root cause: an
+experience section’s source leads with a plain-text role/date line (`Senior Product
+Manager (Apr 2022 – Mar 2024)`), and the Phase 2 drafter is told "Output ONLY the
+section text … no heading". The LLM treats that first line as a heading and **drops
+it inconsistently** — Microsoft lost it, Utiq kept it. Because the CV heading is the
+company alone (F-23, "the role is already in the body’s bold line"), a dropped role
+line leaves the section titleless and makes co-employer role-groups collapse.
+
+**Fix (deterministic, no fabrication risk):** the role line is a *fact*, not
+something to refine — so it never enters the draftable text. `phase2._split_role_line`
+peels the leading non-bullet line(s) off an experience section before drafting; the
+LLM rewrites only the bulleted body; the verbatim role line is stored in
+`manifest[sid]["role_line"]` and re-attached (bold) between the heading and body at
+assembly (`phase6.assemble_markdown`). The writers (Phase 3) only ever see the body,
+so they can’t drop it either. Promotion stacks (D-21: several role lines before the
+shared bullets, e.g. Director + Associate Director) are captured as multi-line
+role_line and each rendered bold. Also taught `_md_to_html` to render `**bold**` as
+`<strong>` so the role lines show in the HTML CV tab (was literal `**`).
+
+**Why this is the right shape:** it’s the same principle as static sections (D-13)
+and header rendering — *deterministic where the content is a fact, LLM only for
+judgment/wording* (D-01). The role line carries the job title and dates; those must
+survive verbatim, and "ask the model nicely to keep it" is not a guarantee. Now it
+is one. **Verified live (demo, all 5 experience sections):** every role-group shows
+its title+dates; the two AppNexus/Xandr groups are distinct; the Director group
+shows both stacked roles. **Affects F-23, D-21, the Phase 2 manifest contract, and
+SPEC §5 Phase 6.** Tests: +4 (`test_phase2`, `test_phase6`); suite 187 → 191.
+
+---
+
 ### F-28 — Sonnet validation (D-26): dual-signal convergence FIRED; freezing did nothing; synthesis is responsive, not a reflex; cost far under estimate
 
 **What was run (the deferred D-26 final validation):** full mode — **Claude Sonnet**
@@ -1249,7 +1283,7 @@ Haiku here is only the formatting/validation gate (Sonnet is the writer+orchestr
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
 
-- **187 tests, all deterministic / mocked (no API).** Every provider is faked;
+- **191 tests, all deterministic / mocked (no API).** Every provider is faked;
   LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
   F-16, F-21, F-25, F-26), not in the pytest suite.
 - **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.

@@ -42,6 +42,26 @@ short section to fill space; a terse role stays terse.
 - Output ONLY the section text (markdown), no heading, no preamble, no commentary."""
 
 
+def _split_role_line(document: str) -> tuple[str, str]:
+    """Split an experience section into its leading role/date line(s) and the
+    bulleted body. The role line (e.g. "Senior Product Manager (Apr 2022 – Mar
+    2024)") is a structural FACT: the drafter, told "no heading", drops or rewrites
+    it inconsistently (F-29) — Microsoft lost it while Utiq kept it. So we keep it
+    out of the draftable text entirely and re-attach it verbatim at assembly
+    (Phase 6). Promotion stacks (D-21) have several leading role lines before the
+    first bullet — all are captured. Returns (role_line, body); ('', document) when
+    there is no leading non-bullet line followed by bullets."""
+    lines = document.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].lstrip().startswith(("- ", "* ")):
+        i += 1
+    if i == 0 or i == len(lines):       # starts with a bullet, or has no bullets at all
+        return "", document.strip()
+    role_line = "\n".join(ln.rstrip() for ln in lines[:i] if ln.strip())
+    body = "\n".join(lines[i:]).strip()
+    return role_line, body
+
+
 def _source_lookup(sections: list[dict]) -> dict[tuple[str, str], dict]:
     """Map (short_cv, section_id) → section dict, matching SectionRecommendation."""
     out = {}
@@ -80,10 +100,12 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
     """Draft every recommended section to disk. Returns a manifest dict.
 
     manifest[section_id] = {static, version, word_count, source_cv, path,
-                            section_type, position, title, label}
+                            section_type, position, title, label[, role_line]}
     The manifest is the input contract for Phase 3 (section_type → no corpus
     re-read) and Phase 6 (position + title/label → checkpoint-driven assembly).
     `title` is the CV heading; `label` disambiguates status/table displays.
+    `role_line` (experience only) is the section's verbatim role/date line, held
+    out of the drafted body and re-attached at assembly so it can't be dropped (F-29).
     """
     if fit.recommended_sections is None:
         raise DraftError("no recommended_sections (no_fit outcome) — nothing to draft")
@@ -120,26 +142,36 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
             }
             continue
 
+        # Experience sections lead with a role/date line; keep it out of the
+        # draftable text so the LLM can't drop it (F-29) and re-attach it at
+        # assembly (Phase 6). Other section types have no role line.
+        role_line, source_doc = ("", src["document"])
+        if section_type == "experience":
+            role_line, source_doc = _split_role_line(src["document"])
+
         # Anchor the target to the SOURCE length, clamped to the budget (F-13).
         # The type-median target over-inflates short role sections (a 23-word
         # early role would be padded toward 108 — fabrication risk). Tailoring
         # reweights wording; it shouldn't massively change length.
-        source_wc = len(src["document"].split())
+        source_wc = len(source_doc.split())
         budget = budgets.get(section_type)
         if budget:
             target = min(max(source_wc, budget.min_words), budget.max_words)
         else:
             target = source_wc or 120
-        text = _draft_one(jd, rubric, section_type, target, src["document"], model=model, client=client)
+        text = _draft_one(jd, rubric, section_type, target, source_doc, model=model, client=client)
         path = ctx.write_section(section_id, text, version=0)
         wc = len(text.split())
         audit.log_event("phase2_draft", "section_drafted",
                         f"{section_id} drafted from {rec.source_cv} (~{target}w target, {wc}w actual)")
-        manifest[section_id] = {
+        entry = {
             "static": False, "version": 0, "word_count": wc,
             "source_cv": rec.source_cv, "path": str(path), "section_type": section_type,
             "position": position, "title": title, "label": label,
         }
+        if section_type == "experience":
+            entry["role_line"] = role_line   # structural; re-attached at assembly (F-29)
+        manifest[section_id] = entry
 
     ctx.write_checkpoint("phase2_draft_manifest", manifest)
     return manifest

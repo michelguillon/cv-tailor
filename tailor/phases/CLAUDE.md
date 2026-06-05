@@ -65,3 +65,9 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   manifest carries `position` + `title` from Phase 2 (F-23). Highest version per
   section (or static). Jinja `templates/output.html`, 4 tabs (CV/Changes/Scores/
   Reasoning); word-level diffs via `difflib`. `cv_final.md` is the clean artefact.
+- **Experience role lines are structural, not drafted (F-29):** Phase 2
+  (`_split_role_line`) peels the leading role/date line(s) off an experience section
+  so the LLM never sees them (told "no heading", it drops them inconsistently);
+  they're stored in `manifest[sid]["role_line"]` and re-attached bold at assembly,
+  between the company heading and the body. Promotion stacks (D-21) → multi-line
+  `role_line`. Never put the role line back into the draftable body.

@@ -76,6 +76,25 @@ def test_generate_output_writes_md_and_html(tmp_path):
     assert "section_adjudicated" in html
 
 
+def test_experience_role_line_reattached(tmp_path):
+    """The experience role/date line (manifest role_line) is rendered bold between
+    the company heading and the body — guarantees the title survives and two
+    role-groups at one employer stay distinct (F-29, D-21)."""
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    ctx.write_section("experience_ms", "- Built X\n- Shipped Y", version=0)
+    m = {**man(False, 0, "experience", 3, "Microsoft", 4),
+         "role_line": "Senior Product Manager (Apr 2022 – Mar 2024)"}
+    md = assemble_markdown(ctx, {"experience_ms": m}, CONFIG)
+    assert "## Microsoft" in md
+    assert "**Senior Product Manager (Apr 2022 – Mar 2024)**" in md
+    assert md.index("**Senior Product Manager") < md.index("- Built X")   # role line before body
+
+
+def test_md_to_html_renders_bold():
+    from tailor.phases.phase6_output import _md_to_html
+    assert "<strong>Senior PM (2022)</strong>" in _md_to_html("**Senior PM (2022)**")
+
+
 def test_static_section_marked_verbatim_in_changes(tmp_path):
     ctx = RunContext.create(run_id="r", base_dir=tmp_path)
     manifest = setup(ctx)
