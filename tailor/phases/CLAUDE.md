@@ -90,6 +90,11 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   `value_alignment_notes` (CVCM "why I fit", D-33) + transferable strengths + gaps — so
   it's visible after **any** run incl. `--yes`/auto (which never pauses at the Phase-1
   checkpoint); pass `value_alignment_notes`/`skills_transferable`/`gaps` from `fit`.
+  The **Reasoning tab** must skip non-reasoning log records (the `run_complete` cost
+  footer has no `phase`/`event`) or it renders an empty "?" group (F-40). `run.py` writes
+  a **`final_manifest.json`** checkpoint before Phase 6 (versions updated through the loop
+  + applied corrections) so the run dir is self-describing and a report can be regenerated
+  faithfully from disk — the Phase-2 manifest is the pre-refinement state (versions 0).
 - **Phase 6 `--docx` (stretch, F-33):** `phase6_docx.py` renders the SAME assembled
   markdown as `cv_final.md` into a styled `.docx`, applying formatting *conventions*
   harvested from a source CV in `data/cvs/` (body font/size, name/heading size, heading

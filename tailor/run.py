@@ -218,6 +218,11 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
             if source_docx is None:
                 ctx.audit.log_event("phase6_output", "docx_skipped",
                                     "no source .docx in data/cvs/; --docx skipped")
+        # Persist the FINAL manifest (versions updated through refinement + any applied
+        # formatting corrections). The Phase-2 manifest checkpoint is the pre-refinement
+        # state (versions all 0); without this the run dir isn't self-describing and a report
+        # can't be regenerated faithfully from disk (F-40).
+        ctx.write_checkpoint("final_manifest", result.manifest)
         out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations,
                               config=config, source_docx=source_docx, verification_flags=flags)
         emit("phase_complete", phase="phase6_output")

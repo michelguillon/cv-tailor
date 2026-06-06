@@ -21,7 +21,7 @@ import json
 from collections import defaultdict
 
 from corpus.retrieval import all_sections
-from tailor.helpers import claude_complete
+from tailor.helpers import claude_complete, strip_tool_artifacts
 from tailor.models import FitAssessment, FitGap, SectionRecommendation
 from tailor.tools.scorer import coverage_report, keyword_coverage, normalise, union_coverage
 
@@ -288,8 +288,10 @@ def assess_fit(jd, rubric, *, model: str, config: dict, client=None,
         skills_transferable=[str(s) for s in data["skills_transferable"]],
         gaps=gaps,
         recommended_sections=(None if outcome == "no_fit" else recommended),
-        no_fit_reason=data.get("no_fit_reason"),
-        value_alignment_notes=(str(data["value_alignment_notes"]).strip()
+        # strip_tool_artifacts: small models sometimes leak tool-call/XML syntax into a
+        # free-text field (F-40), and these are shown to the user (fit panel + report Fit tab).
+        no_fit_reason=strip_tool_artifacts(data.get("no_fit_reason")),
+        value_alignment_notes=(strip_tool_artifacts(str(data["value_alignment_notes"]))
                                if cvcm and data.get("value_alignment_notes") else None),
     )
     return fit, usage

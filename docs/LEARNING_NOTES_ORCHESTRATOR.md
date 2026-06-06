@@ -412,6 +412,48 @@ what changed (if anything).*
 
 ---
 
+### F-40 — Report-trust bugs found by reading a real report: a tool-XML leak in the fit text, an empty reasoning group, and a non-self-describing run dir (two "bugs" were a stale-regen artifact)
+
+**Found by the user reading the F-39 Fit-tab report on a real run.** Four issues reported; triage
+split them cleanly into two real product bugs, one model-hygiene bug, and two artifacts of the
+no-spend regeneration helper — and that split is the lesson: *validate the diagnosis before fixing,
+or you fix the wrong layer.*
+
+**Bug 1 — tool-call XML leaked into a user-facing field (real).** `value_alignment_notes` ended
+`…full effectiveness.</alignment_notes>\n</invoke>` — Haiku leaked its own tool-call/pseudo-XML
+syntax into a *string value*, and phase1's `.strip()` only trims whitespace. Fix: a
+`strip_tool_artifacts` helper (`helpers.py`) that strips any run of trailing XML-like tags,
+applied at the **source** (phase1, to `value_alignment_notes` + `no_fit_reason`) so every consumer
+(API payload → live fit panel → report Fit tab) gets clean text from one place. Trailing-only by
+design (`<2 years`, `C# < C++` aren't valid tag-starts, so they survive). This is general model-output
+hygiene — small models occasionally do this to any free-text tool field.
+
+**Bug 3 — empty "?" reasoning group (real, every run).** `run_log.jsonl` holds the `run_complete`
+cost footer, which has **no `phase`/`event`** (it's a different record type, read by `replay` for
+cost). `_build_reasoning` bucketed it under `e.get("phase", "?")` → a blank trailing group on every
+report. Fix: skip records without a `phase` *and* `event`. The footer stays in the log (replay needs
+it); it's just excluded from the reasoning *view*.
+
+**Bugs 2 & 4 — the Grounding all-clear contradicting a logged flag, and Changes showing only v0 —
+were artifacts of the regen helper, not the pipeline.** The throwaway `tmp/sweep/regen_report.py`
+(used to rebuild a report without re-running) loaded the **Phase-2** manifest checkpoint — whose
+versions are all `0` (pre-refinement) — and passed **no** `verification_flags`. The real pipeline
+passes `result.manifest` (versions updated through the loop) + `flags` to `generate_output`, so its
+reports are correct. **Root cause worth fixing anyway:** the run dir wasn't *self-describing* — the
+final manifest was never persisted, so a report couldn't be faithfully regenerated from disk. Fix:
+`run.py` now writes a `final_manifest.json` checkpoint before Phase 6 (versions + applied formatting
+corrections). The regen helper now prefers it (and reconstructs grounding flags from the run_log
+`unsupported_claim` events), so a regenerated report matches a fresh one — verified on the user's run:
+all four now correct (clean fit text · Grounding shows the 1 flag · no empty group · v0→v1 diffs).
+
+**Tests:** +4 (`test_helpers` strip cases, `test_phase6` Fit-tab render + reasoning-skips-footer);
+suite **252 green**. **Affects D-06 (audit/reasoning view), D-07 #3 (checkpoint self-description),
+F-35 (grounding), F-39 (Fit tab); the run dir is now regenerate-able.** Takeaway: reading one real
+artifact end-to-end surfaced bugs no unit test had — and half the reported "bugs" were in the
+*inspection tool*, which is exactly why diagnosis precedes the fix.
+
+---
+
 ### F-39 — Two user-driven features for the July "evaluate 20 jobs" workflow: surface the value-alignment "why I fit" in the UI, and degrade gracefully when a writer fails
 
 **Driven by the F-37 finding** that the CVCM's standout value is the *explanation* (the

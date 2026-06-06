@@ -83,3 +83,26 @@ def test_honours_retry_after_header(monkeypatch):
     flaky = FlakyCall(FakeSDKError(429, headers={"retry-after": "7"}), fail_times=1)
     call_with_retry(flaky, retryable_exc=FakeSDKError)
     assert slept == [7.0]
+
+
+# --- strip_tool_artifacts: model output hygiene (F-40) ----------------------
+
+from tailor.helpers import strip_tool_artifacts
+
+
+def test_strip_tool_artifacts_removes_leaked_tool_xml():
+    """A model leaking its own tool-call/XML syntax into a field value is cleaned."""
+    leaked = 'Your core pattern is X.</alignment_notes>\n</invoke>'
+    assert strip_tool_artifacts(leaked) == "Your core pattern is X."
+
+
+def test_strip_tool_artifacts_preserves_clean_text_and_edge_cases():
+    assert strip_tool_artifacts("Clean sentence, no tags.") == "Clean sentence, no tags."
+    # not valid tag-starts → left intact
+    assert strip_tool_artifacts("Shipped in <2 years and scaled C# < C++") == \
+        "Shipped in <2 years and scaled C# < C++"
+    assert strip_tool_artifacts("") == ""
+    assert strip_tool_artifacts(None) is None
+    # idempotent
+    once = strip_tool_artifacts("done.</x></invoke>")
+    assert once == "done." and strip_tool_artifacts(once) == "done."

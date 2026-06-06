@@ -38,10 +38,33 @@ __all__ = [
     "claude_complete",
     "gpt_complete",
     "cached",
+    "strip_tool_artifacts",
     "RETRYABLE_STATUS",
 ]
 
 log = logging.getLogger("tailor.helpers")
+
+# Model output hygiene (F-40): small models occasionally leak their own tool-call /
+# pseudo-XML syntax INTO a string field value — e.g. a value_alignment_notes that ends
+# "...full effectiveness.</alignment_notes>\n</invoke>". `.strip()` doesn't remove it.
+# Strip any run of trailing XML-like tags (and surrounding whitespace) so free-text the
+# user sees is clean. Trailing-only by design: a real field won't legitimately end in a
+# `</tag>`, and "<2 years" / "C# < C++" aren't valid tag-starts so they're left intact.
+import re as _re
+
+_TRAILING_TAG = _re.compile(r"\s*<\/?[a-zA-Z_][\w.\-]*(?:\s[^<>]*)?/?>\s*$")
+
+
+def strip_tool_artifacts(text: str | None) -> str | None:
+    """Remove trailing tool-call / pseudo-XML tag artefacts a model leaked into a string
+    field; return cleaned text (None/empty pass through). Idempotent."""
+    if not text:
+        return text
+    out, prev = text.strip(), None
+    while out != prev:
+        prev = out
+        out = _TRAILING_TAG.sub("", out).rstrip()
+    return out.strip()
 
 # 429 = rate limit; 5xx = transient server errors. 4xx (our bug) must NOT retry.
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}

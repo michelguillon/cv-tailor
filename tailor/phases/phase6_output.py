@@ -192,7 +192,11 @@ def _build_reasoning(ctx) -> list[dict]:
     entries = read_entries(ctx.output_dir / "run_log.jsonl")
     grouped: dict[str, list] = {}
     for e in entries:
-        grouped.setdefault(e.get("phase", "?"), []).append(e)
+        # run_log.jsonl also holds non-reasoning records (the run_complete cost footer has
+        # no phase/event) — skip them so the trace doesn't render an empty "?" group (F-40).
+        if not e.get("phase") or not e.get("event"):
+            continue
+        grouped.setdefault(e["phase"], []).append(e)
     return [{"phase": ph, "entries": evs} for ph, evs in grouped.items()]
 
 
