@@ -61,6 +61,12 @@ def run(jd_path, demo, key, output_dir, max_iterations, dry_run, yes, docx):
     if summary.get("cv_docx"):
         click.echo(f"  CV (docx): {summary['cv_docx']}")
     click.echo(f"  Report:   {summary['cv_html']}")
+    flags = summary.get("fabrication_flags") or 0
+    if flags:
+        click.secho(f"  ⚠ {flags} unsupported claim(s) flagged — review the Grounding tab before sending",
+                    fg="yellow")
+    else:
+        click.secho("  ✓ grounding: every tailored section traces to your source CV", fg="green")
     click.echo(f"  Cost:     ${summary['cost_estimated_usd']:.4f} (estimated)  {summary['cost_breakdown']}")
     if summary.get("cost_cap_exceeded"):
         click.secho("  ⚠ estimated cost exceeded the mode's cost cap", fg="yellow")

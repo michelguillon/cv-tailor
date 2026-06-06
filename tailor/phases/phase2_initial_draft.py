@@ -18,6 +18,7 @@ that fabricates is worse than useless. This is stated explicitly in the prompt.
 from __future__ import annotations
 
 from tailor.helpers import claude_complete
+from tailor.tools.writer_common import TRUTHFULNESS_RULES
 
 __all__ = ["draft_sections", "DraftError"]
 
@@ -26,18 +27,16 @@ class DraftError(RuntimeError):
     pass
 
 
-_SYSTEM = """\
+# Phase 2 originates the first draft, so it carries the SAME anti-fabrication rules as
+# the Phase-3 writers (F-34/F-35) — it's where a fabricated headline/sector first crept
+# in. Shared from writer_common so the two never drift.
+_SYSTEM = f"""\
 You tailor ONE CV section to a specific job, truthfully. Rewrite the SOURCE \
 section so it emphasises what matters for THIS role and surfaces the listed \
 keywords ONLY where they are genuinely supported by the source content.
 
-HARD RULES:
-- Do NOT invent or alter employers, job titles, dates, companies, metrics, or \
-facts. Change emphasis, ordering, and wording only.
-- Keep every factual claim traceable to the source. If a keyword isn't supported, \
-leave it out — do not fabricate experience to match the JD.
-- Preserve the source's structure: if it uses bullet points, return bullet points.
-- Aim for about {target} words — stay close to the SOURCE length. Do NOT pad a \
+{TRUTHFULNESS_RULES}
+- Aim for about {{target}} words — stay close to the SOURCE length. Do NOT pad a \
 short section to fill space; a terse role stays terse.
 - Output ONLY the section text (markdown), no heading, no preamble, no commentary."""
 
@@ -159,6 +158,10 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
             target = min(max(source_wc, budget.min_words), budget.max_words)
         else:
             target = source_wc or 120
+        # Persist the raw corpus body as the ground truth every later phase verifies
+        # against (F-35) — the drafter tailors from this; the orchestrator and the
+        # verification gate check that nothing was added beyond it.
+        ctx.write_section(section_id, source_doc, source=True)
         text = _draft_one(jd, rubric, section_type, target, source_doc, model=model, client=client)
         path = ctx.write_section(section_id, text, version=0)
         wc = len(text.split())

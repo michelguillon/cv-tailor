@@ -22,6 +22,7 @@ from tailor.phases.phase2_initial_draft import draft_sections
 from tailor.phases.phase3_refinement import refine
 from tailor.phases.phase6_output import generate_output
 from tailor.run_context import RunContext
+from tailor.tools import verifier
 
 __all__ = ["run_pipeline", "AutoHITL", "TerminalHITL", "PipelineStop"]
 
@@ -183,10 +184,15 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
              converged=result.converged, convergence_reason=result.convergence_reason,
              iterations=len(result.iterations))
 
-        # Phase 4 — human review (HITL)
+        # Phase 4 — verification gate (F-35) + human review (HITL).
+        # Ground each tailored section against the RAW corpus source and flag any
+        # unsupported claim as a major review item, so fabrication is shown to the human
+        # (and recorded for the report) before anything ships — never silently.
         emit("phase_start", phase="phase4_hitl", label="Human review")
+        flags = verifier.verify_run(ctx, result.manifest, model=rc.validation_model)
+        flag_count = _merge_verification_flags(ctx, result, flags)
         hitl.review(ctx, result, jd, rubric, budgets, rc)
-        emit("phase_complete", phase="phase4_hitl")
+        emit("phase_complete", phase="phase4_hitl", fabrication_flags=flag_count)
 
         # Phase 5 — formatting validation (Haiku) + assembled length check
         emit("phase_start", phase="phase5_validation", label="Formatting")
@@ -209,7 +215,7 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
                 ctx.audit.log_event("phase6_output", "docx_skipped",
                                     "no source .docx in data/cvs/; --docx skipped")
         out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations,
-                              config=config, source_docx=source_docx)
+                              config=config, source_docx=source_docx, verification_flags=flags)
         emit("phase_complete", phase="phase6_output")
 
         footer = _finalise(ctx, tracker, rc, iterations_run=len(result.iterations))
@@ -219,6 +225,7 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
             "convergence_reason": result.convergence_reason,
             "iterations": len(result.iterations),
             "cv_md": out["md"], "cv_html": out["html"], "cv_docx": out.get("docx"),
+            "fabrication_flags": flag_count,
             "cost_estimated_usd": footer["total_estimated_usd"],
             "cost_breakdown": footer["cost_breakdown_estimated_usd"],
         })
@@ -230,6 +237,27 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
              cost_estimated_usd=footer["total_estimated_usd"],
              cost_breakdown=footer["cost_breakdown_estimated_usd"])
     return summary
+
+
+def _merge_verification_flags(ctx, result, flags: dict) -> int:
+    """Fold verifier flags into the review's unresolved items (so the human sees them,
+    even on a section that converged) and log them. Returns the total flag count (F-35)."""
+    total = 0
+    for sid, items in flags.items():
+        bucket = result.unresolved.setdefault(sid, [])
+        existing = {it.issue for it in bucket}
+        # Fabrication flags go FIRST — they're the most important thing to address.
+        result.unresolved[sid] = [it for it in items if it.issue not in existing] + bucket
+        for it in items:
+            ctx.audit.log_event("verification", "unsupported_claim", f"{sid}: {it.issue}")
+        total += len(items)
+    if total:
+        ctx.audit.log_event("verification", "flags_raised",
+                            f"{total} unsupported claim(s) across {len(flags)} section(s) — surfaced for review")
+    else:
+        ctx.audit.log_event("verification", "all_grounded",
+                            "every tailored section traces to the source CV")
+    return total
 
 
 def _finalise(ctx, tracker, rc, *, iterations_run: int) -> dict:

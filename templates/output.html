@@ -40,6 +40,8 @@
   .entry { border-left: 2px solid var(--line); padding: 4px 0 4px 12px; margin: 6px 0; font-size: 13px; }
   .entry .ev { font-weight: 600; }
   .entry .it { color: var(--muted); font-size: 12px; }
+  .ok { color: var(--add); }
+  .flag { color: var(--del); }
 </style>
 </head>
 <body>
@@ -50,12 +52,34 @@
 </header>
 <nav>
   <button class="tab-btn active" data-tab="cv">CV</button>
+  <button class="tab-btn" data-tab="grounding">Grounding{% if grounding.total %} ⚠{% endif %}</button>
   <button class="tab-btn" data-tab="changes">Changes</button>
   <button class="tab-btn" data-tab="scores">Scores</button>
   <button class="tab-btn" data-tab="reasoning">Reasoning</button>
 </nav>
 <main>
   <section id="cv" class="tab active cv">{{ cv_html|safe }}</section>
+
+  <section id="grounding" class="tab">
+    {% if grounding.total == 0 %}
+    <div class="card">
+      <h3 class="ok">✓ Every tailored section traces to your source CV.</h3>
+      <div class="vers">The verifier found no claim in the final CV that your source corpus doesn't support.</div>
+    </div>
+    {% else %}
+    <div class="card">
+      <h3 class="flag">⚠ {{ grounding.total }} unsupported claim(s) across {{ grounding.sections }} section(s) — review before sending.</h3>
+      <div class="vers">These appear in the tailored CV but were not found in your source corpus. They were raised at the review step.</div>
+    </div>
+    {% for it in grounding.claims %}
+    <div class="card">
+      <h3 class="flag">{{ it.section }}</h3>
+      <div>{{ it.issue }}</div>
+      <div class="vers">{{ it.suggestion }}</div>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </section>
 
   <section id="changes" class="tab">
     {% for c in changes %}

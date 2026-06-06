@@ -48,8 +48,11 @@ class RunContext:
     def sections_dir(self) -> Path:
         return self.output_dir / "sections"
 
-    def section_path(self, section_id: str, *, version: int | None = None, static: bool = False) -> Path:
-        if static:
+    def section_path(self, section_id: str, *, version: int | None = None,
+                     static: bool = False, source: bool = False) -> Path:
+        if source:
+            name = f"{section_id}_source.md"        # raw corpus text — the truth ground (F-35)
+        elif static:
             name = f"{section_id}_static.md"
         else:
             if version is None:
@@ -57,13 +60,19 @@ class RunContext:
             name = f"{section_id}_v{version}.md"
         return self.sections_dir / name
 
-    def write_section(self, section_id: str, text: str, *, version: int | None = None, static: bool = False) -> Path:
-        path = self.section_path(section_id, version=version, static=static)
+    def write_section(self, section_id: str, text: str, *, version: int | None = None,
+                      static: bool = False, source: bool = False) -> Path:
+        path = self.section_path(section_id, version=version, static=static, source=source)
         path.write_text(text.rstrip() + "\n", encoding="utf-8")
         return path
 
-    def read_section(self, section_id: str, *, version: int | None = None, static: bool = False) -> str:
-        return self.section_path(section_id, version=version, static=static).read_text(encoding="utf-8")
+    def read_section(self, section_id: str, *, version: int | None = None,
+                     static: bool = False, source: bool = False) -> str:
+        return self.section_path(section_id, version=version, static=static, source=source).read_text(encoding="utf-8")
+
+    def has_section(self, section_id: str, *, version: int | None = None,
+                    static: bool = False, source: bool = False) -> bool:
+        return self.section_path(section_id, version=version, static=static, source=source).exists()
 
     # -- phase checkpoints + audit ----------------------------------------- #
 

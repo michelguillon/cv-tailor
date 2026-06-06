@@ -91,6 +91,15 @@ def _current_text(ctx, manifest, sid) -> str:
     return ctx.read_section(sid, version=m["version"])
 
 
+def _raw_source(ctx, sid, fallback: str) -> str:
+    """The raw corpus text for a section (the truth ground the orchestrator checks
+    against, F-35). Falls back to the current draft if no source file was persisted
+    (older runs / unit tests that don't go through Phase 2)."""
+    if ctx.has_section(sid, source=True):
+        return ctx.read_section(sid, source=True)
+    return fallback
+
+
 def _aggregate_keyword_coverage(ctx, manifest, rubric) -> float:
     texts = [_current_text(ctx, manifest, sid) for sid, m in manifest.items() if not m["static"]]
     return round(union_coverage(texts, rubric), 4) if texts else 0.0
@@ -173,12 +182,13 @@ def refine(
             _write_writer_draft(ctx, cd)
             _write_writer_draft(ctx, gd)
 
-            # 2. adjudicate → write selected text as v(n). Pass the source the writers
-            #    drafted from so the orchestrator can gate fabrication (Fix C / F-34).
+            # 2. adjudicate → write selected text as v(n). Ground the orchestrator on the
+            #    RAW corpus source (F-35), not the evolving draft, so fabrication that
+            #    originated in Phase 2 or drifted in earlier iterations is still caught.
             prior = section_scores.get(sid)
             decision, selected_text = orchestrator_tool.adjudicate(
-                sid, cd, gd, rubric, jd, source_text=current, prior_score=prior,
-                is_final=is_final, model=model, client=claude_client)
+                sid, cd, gd, rubric, jd, source_text=_raw_source(ctx, sid, current),
+                prior_score=prior, is_final=is_final, model=model, client=claude_client)
             ctx.write_section(sid, selected_text, version=n)
             manifest[sid]["version"] = n
             manifest[sid]["word_count"] = len(selected_text.split())

@@ -401,6 +401,50 @@ what changed (if anything).*
 
 ---
 
+### F-35 — Trust hardening: harden Phase 2's drafter, ground against the RAW corpus, and add a verification gate (precision matters: 9→1 flags)
+
+**Why:** F-34 fixed the Phase-3 writers, but Phase 2 — which *originates* the first draft —
+used its own **weaker** prompt (not `writer_common.TRUTHFULNESS_RULES`), and the orchestrator
+grounded against the *evolving draft*, not the candidate's real CV. So fabrication could be born
+in Phase 2 and never caught. The user (rightly) wanted a prototype they can *trust*, not one
+clean run.
+
+**Three changes:**
+1. **Harden Phase 2 (origination).** `phase2_initial_draft._SYSTEM` now shares
+   `writer_common.TRUTHFULNESS_RULES` with the Phase-3 writers, so the no-headline / no-sector /
+   no-unsupported-keyword rules apply from the first draft.
+2. **Ground against the RAW corpus.** Phase 2 persists each section's raw source text
+   (`sections/<id>_source.md`, via `RunContext(..., source=True)`); Phase 3's orchestrator and the
+   new verifier both check against *that*, not the iteration draft — closing the origination gap.
+3. **Verification gate + provenance (`tools/verifier.py`).** After refinement, a Haiku pass
+   checks each non-static section's final text against its raw source and flags any unsupported
+   claim as a major item that flows into the Phase-4 review (the human gate), the audit log, a
+   **Grounding tab** in the HTML report, a `fabrication_flags` count in the summary, and a CLI
+   warning. Nothing ships unflagged that the candidate's own CV doesn't say.
+
+**The precision lesson (the important one):** the FIRST verifier prompt was a "strict
+fact-checker" and produced **9 flags on a real run — most FALSE POSITIVES**, flagging claims that
+were *verbatim* in the source (e.g. "15-person … $25M business and 20% YoY growth", which is in
+the profile source word-for-word). A gate that cries wolf gets ignored — worse than no gate.
+Rewriting the prompt to flag ONLY **new checkable facts** (a metric, employer, title, sector,
+named system) and to treat rewording / paraphrase / dropped qualifiers as SUPPORTED — with an
+explicit "find the supporting span first; when unsure, don't flag" method — cut it to **1 flag**
+(a genuine vague addition) on the same JD. Cheap-model fact-checking is viable but only with a
+precision-first prompt; "list unsupported claims" is far too trigger-happy for Haiku.
+
+**Verified:** real Airwallex demo run — no fintech/payments/identity fabrication, correct titles,
+1 low-noise flag surfaced in the report. **Affects D-04/D-05/D-18/D-25; builds on F-34.**
+
+**Residual / deferred:** verification grounds each section against ITS OWN source variant, so a
+true claim that lives only in a *different* variant or section could in principle be flagged
+(none observed after the precision fix). A future hardening could ground against the union of a
+section across all CV variants. In full mode the verifier could use Sonnet for higher precision
+(it currently uses the fixed Haiku validation model). One subtle miss remains: a near-synonym
+term-swap ("solutions consulting" → "solutions engineering") isn't flagged — borderline, not a
+clear fabrication.
+
+---
+
 ### F-34 — The keyword-coverage incentive drove fabrication; fixed with stronger writer rules, a reframed keyword block, and a source-grounded orchestrator gate
 
 **The failure (real Airwallex run, demo):** the tailored CV invented a "Solutions
@@ -1474,7 +1518,7 @@ Haiku here is only the formatting/validation gate (Sonnet is the writer+orchestr
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
 
-- **228 tests, all deterministic / mocked (no API).** Every provider is faked;
+- **233 tests, all deterministic / mocked (no API).** Every provider is faked;
   LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
   F-16, F-21, F-25, F-26), not in the pytest suite.
 - **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.

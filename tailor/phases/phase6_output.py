@@ -196,11 +196,21 @@ def _build_reasoning(ctx) -> list[dict]:
     return [{"phase": ph, "entries": evs} for ph, evs in grouped.items()]
 
 
+def _build_grounding(flags) -> dict:
+    """Provenance for the report's Grounding tab (F-35): the verifier's unsupported-claim
+    flags, flattened. `flags` is {section_id: [CritiqueItem, ...]} or None."""
+    flags = flags or {}
+    claims = [{"section": sid, "issue": it.issue, "suggestion": it.suggestion}
+              for sid, fl in flags.items() for it in fl]
+    return {"total": len(claims), "sections": len(flags), "claims": claims}
+
+
 def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
                     config, template_dir: str | Path = TEMPLATE_DIR,
-                    source_docx=None) -> dict:
+                    source_docx=None, verification_flags=None) -> dict:
     """Write cv_final.md + cv_final.html (+ cv_final.docx when `source_docx` is given,
-    the --docx stretch). Returns {'md', 'html'[, 'docx']} paths."""
+    the --docx stretch). `verification_flags` ({sid: [CritiqueItem]}) feeds the report's
+    Grounding tab (F-35). Returns {'md', 'html'[, 'docx']} paths."""
     cv_md = assemble_markdown(ctx, manifest, config)
     md_path = ctx.output_dir / "cv_final.md"
     md_path.write_text(cv_md, encoding="utf-8")
@@ -219,6 +229,7 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
         "changes": _build_changes(ctx, manifest, config),
         "scores": _build_scores(manifest, iterations, config),
         "reasoning": _build_reasoning(ctx),
+        "grounding": _build_grounding(verification_flags),
         "rubric": final_rubric,
         "run_id": ctx.run_id,
     }

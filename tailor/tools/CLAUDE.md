@@ -43,6 +43,18 @@ target (D-27/F-13), and the deterministic length-budget items (D-14) — applied
   is computed in code by the scorer (D-25), not asked of the model. Proposed
   `rubric_additions` are raw — the loop JD-validates + caps them via `rubric.py`.
 
+## verifier.py — the fabrication gate (F-35)
+
+- After refinement, `verify_run` checks each non-static section's final text against its
+  **raw corpus source** (`sections/<id>_source.md`, persisted by Phase 2) and returns
+  `CritiqueItem`s for unsupported claims. They flow into Phase-4 review, the audit log, the
+  report's Grounding tab, the summary `fabrication_flags`, and a CLI warning — never silent.
+- **Precision is the whole game (F-35).** Flag ONLY new checkable facts (metric, employer,
+  title, sector, named system) with no source basis; rewording / paraphrase / dropped
+  qualifiers are SUPPORTED. A "list unsupported claims" prompt over-flags badly on Haiku
+  (9 FPs → 1 real after the precision rewrite). Keep the "find the supporting span first;
+  when unsure, don't flag" framing. Safety net: a malformed check returns no findings, never crashes.
+
 ## rubric.py — dynamic rubric updates (D-04, unchanged across the dual-writer rewrite)
 
 - Orchestrator-proposed additions are **validated against the JD** ("implied or

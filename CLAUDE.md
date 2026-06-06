@@ -59,6 +59,14 @@ docker-compose.prod.yml up -d --build` (SPEC §7.5, F-32).
 - **Section is the unit of work** — drafting, critique, scoring, convergence, and
   freezing are all per-section (D-12). Static sections are copied verbatim and
   never enter the loop (D-13).
+- **Never ship fabrication (D-18, F-34/F-35).** Tailoring SELECTS and re-emphasises the
+  candidate's real content — it never invents or relabels it (no fabricated titles, sectors,
+  metrics, or JD keywords the source doesn't support). This is enforced at three points: the
+  writer prompts (`tools/writer_common.TRUTHFULNESS_RULES`, shared by Phase 2 + 3), the
+  orchestrator (grounds each draft against the raw corpus source), and a verification gate
+  (`tools/verifier.py`) that flags any unsupported claim into the review, the report's
+  Grounding tab, and the CLI before anything ships. The raw source is persisted per section
+  at Phase 2 (`sections/<id>_source.md`) as the ground truth.
 - **HITL is preview-before-apply.** Show what will change, then ask. Never apply
   silently.
 - **Config-driven, not code-branching.** Demo vs full and all thresholds come

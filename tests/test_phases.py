@@ -114,6 +114,8 @@ def make_fakes(rec: dict):
             inp = {"direction": "hold", "revised": False, "reasoning": "ok"}
         elif name == "submit_rubric_decisions":
             inp = {"decisions": []}
+        elif name == "report_grounding":                 # verifier — everything grounded
+            inp = {"unsupported": []}
         elif name == "submit_formatting":                # phase 5 — no corrections
             inp = {"corrected_text": "unchanged", "corrections": []}
         elif name == "interpret_revision":               # phase 4 free-text (unused by AutoHITL)
@@ -198,6 +200,28 @@ def test_end_to_end_produces_outputs_and_complete_log(run_demo):
     events = {e.get("event") for e in entries}
     assert {"jd_analysed", "loop_start", "iteration_scored", "output_written"} <= events
     assert entries[-1].get("type") == "run_complete"
+
+
+def test_verification_gate_surfaces_flags_in_summary_and_report(run_demo, monkeypatch):
+    """A fabrication flag from the verifier reaches the run summary, the report's
+    Grounding tab, and the audit log — never ships silently (F-35)."""
+    from tailor.tools import verifier as vmod
+    # Flag the profile only (the fake drafts are "<sid> alpha beta gamma", so the sid
+    # is in the draft text); every other section stays grounded.
+    monkeypatch.setattr(vmod, "verify_section",
+                        lambda draft, source, **k: (
+                            [{"claim": "fintech leadership", "kind": "sector", "reason": "source is adtech"}]
+                            if "profile" in draft else []))
+    summary, _ = run_demo(run_id="gate")
+    out = Path(summary["output_dir"])
+
+    assert summary["fabrication_flags"] >= 1
+    html = (out / "cv_final.html").read_text(encoding="utf-8")
+    assert "fintech leadership" in html and "Grounding" in html
+    events = {e.get("event") for e in read_entries(out / "run_log.jsonl")}
+    assert "unsupported_claim" in events and "flags_raised" in events
+    # the raw source the verifier grounds against is persisted
+    assert (out / "sections" / "profile_source.md").exists()
 
 
 def test_checkpoints_written_for_every_phase(run_demo):
