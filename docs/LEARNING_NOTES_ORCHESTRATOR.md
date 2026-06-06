@@ -423,7 +423,7 @@ company in the variant label is hidden.)
 
 **The fix — display mapping only, in `config.yaml` (config-driven, D-08).** A new `cv_display_names:`
 block maps each variant to a neutral capability label (`CV_AI_Leadership`,
-`Fintech CV_Solutions_Leadership`, …). `tailor.config.cv_display_name(config, filename)` resolves it;
+`CV_Fintech_Solutions_Leadership`, …). `tailor.config.cv_display_name(config, filename)` resolves it;
 the stored filename — the ChromaDB key used for retrieval *and* delete — is unchanged, so this is
 presentation only, no re-ingest. Applied at the three display boundaries: the corpus inventory
 (API adds `display_name` alongside the real `filename`; the frontend shows the label, deletes by
