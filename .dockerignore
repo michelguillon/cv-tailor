@@ -4,6 +4,7 @@
 .git
 .gitignore
 data/
+candidate/        # CVCM — personal data, bind-mounted at runtime (§3.9)
 outputs/
 tmp/
 **/__pycache__/

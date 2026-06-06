@@ -93,6 +93,29 @@ def test_source_text_is_passed_to_the_orchestrator_for_grounding():
     assert "ground truth" in captured["user"].lower()
 
 
+def test_cvcm_reaches_the_prompt_only_when_present():
+    """The value model is threaded into the orchestrator's user message for the tiebreak,
+    and omitted entirely when absent (no empty CVCM block) — §3.9/D-33."""
+    seen = {}
+
+    def make_client():
+        def create(**kwargs):
+            seen["user"] = kwargs["messages"][0]["content"]
+            block = types.SimpleNamespace(type="tool_use", name="submit_decision",
+                                          input=decision(base="claude"))
+            return types.SimpleNamespace(content=[block],
+                                         usage=types.SimpleNamespace(input_tokens=1, output_tokens=1))
+        return types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+
+    adjudicate("profile", draft("claude", "a"), draft("gpt", "b"), rubric(), jd(),
+               cvcm="I turn ambiguity into commercial outcomes.", model="m", client=make_client())
+    assert "CANDIDATE VALUE MODEL" in seen["user"] and "commercial outcomes" in seen["user"]
+
+    adjudicate("profile", draft("claude", "a"), draft("gpt", "b"), rubric(), jd(),
+               model="m", client=make_client())
+    assert "CANDIDATE VALUE MODEL" not in seen["user"]
+
+
 def test_read_pushbacks_no_objection_returns_direction_without_calling():
     dec = types.SimpleNamespace(direction="keep going")
 

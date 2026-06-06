@@ -127,6 +127,7 @@ def refine(
     claude_client=None,
     openai_client=None,
     on_event=None,
+    cvcm: str | None = None,
 ) -> RefinementResult:
     """Run the dual-writer refinement loop. See the module docstring for the flow.
 
@@ -174,11 +175,11 @@ def refine(
             cd = claude_writer.write_section(
                 sid, current, jd, rubric, budget, version=n, direction=direction,
                 rejected_suggestions=mem.rejected_suggestions, is_final=is_final,
-                model=model, client=claude_client)
+                model=model, client=claude_client, cvcm=cvcm)
             gd = gpt_writer.write_section(
                 sid, current, jd, rubric, budget, version=n, direction=direction,
                 rejected_suggestions=mem.rejected_suggestions, is_final=is_final,
-                model=gpt_model, client=openai_client)
+                model=gpt_model, client=openai_client, cvcm=cvcm)
             _write_writer_draft(ctx, cd)
             _write_writer_draft(ctx, gd)
 
@@ -188,7 +189,7 @@ def refine(
             prior = section_scores.get(sid)
             decision, selected_text = orchestrator_tool.adjudicate(
                 sid, cd, gd, rubric, jd, source_text=_raw_source(ctx, sid, current),
-                prior_score=prior, is_final=is_final, model=model, client=claude_client)
+                cvcm=cvcm, prior_score=prior, is_final=is_final, model=model, client=claude_client)
             ctx.write_section(sid, selected_text, version=n)
             manifest[sid]["version"] = n
             manifest[sid]["word_count"] = len(selected_text.split())

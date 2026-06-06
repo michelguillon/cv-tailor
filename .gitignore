@@ -11,6 +11,13 @@ tmp/
 data/*.txt
 !data/*.example.txt
 
+# Candidate Value Creation Model (CVCM, §3.9) — personal career data, never commit
+# the real one. The committed *.example.md template shows the structure.
+# NB: `candidate/*` (not `candidate/`) — git can't re-include a file whose parent
+# DIRECTORY is excluded, so we exclude the contents and negate the template.
+candidate/*
+!candidate/value_creation_model.example.md
+
 # Python
 __pycache__/
 *.py[cod]

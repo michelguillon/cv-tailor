@@ -17,6 +17,7 @@ that fabricates is worse than useless. This is stated explicitly in the prompt.
 
 from __future__ import annotations
 
+from tailor.candidate import CVCM_FRAMING_NOTE
 from tailor.helpers import claude_complete
 from tailor.tools.writer_common import TRUTHFULNESS_RULES
 
@@ -70,9 +71,14 @@ def _source_lookup(sections: list[dict]) -> dict[tuple[str, str], dict]:
     return out
 
 
-def _draft_one(jd, rubric, section_type, target_words, source_text, *, model, client) -> str:
+def _draft_one(jd, rubric, section_type, target_words, source_text, *, model, client, cvcm=None) -> str:
     missing = rubric.required_keywords  # surface where truthful; loop refines later
+    cvcm_block = (
+        f"CANDIDATE VALUE MODEL (how the candidate creates value — use for framing/emphasis "
+        f"only). {CVCM_FRAMING_NOTE}\n{cvcm}\n\n" if cvcm else ""
+    )
     user = (
+        cvcm_block +
         f"ROLE: {jd.role_title}\n"
         f"SECTION TYPE: {section_type}\n"
         f"TARGET WORDS: ~{target_words}\n\n"
@@ -95,7 +101,7 @@ def _draft_one(jd, rubric, section_type, target_words, source_text, *, model, cl
     return text
 
 
-def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=None) -> dict:
+def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=None, cvcm=None) -> dict:
     """Draft every recommended section to disk. Returns a manifest dict.
 
     manifest[section_id] = {static, version, word_count, source_cv, path,
@@ -162,7 +168,8 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
         # against (F-35) — the drafter tailors from this; the orchestrator and the
         # verification gate check that nothing was added beyond it.
         ctx.write_section(section_id, source_doc, source=True)
-        text = _draft_one(jd, rubric, section_type, target, source_doc, model=model, client=client)
+        text = _draft_one(jd, rubric, section_type, target, source_doc,
+                          model=model, client=client, cvcm=cvcm)
         path = ctx.write_section(section_id, text, version=0)
         wc = len(text.split())
         audit.log_event("phase2_draft", "section_drafted",

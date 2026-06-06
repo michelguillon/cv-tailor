@@ -14,6 +14,9 @@ The orchestrator and all phases/tools. Entry point: `python -m tailor`
   checkpoints are delegated to a handler (`TerminalHITL` for the CLI, `AutoHITL`
   for tests / `--yes`) so phases only *render*, never read stdin.
 - `__main__.py` — the `python -m tailor` CLI (`run`, `replay`), click-based.
+- `candidate.py` — `load_cvcm()`: loads the optional Candidate Value Creation Model
+  (`candidate/value_creation_model.md`, gitignored). Framing-only context for Phases
+  1/2/3 (§3.9/D-33/F-36); never a fact source. Holds `CVCM_FRAMING_NOTE` (keep it forceful).
 - `config.py` — `load_config` + `resolve_run_config` → a `RunConfig`. Mode
   differences are config values, not `if mode == "demo"` branches (D-08); full mode
   is key-gated on `FULL_MODE_KEY` (§3.7).

@@ -10,6 +10,7 @@ two-draft comparison meaningful.
 
 from __future__ import annotations
 
+from tailor.candidate import CVCM_FRAMING_NOTE
 from tailor.models import CritiqueItem
 
 __all__ = [
@@ -109,14 +110,19 @@ def jd_rubric_block(jd, rubric) -> str:
     )
 
 
-def section_user_prompt(section_id, section_text, budget, direction, rejected_suggestions, is_final) -> str:
+def section_user_prompt(section_id, section_text, budget, direction, rejected_suggestions,
+                        is_final, cvcm=None) -> str:
     """The VARIABLE half: this section's source, target length, direction, and loop
-    memory. Appended after the cached prefix, so it never pollutes the cache."""
+    memory. Appended after the cached prefix, so it never pollutes the cache. `cvcm`
+    (optional, §3.9/D-33) is candidate value-model context for framing only."""
     target = word_target(section_text, budget)
     parts = [
         f"SECTION TYPE: {section_id}",
         f"TARGET WORDS: ~{target} (stay close to the source length; do not pad)",
     ]
+    if cvcm:
+        parts += ["", f"CANDIDATE VALUE MODEL (frame the candidate's real content through these "
+                      f"recurring value patterns). {CVCM_FRAMING_NOTE}", cvcm]
     if direction:
         parts += ["", f"ORCHESTRATOR'S DIRECTION FOR THIS SECTION: {direction}"]
     if rejected_suggestions:

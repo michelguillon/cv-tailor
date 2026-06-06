@@ -14,6 +14,7 @@ from pathlib import Path
 
 from corpus.retrieval import all_sections
 from tailor import cost
+from tailor.candidate import load_cvcm
 from tailor.config import load_budgets, load_config, resolve_run_config
 from tailor.phases import phase4_hitl, phase5_validation
 from tailor.phases.phase0_jd_analysis import analyse_jd
@@ -122,6 +123,7 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
     hitl = hitl or TerminalHITL()
     ctx = RunContext.create(run_id=run_id, base_dir=output_dir)
     jd_text = Path(jd_path).read_text(encoding="utf-8")
+    cvcm = load_cvcm()        # optional candidate value model (§3.9/D-33); None if absent
 
     summary = {"run_id": ctx.run_id, "mode": rc.mode, "output_dir": str(ctx.output_dir)}
 
@@ -144,7 +146,9 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # Phase 1 — fit assessment (RAG + Claude)
         emit("phase_start", phase="phase1_fit_assessment", label="Fit assessment")
         sections = all_sections(config)
-        fit, _ = assess_fit(jd, rubric, model=rc.orchestrator_model, config=config, sections=sections)
+        ctx.audit.log_event("phase1", "cvcm", "value model loaded" if cvcm else "no value model (optional)")
+        fit, _ = assess_fit(jd, rubric, model=rc.orchestrator_model, config=config,
+                            sections=sections, cvcm=cvcm)
         ctx.write_checkpoint("phase1_fit_assessment", fit)
         emit("phase_complete", phase="phase1_fit_assessment",
              outcome=fit.outcome, fit_score=round(fit.overall_fit_score, 3), hitl_required=True)
@@ -166,7 +170,7 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # Phase 2 — initial draft (Claude)
         emit("phase_start", phase="phase2_initial_draft", label="Initial draft")
         manifest = draft_sections(fit, jd, rubric, sections, budgets, ctx,
-                                  model=rc.orchestrator_model)
+                                  model=rc.orchestrator_model, cvcm=cvcm)
         emit("phase_complete", phase="phase2_initial_draft", sections=len(manifest))
 
         # Phase 3 — dual-writer refinement loop (emits per-section + per-iteration events)
@@ -178,7 +182,7 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
                         keyword_delta_threshold=rc.keyword_delta_threshold,
                         critique_delta_threshold=rc.critique_delta_threshold,
                         max_rubric_additions=rc.max_rubric_additions,
-                        on_event=on_event)
+                        on_event=on_event, cvcm=cvcm)
         rubric = result.final_rubric
         emit("phase_complete", phase="phase3_refinement",
              converged=result.converged, convergence_reason=result.convergence_reason,

@@ -183,6 +183,30 @@ def test_manifest_checkpoint_written(tmp_path):
     assert (ctx.output_dir / "run_log.jsonl").exists()
 
 
+def test_cvcm_passed_to_drafting_prompt(tmp_path):
+    """When a value model is provided it reaches the Phase-2 drafting prompt, with the
+    framing-only guardrail; when absent, no CVCM block appears (§3.9/D-33)."""
+    seen = {}
+
+    def capturing_claude():
+        def create(**kwargs):
+            seen["user"] = kwargs["messages"][0]["content"]
+            block = types.SimpleNamespace(type="text", text="Drafted across EMEA.")
+            return types.SimpleNamespace(content=[block],
+                                         usage=types.SimpleNamespace(input_tokens=1, output_tokens=1))
+        return types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    args = (fit({"profile": rec("profile", "AI")}), jd(), rubric(),
+            [sec("AI", "profile", "profile", "Original profile")], budgets(), ctx)
+    draft_sections(*args, model="m", client=capturing_claude(), cvcm="I scale technical teams.")
+    assert "CANDIDATE VALUE MODEL" in seen["user"] and "I scale technical teams." in seen["user"]
+    assert "BACKGROUND ONLY" in seen["user"]                  # the framing-only guardrail (F-36)
+
+    draft_sections(*args, model="m", client=capturing_claude())   # no cvcm
+    assert "CANDIDATE VALUE MODEL" not in seen["user"]
+
+
 def test_no_fit_raises(tmp_path):
     ctx = RunContext.create(run_id="r", base_dir=tmp_path)
     with pytest.raises(DraftError):

@@ -102,6 +102,7 @@ def make_fit_assessment():
             )
         },
         no_fit_reason=None,
+        value_alignment_notes="turnaround leadership maps to this team's scaling problem",  # CVCM (D-33)
     )
 
 

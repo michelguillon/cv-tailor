@@ -3,8 +3,8 @@
 
 **Project:** Week 3 Portfolio — Multi-Model Orchestration  
 **Repository:** cv-tailor
-**Status:** Pre-build (architectural decisions recorded; build not yet started)  
-**Last updated:** pre-build
+**Status:** Build complete (Steps 0–9 done; UI in progress)  
+**Last updated:** post-Step-9 / Sonnet validation (F-28)
 
 ---
 
@@ -106,12 +106,17 @@ swappable."
 
 **What was decided:**
 
-| Provider  | Model             | Role                        | Justification                                     |
-|-----------|-------------------|-----------------------------|---------------------------------------------------|
-| Mistral   | mistral-small     | JD extraction + embeddings  | Existing integration; cheaper structured tasks    |
-| Anthropic | claude-sonnet-4-6 | Orchestrator + drafter      | Complex multi-step reasoning; established Week 2  |
-| OpenAI    | gpt-4o-mini       | Section critique            | Empirically harsher, more direct CV feedback      |
-| Anthropic | claude-haiku-4-5  | Formatting validation       | Fast, cheap, sufficient for deterministic checks  |
+| Provider  | Model             | Role                             | Justification                                     |
+|-----------|-------------------|----------------------------------|---------------------------------------------------|
+| Mistral   | mistral-small     | JD extraction + embeddings       | Existing integration; cheaper structured tasks    |
+| Anthropic | claude-sonnet-4-6 | Orchestrator + primary writer    | Complex multi-step reasoning; established Week 2  |
+| OpenAI    | gpt-4o-mini       | Independent writer (challenger)  | Empirically harsher, more direct; different prior |
+| Anthropic | claude-haiku-4-5  | Formatting validation            | Fast, cheap, sufficient for deterministic checks  |
+
+*Updated post-D-28: GPT-4o-mini is now a writer, not a critic. Both models draft
+independently per section; Claude Sonnet orchestrates adjudication. The empirical
+justification for GPT (harsher, less flattering) still holds — it now shows in
+draft quality differences rather than critique items.*
 
 **Load-bearing reason for the GPT critique choice:**
 This is the only genuinely novel routing decision. The justification is
@@ -312,11 +317,16 @@ are explicit in the GPT critique system prompt (not just in the schema comment):
 - **minor**: improvement opportunity; the CV is acceptable without it
 
 **Why this must be in the prompt, not just the schema:**
-The soft-stop condition depends on "zero major items in the last critique." If
-the GPT critique prompt doesn't define `major` with precision, the model will
-calibrate severity on its own — inconsistently across iterations. A "major"
-item in iteration 1 might be equivalent to a "minor" item in iteration 3. The
-convergence condition then becomes meaningless.
+The soft-stop condition depends on "zero major items from both writers." If
+the writer prompts don't define `major` with precision, each model calibrates
+severity on its own — inconsistently across iterations and across writers.
+A "major" item from Claude in iteration 1 might be equivalent to a "minor"
+item from GPT in iteration 3. The convergence condition then becomes meaningless.
+
+*Updated post-D-28: severity is now self-assessed by both writers inside
+`WriterDraft.items`, not by a separate GPT critique call. The principle is
+unchanged — and more important: both writer system prompts must carry identical
+severity definitions so the zero-major freeze condition is consistent.*
 
 **Three levels considered and rejected:**
 `major | medium | minor` was considered. Rejected: the soft-stop condition
@@ -390,14 +400,51 @@ version_date catches intentional updates to the same file).
 
 ## Findings Log (populated during build)
 
-> Newest first within the build order. F-17–F-20 are the dual-writer Step 5/6
-> rewrite (D-28..D-31); they supersede the single-writer critique loop that the
-> first Step 6 commit built. F-15/F-16 (union coverage, threshold calibration)
-> carry over unchanged.
+> Newest first within the build order. F-17 onwards covers the dual-writer
+> design (D-28–D-31) and all subsequent steps. F-17–F-20 are Step 5/6 dual-writer
+> findings; F-21–F-30 cover Steps 6–9, Sonnet validation, and post-build reviews.
+> F-15/F-16 (union coverage, threshold calibration) carry over unchanged and were
+> re-validated under the dual-writer design (F-21, F-28).
 
 *Entries added here when build reveals something that changes or confirms
 an architectural decision. Format: what was found, which decision it affects,
 what changed (if anything).*
+
+---
+
+### F-36 — CVCM built (§3.9/D-33): Phase-1 value alignment is the win; the writer integration leaked the model's wording into the CV until the guardrail was made forceful
+
+**What was built:** the optional Candidate Value Creation Model (`candidate/value_creation_model.md`,
+gitignored, auto-loaded). `tailor/candidate.py` loads it; it threads into Phase 1 (4th lens →
+`FitAssessment.value_alignment_notes`), Phase 2 (drafting context), and Phase 3 (both writers +
+the orchestrator tiebreak). Tiebreak is a **prompt instruction** to the orchestrator (it already
+picks `selected_base`; there's no numeric band in code), so it only breaks near-ties and never
+overrides a quality or truthfulness winner. Absent file → pipeline runs identically
+(`value_alignment_notes` stays None).
+
+**Phase 1 is the standout.** On the Airwallex JD the value-alignment note was genuinely insightful
+*and honest*: it named the transferable pattern (turning API-driven capability into enterprise
+adoption) **and** stated the real gap out loud — "domain expertise has been in adtech, identity,
+and semiconductor IP — not payments or fintech." Exactly the value the CVCM is meant to add, with
+no flattery.
+
+**The lesson — CVCM is a fabrication vector unless the guardrail is forceful.** First live run with
+CVCM in the writers: verification flags jumped **1 → 9**, several being the value model's *own
+wording* lifted straight into the CV (Skills gained "API-Driven Platform Translation" and "Expertise
+in translating complex, API-driven platform capabilities into solutions enterprise clients
+understand…" — near-verbatim CVCM). The writers treated background context as content. The gentle
+"framing only" note wasn't enough. Rewriting `CVCM_FRAMING_NOTE` to be forceful — "BACKGROUND
+ONLY… NEVER copy or paraphrase any wording from the value model into the CV… if a concept isn't
+already in the SOURCE it does NOT appear" — cut it back to **1 flag** (and that one was a real
+catch: an invented date "deployed June 2024"). **The verification gate (F-35) caught every leak** —
+which both validated the gate and was the signal that surfaced the problem.
+
+**Decisions locked (D-33):** CVCM is **framing-only; the CV corpus stays the single fact source** —
+a CVCM-derived claim with no CV backing is still flagged by the verifier (the trust gate is not
+weakened by CVCM). Auto-load only (no `--cvcm` flag). The system never generates the CVCM. A
+committed `*.example.md` template scaffolds candidate authoring.
+
+**Affects:** D-33, the new schema field, Phases 1/2/3, F-34/F-35.
 
 ---
 
@@ -1518,7 +1565,7 @@ Haiku here is only the formatting/validation gate (Sonnet is the writer+orchestr
 *Which behaviours are tested deterministically (pytest), which require LLM-gated
 tests, and which are tested by inspection only.*
 
-- **233 tests, all deterministic / mocked (no API).** Every provider is faked;
+- **241 tests, all deterministic / mocked (no API).** Every provider is faked;
   LLM behaviour is validated by live driver runs recorded as findings (F-12, F-14,
   F-16, F-21, F-25, F-26), not in the pytest suite.
 - **Schemas** (test_schemas, 46): round-trips + D-07/D-11/D-28 guards.
@@ -2003,10 +2050,11 @@ writer and orchestrator. Roles differ (both write now) but the model-selection
 rationale — GPT as harsher, more direct — remains valid. GPT's drafts serve the
 same function as its critiques did before.
 
-**Cost accepted:** ~$2–4 per full-mode run (vs ~$1 prior). The quality uplift from
-two genuinely independent drafts is worth the 2× writing cost, especially given
-section freezing (F-16: 5–6 of 8–10 sections freeze after iter 1, so later
-iterations are cheap regardless).
+**Cost accepted:** Initial estimate ~$2–4 per full-mode run. **F-28 corrected this
+to ~$0.79** (Airwallex JD, Sonnet + GPT, 8 active sections, converged at iter 2).
+The estimate was conservative by 3–5×: the loop converged before the cap, and
+section freezing meant later iterations were cheap. The quality uplift is real
+(F-21, F-28) and the cost is well within the $5 full-mode cap.
 
 **Schema changes:**
 - `WriterDraft` added: `{writer, section_id, text, version, pushback}`
@@ -2083,3 +2131,101 @@ control caches and reads back 100%), but the real stable prefix is ~534 tokens �
 under both provider minimums — so it's a **no-op at this prompt scale**, on Sonnet
 as well as Haiku. Kept because it's costless and scales automatically; not worth
 padding prompts to force, since the cacheable bulk is small.
+
+---
+
+### D-32 — Experience role/date lines are structural facts; split at Phase 2, re-attach verbatim at Phase 6
+
+**What was decided (from F-29):**
+Experience section role/date lines (`Senior Product Manager (Apr 2022 – Mar 2024)`)
+are never entered into the draftable text. `phase2._split_role_line` peels the
+leading non-bullet line(s) off each experience section before the draft call.
+The LLM rewrites only the bulleted body. The verbatim role line is stored in
+`manifest[sid]["role_line"]` and re-attached bold between the company heading
+and body at assembly (`phase6.assemble_markdown`). Writers in Phase 3 only ever
+see the body — they cannot drop the role line either.
+
+**Why this failed without the fix:**
+The Phase 2 drafter was told "output ONLY the section text, no heading." The LLM
+treated the first line of the section (the role/date line) as a heading and dropped
+it inconsistently — Microsoft lost it, Utiq kept it (F-29). Because the CV heading
+is the company name alone (F-23), a dropped role line leaves the section with no
+visible job title. Promotion stacks (D-21) made this worse: two role-groups at one
+employer collapsed to two identical `## Appnexus / Xandr` blocks with no way to
+distinguish them.
+
+**Principle:** The same as D-13 (static sections) applied at sub-section level:
+deterministic where the content is a fact, LLM only for judgment and wording.
+Job titles and dates are facts — they must survive verbatim. "Ask the model
+nicely to keep them" is not a guarantee. Storing them outside the draftable text
+and re-attaching them at assembly is the guarantee.
+
+**Promotion stacks (D-21):** Multiple role lines before shared bullets are
+captured as a multi-line `role_line` and each rendered bold — all titles in a
+promotion stack are preserved.
+
+**What this teaches:** Every structured document generation system has content
+that is factual/structural (preserve verbatim) and content that benefits from
+model judgment (rephrase/reweight). The boundary should be enforced
+architecturally, not left to prompt instructions. Prompt instructions drift;
+structural separation doesn't.
+
+**Interview framing:**
+"Job titles and dates in a CV are facts — they must appear exactly as written.
+Rather than instructing the model to preserve them, I split them out before the
+draft call and re-attach them verbatim at assembly. Same principle as static
+sections: deterministic where the content is a fact, model judgment only where
+it adds value."
+
+**Affects:** F-29, F-23, D-21, D-13, Phase 2 manifest contract, SPEC §5 Phase 6.
+
+---
+
+### D-33 — CVCM: candidate value creation model as optional context artifact
+
+**What was decided:**
+A markdown file (`candidate/value_creation_model.md`) authored and maintained
+by the candidate is consumed as optional context at Phases 1, 2, and 3. The
+system never generates or modifies it. The pipeline runs normally without it —
+no degradation to structural fit scoring. Its presence shifts tailoring from
+pure keyword optimisation toward articulation of authentic candidate value.
+
+**What the CVCM captures:**
+Recurring patterns that explain why organisations hire, trust, promote, and
+retain the candidate — independent of job titles, industries, or specific
+achievements. Problem-solving approach, leadership philosophy, stakeholder
+engagement style, value creation mechanisms, recurring career themes.
+
+**Phase integration:**
+- Phase 1: loaded alongside JDAnalysis; fit assessment gains a fourth dimension
+  (value creation alignment); `FitAssessment.value_alignment_notes` populated.
+- Phase 2: passed to drafting prompt; writers instructed to frame experience
+  through value creation patterns, not just keyword alignment.
+- Phase 3: passed to both writers and orchestrator. When draft quality scores
+  are within 1.0 (the existing tiebreak band, D-28), CVCM is used as secondary
+  selection factor — preference to draft better articulating authentic value.
+
+**Alternatives rejected:**
+- *System-generated CVCM* — generation from CVs + reflections is a separate
+  pipeline that doesn't exist yet. Generation is explicitly out of scope for
+  this build; noted as future work.
+- *CVCM as primary convergence signal* — keyword coverage and quality scores
+  remain primary. CVCM is a qualitative overlay and tiebreaker, not a
+  replacement for structured scoring.
+- *Required CVCM* — optional is correct. A strong CV corpus + rubric produces
+  good tailoring without it.
+
+**What this teaches:**
+Durable candidate artifacts (persist and improve across applications) are
+qualitatively different from run-specific inputs (JD, CV corpus). The
+architecture should distinguish them: run-specific inputs drive the structured
+scoring loop; durable artifacts provide qualitative context that improves
+output authenticity without changing convergence mechanics.
+
+**Interview framing:**
+"The system has two kinds of inputs: run-specific (the JD, the CV corpus) and
+durable candidate context (the value creation model). The keyword scoring and
+convergence signals use the run-specific inputs. The CVCM shifts the framing
+of what gets written — from keyword optimisation to articulation of authentic
+value. It's optional, but when present it's the difference between a CV that
+scores well and a CV that feels like you."

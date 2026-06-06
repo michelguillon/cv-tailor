@@ -51,6 +51,7 @@ def fit_payload(fit, jd) -> dict:
         "outcome": fit.outcome,
         "fit_score": round(fit.overall_fit_score, 3),
         "no_fit_reason": fit.no_fit_reason,
+        "value_alignment_notes": getattr(fit, "value_alignment_notes", None),
         "skills_transferable": list(fit.skills_transferable),
         "gaps": [{"requirement": g.requirement, "gap_type": g.gap_type, "severity": g.severity,
                   "addressable": g.addressable, "reason": g.reason} for g in fit.gaps],

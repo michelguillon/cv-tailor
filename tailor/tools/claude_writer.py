@@ -98,7 +98,7 @@ def _tool_input(resp, name):
 def write_section(
     section_id, section_text, jd, rubric, budget, *,
     version, direction=None, rejected_suggestions=(), is_final=False,
-    model, client=None,
+    model, client=None, cvcm=None,
 ) -> WriterDraft:
     """Draft one section as Claude. Returns a validated WriterDraft (pushback=None;
     pushback is a separate exchange). `version` mirrors the iteration number."""
@@ -106,7 +106,7 @@ def write_section(
     # message (D-31). Prefix is identical across all sections this iteration.
     system = [cached(_SYSTEM), cached(jd_rubric_block(jd, rubric))]
     user = section_user_prompt(section_id, section_text, budget,
-                               direction, rejected_suggestions, is_final)
+                               direction, rejected_suggestions, is_final, cvcm=cvcm)
     data = None
     for _ in range(2):
         resp = claude_complete(

@@ -233,6 +233,9 @@ class FitAssessment(Serializable):
     # section_id → best source section across all CVs; None when outcome == "no_fit"
     recommended_sections: dict[str, SectionRecommendation] | None = None
     no_fit_reason: str | None = None  # plain-English explanation when outcome == "no_fit"
+    # CVCM (§3.9/D-33): which aspects of the candidate's value-creation model are most
+    # relevant to this role. None when no CVCM file is present (pipeline runs normally).
+    value_alignment_notes: str | None = None
 
 
 # --------------------------------------------------------------------------- #

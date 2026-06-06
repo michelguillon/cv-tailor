@@ -100,7 +100,8 @@ def make_fakes(rec: dict):
         name = tc["name"]
         if name == "submit_fit_assessment":
             inp = {"outcome": "strong", "skills_transferable": ["delivery at scale"],
-                   "gaps": [], "no_fit_reason": None}
+                   "gaps": [], "no_fit_reason": None,
+                   "value_alignment_notes": "scaling technical orgs maps to this role"}
         elif name == "submit_draft":                     # claude_writer
             sid = re.search(r"SECTION TYPE: (\S+)", prompt).group(1)
             inp = {"text": f"{sid} alpha beta gamma", "items": []}
@@ -200,6 +201,23 @@ def test_end_to_end_produces_outputs_and_complete_log(run_demo):
     events = {e.get("event") for e in entries}
     assert {"jd_analysed", "loop_start", "iteration_scored", "output_written"} <= events
     assert entries[-1].get("type") == "run_complete"
+
+
+def test_cvcm_when_present_flows_to_fit_and_runs_clean(run_demo, monkeypatch):
+    """With a value model loaded, value_alignment_notes is populated and the run completes
+    normally; without one (the default), it stays None — the pipeline is unchanged (§3.9)."""
+    monkeypatch.setattr(run_mod, "load_cvcm", lambda *a, **k: "I build technical orgs from zero.")
+    summary, _ = run_demo(run_id="cvcm")
+    fit = json.loads((Path(summary["output_dir"]) / "phase1_fit_assessment.json").read_text("utf-8"))
+    assert fit["value_alignment_notes"] == "scaling technical orgs maps to this role"
+    assert summary["outcome"] == "strong"               # CVCM never changes the outcome
+
+
+def test_no_cvcm_leaves_value_alignment_none(run_demo, monkeypatch):
+    monkeypatch.setattr(run_mod, "load_cvcm", lambda *a, **k: None)   # deterministic: no value model
+    summary, _ = run_demo(run_id="nocvcm")
+    fit = json.loads((Path(summary["output_dir"]) / "phase1_fit_assessment.json").read_text("utf-8"))
+    assert fit["value_alignment_notes"] is None
 
 
 def test_verification_gate_surfaces_flags_in_summary_and_report(run_demo, monkeypatch):

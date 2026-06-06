@@ -73,6 +73,11 @@ unsupported claim, identity, sector, or keyword), AND no major issue remains —
 freezes the section, so hold the bar.
 - rubric_additions: up to two atomic requirements the JD clearly implies but that \
 aren't in the keyword list (or [] — these are validated against the JD afterward).
+
+TIEBREAK: when the two drafts are within ~1 point of each other AND a CANDIDATE VALUE \
+MODEL is provided below, use it to break the tie — prefer the draft that better \
+articulates the candidate's authentic value. The value model is framing only: it adds no \
+facts, never overrides truthfulness, and a fabricating draft still loses regardless.
 Call submit_decision exactly once."""
 
 _DECISION_TOOL = {
@@ -134,17 +139,20 @@ def _validate(data: dict) -> list[str]:
 
 def adjudicate(
     section_id, claude_draft, gpt_draft, rubric, jd, *,
-    source_text="", prior_score=None, is_final=False, model, client=None,
+    source_text="", cvcm=None, prior_score=None, is_final=False, model, client=None,
 ) -> tuple[OrchestratorDecision, str]:
     """Compare the two drafts. Returns (OrchestratorDecision, selected_text).
 
     `source_text` is the section both writers tailored from — the ground truth the
-    orchestrator checks each draft against to catch fabrication (Fix C). It must NOT
-    join the cache prefix (it varies per section), so it lives in the user message."""
+    orchestrator checks each draft against to catch fabrication (Fix C). `cvcm` (optional,
+    §3.9/D-33) is the value-model tiebreaker context. Neither joins the cache prefix (both
+    vary per section / run), so they live in the user message."""
     final_note = "\nThis is the FINAL pass — make your definitive selection; no further iterations." if is_final else ""
+    cvcm_block = f"CANDIDATE VALUE MODEL (tiebreaker context; framing only, not facts):\n{cvcm}\n\n" if cvcm else ""
     # Cached stable prefix (system + role/JD/rubric); the source + two drafts vary (D-31).
     system = [cached(_SYSTEM), cached(jd_rubric_block(jd, rubric))]
     user = (
+        cvcm_block +
         f"SOURCE SECTION (ground truth — every claim in a draft must trace to here):\n"
         f"{source_text or '(source unavailable — judge truthfulness conservatively)'}\n\n"
         f"--- CLAUDE DRAFT ---\n{claude_draft.text}\n\n"

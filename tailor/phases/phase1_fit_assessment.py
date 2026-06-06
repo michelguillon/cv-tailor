@@ -155,6 +155,12 @@ _FIT_TOOL = {
                 },
             },
             "no_fit_reason": {"type": ["string", "null"]},
+            "value_alignment_notes": {
+                "type": ["string", "null"],
+                "description": "if a CANDIDATE VALUE MODEL is provided: which of the candidate's "
+                               "recurring value-creation patterns matter most for this role's core "
+                               "business problem (framing insight only, adds no facts); else null",
+            },
         },
         "required": ["outcome", "skills_transferable", "gaps"],
     },
@@ -180,14 +186,26 @@ addressable gaps remain. "strong" = no blocking gaps.
 IMPORTANT: seniority is a SOFT signal — many JDs title roles "Senior"/"Principal" \
 while scoping them at director level. Do NOT raise a blocking seniority gap unless \
 the mismatch is severe and explicit. Mark gaps the candidate's content already \
-covers as addressable. Call submit_fit_assessment exactly once."""
+covers as addressable.
+
+If a CANDIDATE VALUE MODEL is provided, add a fourth lens — value-creation alignment: \
+which of the candidate's recurring value patterns are most relevant to the core business \
+problem this employer is trying to solve. Return it in value_alignment_notes. It is a \
+framing insight only — it adds no facts and never changes the outcome or the gap typing. \
+If no value model is provided, set value_alignment_notes to null. Call \
+submit_fit_assessment exactly once."""
 
 
-def _build_prompt(jd, rubric, diagnostics, recommended) -> str:
+def _build_prompt(jd, rubric, diagnostics, recommended, cvcm=None) -> str:
     mix_lines = []
     for sid, r in sorted(recommended.items(), key=lambda kv: kv[0]):
         mix_lines.append(f"  - {sid}: from {r.source_cv} (section coverage {r.keyword_coverage})")
+    cvcm_block = (
+        f"CANDIDATE VALUE MODEL (the candidate's recurring value-creation patterns — for the "
+        f"value-alignment lens; framing only, not a fact source):\n{cvcm}\n\n" if cvcm else ""
+    )
     return (
+        cvcm_block +
         f"ROLE: {jd.role_title}  (inferred seniority: {jd.seniority_level})\n"
         f"COMPANY CONTEXT: {jd.company_context}\n\n"
         f"JD KEY REQUIREMENTS:\n" + "\n".join(f"  - {r}" for r in jd.key_requirements) + "\n\n"
@@ -226,11 +244,13 @@ def _validate_fit(data: dict) -> list[str]:
     return problems
 
 
-def assess_fit(jd, rubric, *, model: str, config: dict, client=None, sections: list[dict] | None = None):
-    """Produce a validated FitAssessment. Returns (FitAssessment, usage)."""
+def assess_fit(jd, rubric, *, model: str, config: dict, client=None,
+               sections: list[dict] | None = None, cvcm: str | None = None):
+    """Produce a validated FitAssessment. Returns (FitAssessment, usage). `cvcm` (optional,
+    §3.9/D-33) adds the value-creation-alignment lens and populates value_alignment_notes."""
     sections = sections if sections is not None else all_sections(config)
     recommended, diagnostics = build_composition(sections, rubric, config["static_sections"])
-    prompt = _build_prompt(jd, rubric, diagnostics, recommended)
+    prompt = _build_prompt(jd, rubric, diagnostics, recommended, cvcm=cvcm)
 
     last_problems, data, usage = [], None, None
     for _ in range(2):
@@ -269,6 +289,8 @@ def assess_fit(jd, rubric, *, model: str, config: dict, client=None, sections: l
         gaps=gaps,
         recommended_sections=(None if outcome == "no_fit" else recommended),
         no_fit_reason=data.get("no_fit_reason"),
+        value_alignment_notes=(str(data["value_alignment_notes"]).strip()
+                               if cvcm and data.get("value_alignment_notes") else None),
     )
     return fit, usage
 
@@ -295,6 +317,8 @@ def render_fit_hitl(fit: FitAssessment, jd) -> str:
         label = sid if len(sid) <= 44 else sid[:41] + "…"
         cov = "static" if r.reason.startswith("static") else f"{r.keyword_coverage:.0%}"
         lines.append(f"    {label:46} → {r.source_cv:18} {cov:>6}")
+    if fit.value_alignment_notes:
+        lines += ["", "  Value alignment: " + fit.value_alignment_notes]
     if fit.skills_transferable:
         lines += ["", "  Transferable: " + ", ".join(fit.skills_transferable)]
     if fit.gaps:

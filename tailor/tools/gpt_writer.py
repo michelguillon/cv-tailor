@@ -105,14 +105,14 @@ def _parse(resp):
 def write_section(
     section_id, section_text, jd, rubric, budget, *,
     version, direction=None, rejected_suggestions=(), is_final=False,
-    model="gpt-4o-mini", client=None,
+    model="gpt-4o-mini", client=None, cvcm=None,
 ) -> WriterDraft:
     """Draft one section as GPT. Returns a validated WriterDraft (pushback=None)."""
     # Stable system (instructions + role/JD/rubric) first so OpenAI auto-caches the
     # prefix across sections; variable section in the user message (D-31).
     system = f"{_SYSTEM}\n\n{jd_rubric_block(jd, rubric)}"
     user = section_user_prompt(section_id, section_text, budget,
-                               direction, rejected_suggestions, is_final)
+                               direction, rejected_suggestions, is_final, cvcm=cvcm)
     data = None
     for _ in range(2):
         resp = gpt_complete(

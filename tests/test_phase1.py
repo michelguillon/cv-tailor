@@ -145,6 +145,21 @@ def test_assess_fit_retries_then_succeeds():
     assert fit.outcome == "partial"
 
 
+def test_cvcm_populates_value_alignment_notes_only_when_present():
+    """value_alignment_notes is set from the model's output ONLY when a CVCM is supplied;
+    without one it's None even if the model returns a value (§3.9/D-33)."""
+    with_note = {**PARTIAL, "value_alignment_notes": "scaling-from-zero is the core pattern here"}
+
+    fit, _ = assess_fit(jd(), rubric(["pre-sales"]), model="m", config={"static_sections": STATIC},
+                        client=fake_anthropic(with_note), sections=corpus(),
+                        cvcm="I repeatedly build teams from zero.")
+    assert fit.value_alignment_notes == "scaling-from-zero is the core pattern here"
+
+    fit2, _ = assess_fit(jd(), rubric(["pre-sales"]), model="m", config={"static_sections": STATIC},
+                         client=fake_anthropic(with_note), sections=corpus())   # no cvcm
+    assert fit2.value_alignment_notes is None             # dropped without a value model
+
+
 def test_assess_fit_raises_on_persistent_invalid():
     bad = {"outcome": "maybe", "skills_transferable": [], "gaps": []}  # bad outcome
     with pytest.raises(FitAssessmentError):

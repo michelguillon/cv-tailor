@@ -67,6 +67,12 @@ docker-compose.prod.yml up -d --build` (SPEC §7.5, F-32).
   (`tools/verifier.py`) that flags any unsupported claim into the review, the report's
   Grounding tab, and the CLI before anything ships. The raw source is persisted per section
   at Phase 2 (`sections/<id>_source.md`) as the ground truth.
+- **CVCM is framing-only (§3.9/D-33/F-36).** The optional `candidate/value_creation_model.md`
+  (gitignored, auto-loaded, `tailor/candidate.py`) is candidate-authored context threaded into
+  Phases 1/2/3. It reorders/reframes the candidate's REAL content — it is NEVER a fact source, and
+  a claim drawn from it but absent from the CV is still flagged by the verifier. The framing-only
+  guardrail (`CVCM_FRAMING_NOTE`) must stay forceful: a gentle version leaked the model's wording
+  straight into the CV (F-36).
 - **HITL is preview-before-apply.** Show what will change, then ask. Never apply
   silently.
 - **Config-driven, not code-branching.** Demo vs full and all thresholds come
