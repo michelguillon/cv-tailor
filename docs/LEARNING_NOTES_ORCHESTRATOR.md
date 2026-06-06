@@ -412,6 +412,102 @@ what changed (if anything).*
 
 ---
 
+### F-37 — Robustness sweep + CVCM A/B (8 demo runs, 4 JDs × {no-CVCM, CVCM}, 3 iters): the trust gate holds under variety; CVCM lifts fit/coherence without leaking or weakening the gate; drift scales with iteration count
+
+**What was run:** the deferred robustness sweep, structured as a controlled A/B. 4 JDs
+(`jd.txt` Airwallex / `jd2_jpmc` Fusion-AI / `jd3_ai_consultancy` Principal Solutions Director /
+`jd4_figma` SC leadership) × 2 conditions — **Test A** (CVCM file moved aside, `load_cvcm()→None`)
+and **Test B** (CVCM restored). Demo (Haiku), `--max-iterations 3 --yes`. 8 runs, **$2.60 total**
+(~$0.33/run at 3 iters; matches F-30's $0.33 figure, not F-26's 1-iter $0.10). Test B doubles as
+the current-orchestrator robustness sweep (CVCM is auto-loaded in normal operation).
+
+| JD | A fit | B fit | A conv | B conv | A flags | B flags |
+|----|-------|-------|--------|--------|---------|---------|
+| Airwallex      | 0.579 | **0.684** | conv@3 | conv@2 | 6 | 5 |
+| JPMC (Fusion)  | 0.529 | **0.647** | conv@2 | maxiter@3 | 1 | **8** |
+| AI consultancy | 0.167 | 0.158 | maxiter@3 | conv@2 | 5 | 3 |
+| Figma          | 0.474 | 0.474 | conv@2 | conv@2 | 6 | 3 |
+| **mean / Σ**   | **0.437** | **0.491** | — | — | **Σ18** | **Σ19** |
+
+**Trust findings (the P0 question — does anything fabricated slip through?):**
+
+1. **The gate is high-precision, occasionally coarse-span — not noisy.** Across 37 flags, the
+   ones inspected were *genuine unsupported additions*, not paraphrase false-positives: the
+   writers inject the JD's own phrasing under keyword pressure — "4 concurrent **AI-driven**
+   product initiatives" (AI-consultancy A, mirroring the JD's "3–4 concurrent AI projects"),
+   "collaborating with **Data Scientists and Engineers**" / "architect for **scale, reliability**"
+   (JPMC B, JD verbatim), "**SaaS**" (Figma). All real Goodhart drift; all caught. The one
+   imprecision is *span*: the verifier flagged Microsoft's "contributing to **$5M** in secured
+   revenue through enterprise sales cycles, including technical discovery and PoCs" as unsupported
+   — but `$5M in secured revenue` **is** in the source; only the appended clause is invented. The
+   flag is correct (the clause is fabricated) but the span swallows a real metric. Minor; the human
+   still sees the right section. Not worth narrowing now.
+
+2. **Under `--yes`, flagged claims SHIP into `cv_final.md` — the gate surfaces, it does not strip.**
+   This is the honest trust boundary and it is by design (D-18 preview-before-apply; `--yes`/AutoHITL
+   is the non-interactive escape). So the auto-run CV *contains* the flagged drift, flagged in the
+   Grounding tab + Phase-4 review + CLI warning. The invariant is **"nothing ships *unflagged*"**, not
+   "the draft is fabrication-free." An interactive user strips them at the Phase-4 gate; an `--yes`
+   user must read the Grounding tab before sending. **Deliberately NOT auto-reverting** flagged spans
+   to source: the coarse-span case ($5M) shows auto-strip would delete real content. Documented, not
+   "fixed" — auto-removal is the wrong call.
+
+3. **Drift scales with iteration count.** 18–19 flags/4-runs at 3 iters vs the historical ~1 flag at
+   1 iter (F-35). Each refinement pass is another chance for a fluent writer to reach for a JD phrase.
+   The `TRUTHFULNESS_RULES` (F-34) + verifier (F-35) *catch* the drift but don't *prevent origination*
+   — the deferred deeper Goodhart fix (stop `keyword_coverage` itself rewarding unsupported keywords,
+   F-34) is now evidenced as worth revisiting. **Not done here:** the gate currently backstops it and
+   the fix is a scoring-model change with its own blast radius — a decision for the user, logged below.
+
+**CVCM A/B findings (Test A vs B):**
+
+4. **CVCM lifts fit score, consistently where the candidate's pattern genuinely maps** (+0.105
+   Airwallex, +0.118 JPMC; flat on AI-consultancy/Figma → mean 0.437→0.491). The lift is the
+   Phase-1 `value_alignment_notes` doing real work: each one ties the candidate's *recurring
+   cross-domain pattern* to the JD's core problem **and names the gap out loud** — JPMC's: "may
+   underweight the need for deep financial services and cloud-native architecture expertise that
+   J.P. Morgan's production environment demands." Honest, not flattery. This is the standout value,
+   now confirmed across 4 JDs, not one (F-36 saw it on Airwallex only).
+
+5. **The 5 target themes surface — mostly in Skills/Profile framing, not new claims.** B reliably
+   reframes real content toward *building operating models* ("Designed go-to-market operating
+   models"), *translating technical capability into business value* ("Translated complex technical
+   capabilities into customer-facing solution strategies"), *repeatable systems* ("repeatable
+   processes and delivery frameworks", "enable repeatable success"), and *solving ambiguity*
+   ("execution clarity"). **Weakest-surfaced: partner-led growth** — A actually kept "partner-centric
+   growth strategies" more explicitly than B. Coherence: B profiles are tighter and organised around
+   a value thesis vs A's achievement list (clearest on Airwallex); keyword-stuffing improves in
+   *format* (JPMC Skills: A's "·"-separated term-salad → B's narrative bullets).
+
+6. **The format win has a fabrication tail — and it's the most important CVCM finding.** CVCM pushes
+   toward a coherent *capability narrative*; where the candidate genuinely **has** the capability that
+   reframes real content (passes the gate). Where the candidate **lacks** it, the same pressure
+   manufactures it: JPMC B's narrative Skills assert "Architected cloud-based systems for scale,
+   reliability, and operational controls" and "collaborating with Data Scientists and Engineers" —
+   exactly the JD requirement the fit assessment flagged as the gap — driving flags 1→8. (Partly an
+   iteration confound: A/JPMC converged at 2, B/JPMC ran 3.) Net per-JD CVCM mostly *reduced* flags
+   (6→5, 5→3, 6→3) **except** JPMC, where coherence-pressure met a real capability gap. **The gate
+   caught every case** — including the one borderline CVCM-echo ("Translated technical capabilities
+   into client commercial objectives").
+
+7. **No verbatim CVCM leakage in any of the 4 B CVs** (grepped the telltales: "repeatable business
+   outcomes", "clarity where ambiguity", "first-principles", "successful first", "after my direct
+   involvement", "boundary between technical and commercial" — all clean). The forceful
+   `CVCM_FRAMING_NOTE` rewrite (F-36) holds across JDs: the value model reframes, it does not get
+   copied. CVCM does **not** weaken the trust gate.
+
+**Verdict:** the trust architecture (F-34/F-35) is robust across JD variety and CVCM on/off — it
+catches genuine drift and never lets CVCM wording leak. CVCM earns its place on *fit + honest
+gap-naming + narrative coherence*. **No code change made:** the sweep validates the existing design;
+the two judgment calls it surfaces — (a) the deferred `keyword_coverage` Goodhart fix, (b) whether
+`--yes` should refuse-to-finish / hard-warn when flags > 0 — are design decisions for the user, not
+defects to silently patch. **Affects D-04/D-05/D-18/D-33; builds on F-34/F-35/F-36.**
+**Caveats (honest):** one run per cell (directional, not statistical); demo/Haiku only (Sonnet's
+calibration, F-30, would likely drift less and converge tighter); 3-iter inflates the flag counts
+vs a 1-iter demo; JPMC's A-vs-B flag delta is confounded by the extra iteration B ran.
+
+---
+
 ### F-36 — CVCM built (§3.9/D-33): Phase-1 value alignment is the win; the writer integration leaked the model's wording into the CV until the guardrail was made forceful
 
 **What was built:** the optional Candidate Value Creation Model (`candidate/value_creation_model.md`,
