@@ -50,7 +50,8 @@ export interface CVSection {
 }
 
 export interface CVItem {
-  filename: string;
+  filename: string;        // real corpus key (used for delete); not shown to the user
+  display_name: string;    // company-name-free label shown in the UI (F-41)
   cv_type: string;
   target_role: string;
   seniority: string;

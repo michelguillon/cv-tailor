@@ -38,6 +38,20 @@ chroma:
   metric: "cosine"
   persist_dir: "data/chroma"
 
+# UI/report DISPLAY labels for CV corpus variants (F-41). The variant filenames embed
+# the company a CV was tailored for (Airwallex, JPMC, Figma, Mistral); those target-company
+# names must not surface to anyone viewing the UI. This is a display mapping only — the
+# stored filename (the ChromaDB key, used for retrieval + delete) is unchanged. Keyed by
+# filename stem (with/without .docx tolerated); unmapped CVs fall back to their stem.
+cv_display_names:
+  CV_Michel_Guillon_2026_AI: "CV_AI_Leadership"
+  CV_Michel_Guillon_2026_Adtech_Consulting: "CV_Solutions_Consulting_Leadership"
+  CV_Michel_Guillon_2026_Adtech_Product: "CV_Product_Leadership"
+  CV_Michel_Guillon_2026_Airwallex: "Fintech CV_Solutions_Leadership"
+  CV_Michel_Guillon_2026_Figma: "CV_International_SC_Leadership"
+  CV_Michel_Guillon_2026_JPMC: "CV_Enterprise_AI_Platform"
+  CV_Michel_Guillon_2026_Mistral: "CV_AI_Deployment_&_Architecture"
+
 # Retrieval / fit-assessment behaviour (Phase 1). PROVISIONAL — to be confirmed
 # when retrieval is built/tested (Step 3) against real JDs.
 retrieval:

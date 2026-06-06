@@ -16,7 +16,8 @@ import yaml
 
 from tailor.models import SectionBudget
 
-__all__ = ["load_config", "load_budgets", "RunConfig", "resolve_run_config", "ConfigError"]
+__all__ = ["load_config", "load_budgets", "cv_display_name", "RunConfig",
+           "resolve_run_config", "ConfigError"]
 
 
 class ConfigError(RuntimeError):
@@ -28,6 +29,31 @@ BUDGETS_PATH = Path("budgets.yaml")
 
 def load_config(path: str | Path = CONFIG_PATH) -> dict:
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+
+def _stem(filename: str) -> str:
+    name = Path(filename).name
+    return name[:-5] if name.lower().endswith(".docx") else name
+
+
+def cv_display_name(config: dict, filename: str | None) -> str:
+    """UI/report DISPLAY label for a corpus CV variant (F-41), company-name-free.
+
+    Maps a filename (with/without path or .docx) via ``config['cv_display_names']``;
+    falls back to the filename stem when unmapped. Display only — never the stored
+    ChromaDB key (retrieval/delete still use the real filename)."""
+    if not filename:
+        return filename or ""
+    stem = _stem(filename)
+    mapping = (config or {}).get("cv_display_names") or {}
+    for k, v in mapping.items():
+        ks = _stem(k)
+        # match the full filename ("CV_..._Airwallex") OR the _short_cv display form
+        # ("Airwallex", phase1._short_cv strips the personal prefix) without this module
+        # needing to know that prefix — a suffix match covers both.
+        if ks == stem or ks.endswith("_" + stem):
+            return v
+    return stem
 
 
 def load_budgets(path: str | Path = BUDGETS_PATH) -> dict[str, SectionBudget]:

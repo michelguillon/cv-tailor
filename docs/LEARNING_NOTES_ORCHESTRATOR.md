@@ -412,6 +412,37 @@ what changed (if anything).*
 
 ---
 
+### F-41 — CV variant labels: a config-driven DISPLAY mapping hides target-company names in the UI (the filename stays the real key)
+
+**Why:** the corpus CV variant filenames embed the company each was tailored for
+(`CV_…_Airwallex`, `…_JPMC`, `…_Figma`, `…_Mistral`), and those surfaced in the UI — the Corpus
+inventory (filename) and the fit panel's section mix (`source_cv`). Showing a recruiter which
+companies the candidate built target-CVs for is a leak. (Note: the candidate's *real employers* in
+the CV body — Microsoft, Xandr, Utiq — are legitimate and untouched; only the *tailoring-target*
+company in the variant label is hidden.)
+
+**The fix — display mapping only, in `config.yaml` (config-driven, D-08).** A new `cv_display_names:`
+block maps each variant to a neutral capability label (`CV_AI_Leadership`,
+`Fintech CV_Solutions_Leadership`, …). `tailor.config.cv_display_name(config, filename)` resolves it;
+the stored filename — the ChromaDB key used for retrieval *and* delete — is unchanged, so this is
+presentation only, no re-ingest. Applied at the three display boundaries: the corpus inventory
+(API adds `display_name` alongside the real `filename`; the frontend shows the label, deletes by
+filename), the web fit panel (`fit_payload` maps `source_cv`), and the CLI fit render.
+
+**The subtlety that shaped the helper:** `source_cv` is not the raw filename — phase1's `_short_cv`
+already strips the personal prefix, leaving exactly the company token (`Airwallex`). So the mapping
+had to resolve **both** the full filename (`CV_…_Airwallex[.docx]`, from the inventory) and the short
+form (`Airwallex`, from the fit recommendation) — done with a suffix match (`key.endswith("_" + x)`)
+so `config.py` needn't know the personal prefix, and without touching phase1's logic or any schema
+(no test churn). Unmapped CVs fall back to their stem (never invent). A guard test asserts no shipped
+label contains a banned company token.
+
+**Verified:** live `/api/corpus/cvs` returns all 7 mapped labels (0 company names); 256 tests green
+(+ `test_config.py`); frontend builds. **Affects config.yaml/§3.7, the corpus API, the fit panel +
+CLI render. Display-only — corpus data, retrieval, and delete keys are unchanged.**
+
+---
+
 ### F-40 — Report-trust bugs found by reading a real report: a tool-XML leak in the fit text, an empty reasoning group, and a non-self-describing run dir (two "bugs" were a stale-regen artifact)
 
 **Found by the user reading the F-39 Fit-tab report on a real run.** Four issues reported; triage

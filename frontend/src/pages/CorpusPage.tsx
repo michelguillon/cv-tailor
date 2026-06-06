@@ -30,8 +30,8 @@ export function CorpusPage() {
     void load();
   }, []);
 
-  async function onDelete(filename: string) {
-    if (!window.confirm(`Remove ${filename} from the corpus? This deletes its sections from ChromaDB.`))
+  async function onDelete(filename: string, label: string) {
+    if (!window.confirm(`Remove ${label} from the corpus? This deletes its sections from ChromaDB.`))
       return;
     try {
       await api.deleteCV(filename);
@@ -82,7 +82,7 @@ export function CorpusPage() {
             <Card key={cv.filename}>
               <CardHeader className="flex-row items-center justify-between py-4">
                 <div className="min-w-0">
-                  <CardTitle className="truncate text-base">{cv.filename}</CardTitle>
+                  <CardTitle className="truncate text-base">{cv.display_name}</CardTitle>
                   <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                     <Badge variant={cv.cv_type === "generic" ? "secondary" : "default"}>
                       {cv.cv_type}
@@ -103,7 +103,7 @@ export function CorpusPage() {
                     {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                     Sections
                   </Button>
-                  <Button variant="destructive" size="icon" onClick={() => void onDelete(cv.filename)}>
+                  <Button variant="destructive" size="icon" onClick={() => void onDelete(cv.filename, cv.display_name)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>

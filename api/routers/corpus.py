@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 
 from corpus.ingest import get_collection, load_config
 from corpus.retrieval import all_sections, collection_stats
+from tailor.config import cv_display_name
 
 router = APIRouter(prefix="/api/corpus", tags=["corpus"])
 
@@ -56,7 +57,8 @@ def list_cvs() -> list[dict]:
         ordered = sorted(ss, key=lambda s: s.get("position", 0))
         first = ordered[0]
         out.append({
-            "filename": filename,
+            "filename": filename,                              # real key (delete/retrieval)
+            "display_name": cv_display_name(config, filename),  # company-name-free UI label (F-41)
             "cv_type": first.get("cv_type"),
             "target_role": first.get("target_role"),
             "seniority": first.get("seniority"),

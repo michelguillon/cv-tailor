@@ -21,6 +21,7 @@ import json
 from collections import defaultdict
 
 from corpus.retrieval import all_sections
+from tailor.config import cv_display_name, load_config
 from tailor.helpers import claude_complete, strip_tool_artifacts
 from tailor.models import FitAssessment, FitGap, SectionRecommendation
 from tailor.tools.scorer import coverage_report, keyword_coverage, normalise, union_coverage
@@ -315,10 +316,12 @@ def render_fit_hitl(fit: FitAssessment, jd) -> str:
         return "\n".join(lines)
 
     lines.append("  Recommended section mix:")
+    cfg = load_config()
     for sid, r in sorted(fit.recommended_sections.items()):
         label = sid if len(sid) <= 44 else sid[:41] + "…"
         cov = "static" if r.reason.startswith("static") else f"{r.keyword_coverage:.0%}"
-        lines.append(f"    {label:46} → {r.source_cv:18} {cov:>6}")
+        src = cv_display_name(cfg, r.source_cv)        # company-name-free label (F-41)
+        lines.append(f"    {label:46} → {src:28.28} {cov:>6}")
     if fit.value_alignment_notes:
         lines += ["", "  Value alignment: " + fit.value_alignment_notes]
     if fit.skills_transferable:

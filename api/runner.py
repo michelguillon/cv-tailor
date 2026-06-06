@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import threading
 
-from tailor.config import load_config, resolve_run_config
+from tailor.config import cv_display_name, load_config, resolve_run_config
 from tailor.phases import phase1_fit_assessment, phase4_hitl
 from tailor.run import AutoHITL, PipelineStop, run_pipeline
 
@@ -39,8 +39,10 @@ def fit_payload(fit, jd) -> dict:
     """The fit-assessment checkpoint as a dict (FitAssessment has dataclass fields)."""
     mix = None
     if fit.recommended_sections:
+        cfg = load_config()
         mix = [
-            {"section_id": sid, "source_cv": r.source_cv,
+            # source_cv is shown to the user → display the company-name-free label (F-41)
+            {"section_id": sid, "source_cv": cv_display_name(cfg, r.source_cv),
              "coverage": round(r.keyword_coverage, 3), "reason": r.reason,
              "static": r.reason.startswith("static")}
             for sid, r in sorted(fit.recommended_sections.items())
