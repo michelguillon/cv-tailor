@@ -42,6 +42,16 @@
   .entry .it { color: var(--muted); font-size: 12px; }
   .ok { color: var(--add); }
   .flag { color: var(--del); }
+  .fit-why { background:#fff; border:1px solid var(--line); border-left:3px solid var(--accent);
+             border-radius:8px; padding:14px 16px; margin:12px 0; }
+  .fit-why h3 { margin:0 0 8px; font-size:14px; color:var(--accent); }
+  .fit-why p { margin:0; line-height:1.6; }
+  .fit-cols { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0; }
+  .fit-cols .card { flex:1 1 240px; margin:0; }
+  .fit-cols h3 { font-size:13px; }
+  .fit-cols ul { margin:0; padding-left:18px; font-size:13px; }
+  .gap-major { color:var(--del); }
+  .gap-min { color:var(--muted); }
 </style>
 </head>
 <body>
@@ -51,14 +61,38 @@
     run {{ run_id }} · rubric v{{ rubric.version }}</div>
 </header>
 <nav>
-  <button class="tab-btn active" data-tab="cv">CV</button>
+  <button class="tab-btn active" data-tab="fit">Fit</button>
+  <button class="tab-btn" data-tab="cv">CV</button>
   <button class="tab-btn" data-tab="grounding">Grounding{% if grounding.total %} ⚠{% endif %}</button>
   <button class="tab-btn" data-tab="changes">Changes</button>
   <button class="tab-btn" data-tab="scores">Scores</button>
   <button class="tab-btn" data-tab="reasoning">Reasoning</button>
 </nav>
 <main>
-  <section id="cv" class="tab active cv">{{ cv_html|safe }}</section>
+  <section id="fit" class="tab active">
+    <div class="fit-why">
+      <h3>Role fit — {{ outcome }} ({{ '%.0f'|format(fit_score * 100) }}%)</h3>
+      {% if value_alignment_notes %}<p>{{ value_alignment_notes }}</p>
+      {% elif no_fit_reason %}<p>{{ no_fit_reason }}</p>
+      {% else %}<p class="vers">No value-alignment summary for this run (add a candidate value model to enable it).</p>{% endif %}
+    </div>
+    <div class="fit-cols">
+      {% if skills_transferable %}
+      <div class="card">
+        <h3 class="ok">Strong alignment</h3>
+        <ul>{% for s in skills_transferable %}<li>{{ s }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+      {% if gaps %}
+      <div class="card">
+        <h3 class="flag">Potential gaps</h3>
+        <ul>{% for g in gaps %}<li class="{{ 'gap-major' if g.severity in ['major','blocking'] else 'gap-min' }}">{{ g.requirement }} <span class="vers">— {{ g.gap_type }} / {{ g.severity }} / {{ 'addressable' if g.addressable else 'not addressable' }}</span></li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section id="cv" class="tab cv">{{ cv_html|safe }}</section>
 
   <section id="grounding" class="tab">
     {% if grounding.total == 0 %}

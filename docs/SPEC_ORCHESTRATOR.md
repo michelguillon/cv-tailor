@@ -1267,6 +1267,8 @@ Deterministic; unit-tested against a fixture .docx.
 
 Four-tab interface:
 
+**Fit tab** (F-39, default-active) — role-fit summary: the CVCM value-alignment narrative ("why am I a fit", D-33), transferable strengths, and gaps. Visible after any run including `--yes`/auto (which never pauses at the Phase-1 checkpoint). Falls back to the no-fit reason when there's no CVCM.
+
 **CV tab** — clean, printable. No reasoning, no annotations. This is the submittable artefact.
 
 **Changes tab** — word-level diff between the starting CV and the final CV. Additions in green, removals in red. Shows specifically what changed across all iterations combined.

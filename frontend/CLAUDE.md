@@ -21,7 +21,10 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   nginx (prod) is required or SSE buffers (SPEC §7.5).
 - **Conversational HITL (UI Step 4, F-31):** a `hitl_ready` event drives
   `components/HitlPanel.tsx` (one inline panel per checkpoint — fit / section review /
-  formatting); the human's decision is `api.submitHitl(runId, {action, …})`. The panel
+  formatting); the human's decision is `api.submitHitl(runId, {action, …})`. The fit
+  panel renders a **"Why you're a fit"** callout from `payload.value_alignment_notes`
+  (CVCM, F-39) when present; the same summary persists in the report's **Fit tab** for
+  `--yes`/auto runs that never pause here (the OutputPanel iframe shows it). The panel
   is hidden on submit and re-driven by the next SSE event (the review loop re-publishes
   `hitl_ready` with a `payload.preview` for confirm-apply). `hitl_interpreted` /
   `hitl_applied` / `hitl_error` are surfaced as a small log. New event types must be

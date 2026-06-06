@@ -39,10 +39,11 @@ can dip as easy sections freeze — absorbed by the 0.5 threshold.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from tailor.models import IterationScore, ScoringRubric, SectionScore
+from tailor.models import IterationScore, ScoringRubric, SectionScore, WriterDraft
 from tailor.tools import claude_writer, gpt_writer, orchestrator_tool
+from tailor.tools.gpt_writer import WriterError
 from tailor.tools.rubric import validate_rubric_additions
 from tailor.tools.scorer import keyword_coverage, union_coverage
 
@@ -123,6 +124,20 @@ def _write_writer_draft(ctx, draft):
     path.write_text(draft.text.rstrip() + "\n", encoding="utf-8")
 
 
+def _safe_write(write_fn, sid: str, writer: str, *, audit, iteration: int):
+    """Run a writer, returning its draft or None on ANY failure (F-39). A transient
+    provider/parse failure must not abort the whole run — the loop degrades to the
+    surviving writer. The failure is logged loudly (a systemic bug shows up as
+    writer_failed on every section, so it isn't silently swallowed)."""
+    try:
+        return write_fn()
+    except Exception as exc:   # noqa: BLE001 — resilience is the point; detail goes to the audit log
+        audit.log_event("refinement", "writer_failed",
+                        f"{sid}: {writer}_writer raised {type(exc).__name__}: {exc}",
+                        iteration=iteration)
+        return None
+
+
 def refine(
     manifest: dict,
     jd,
@@ -183,15 +198,36 @@ def refine(
             current = _current_text(ctx, manifest, sid)
             direction = mem.directions.get(sid)
 
-            # 1. dual write
-            cd = claude_writer.write_section(
+            # 1. dual write — each writer is wrapped so a transient provider failure
+            #    DEGRADES to the surviving writer instead of aborting the whole run (F-39).
+            cd = _safe_write(lambda: claude_writer.write_section(
                 sid, current, jd, rubric, budget, version=n, direction=direction,
                 rejected_suggestions=mem.rejected_suggestions, is_final=is_final,
-                model=model, client=claude_client, cvcm=cvcm)
-            gd = gpt_writer.write_section(
+                model=model, client=claude_client, cvcm=cvcm), sid, "claude", audit=audit, iteration=n)
+            gd = _safe_write(lambda: gpt_writer.write_section(
                 sid, current, jd, rubric, budget, version=n, direction=direction,
                 rejected_suggestions=mem.rejected_suggestions, is_final=is_final,
-                model=gpt_model, client=openai_client, cvcm=cvcm)
+                model=gpt_model, client=openai_client, cvcm=cvcm), sid, "gpt", audit=audit, iteration=n)
+
+            # If exactly one writer failed, stand in the survivor's text for the failed one so
+            # the orchestrator still scores/directs the section; the selected text is forced
+            # back to the survivor verbatim below (no synthesis drift). Both failing is a real
+            # outage for this section — surface it (R-09), don't ship a blank section.
+            degraded = None
+            if cd is None and gd is None:
+                raise WriterError(
+                    f"both writers failed for {sid} at iteration {n} — cannot draft this section")
+            if cd is None or gd is None:
+                survivor = cd or gd
+                degraded = "gpt" if gd is None else "claude"
+                standin = WriterDraft(writer=degraded, section_id=sid, text=survivor.text,
+                                      version=n, items=[])
+                cd, gd = (survivor, standin) if degraded == "gpt" else (standin, survivor)
+                audit.log_event("refinement", "writer_degraded",
+                                f"{sid}: {degraded}_writer failed; proceeding with "
+                                f"{survivor.writer}-only (degraded confidence)", iteration=n)
+                emit("writer_degraded", section_id=sid, iteration=n, failed=degraded,
+                     survivor=survivor.writer)
             _write_writer_draft(ctx, cd)
             _write_writer_draft(ctx, gd)
 
@@ -202,6 +238,13 @@ def refine(
             decision, selected_text = orchestrator_tool.adjudicate(
                 sid, cd, gd, rubric, jd, source_text=_raw_source(ctx, sid, current),
                 cvcm=cvcm, prior_score=prior, is_final=is_final, model=model, client=claude_client)
+            if degraded:
+                # Only one writer really drafted — use its text verbatim (the orchestrator
+                # compared it against a copy of itself, so its scores/direction are valid, but
+                # we don't want a synthesised reword of a single source). Label honestly.
+                survivor_base = "gpt" if degraded == "claude" else "claude"
+                selected_text = (gd if degraded == "claude" else cd).text
+                decision = replace(decision, selected_base=survivor_base)
             ctx.write_section(sid, selected_text, version=n)
             manifest[sid]["version"] = n
             manifest[sid]["word_count"] = len(selected_text.split())
@@ -212,11 +255,15 @@ def refine(
                             iteration=n, keyword_score=decision.keyword_coverage,
                             critique_score=_selected_quality(decision), rubric_version=rubric.version)
 
-            # 3. pushback (one exchange; skip on the final pass)
+            # 3. pushback (one exchange; skip on the final pass). Skip the FAILED writer's
+            #    pushback when degraded — it would just fail again (F-39); the survivor's
+            #    pushback still runs so the direction can still be revised.
             new_direction = decision.direction
             if not is_final:
-                cp = claude_writer.pushback(sid, decision, cd, jd, model=model, client=claude_client)
-                gp = gpt_writer.pushback(sid, decision, gd, jd, model=gpt_model, client=openai_client)
+                cp = (claude_writer.pushback(sid, decision, cd, jd, model=model, client=claude_client)
+                      if degraded != "claude" else None)
+                gp = (gpt_writer.pushback(sid, decision, gd, jd, model=gpt_model, client=openai_client)
+                      if degraded != "gpt" else None)
                 if cp or gp:
                     new_direction = orchestrator_tool.read_pushbacks(
                         sid, decision, cp, gp, jd, model=model, client=claude_client)

@@ -41,6 +41,13 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   draft every active section independently; `orchestrator_tool.adjudicate` scores
   both, selects/synthesises, and sets `direction`. Selected text → `<id>_v<n>.md`;
   per-writer drafts → `<id>_<writer>_v<n>.md` for the Changes tab.
+- **Graceful degradation on a writer failure (F-39):** each writer call goes through
+  `_safe_write` (→ draft or None on any exception, logged `writer_failed`). If exactly
+  one writer fails, the loop degrades to the survivor — a stand-in (survivor text, empty
+  items) keeps `adjudicate` scoring/directing, then the selected text is forced to the
+  survivor *verbatim* (no synth reword), provenance set honestly, the failed writer's
+  pushback skipped, and `writer_degraded` emitted. Both failing → `WriterError` (surface,
+  never ship blank). A transient GPT timeout must NOT abort the run.
 - **One pushback exchange** (D-29): both writers may object to the direction once;
   the orchestrator holds or revises it (skipped on the final pass). All reasoning
   is logged (D-06), never fed back into context.
@@ -77,8 +84,12 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
 - **Phase 6:** checkpoint-driven (D-07 #3) — reads section files + the manifest,
   never the corpus. Order = (config `cv_sections` type index, then `position`); the
   manifest carries `position` + `title` from Phase 2 (F-23). Highest version per
-  section (or static). Jinja `templates/output.html`, 4 tabs (CV/Changes/Scores/
-  Reasoning); word-level diffs via `difflib`. `cv_final.md` is the clean artefact.
+  section (or static). Jinja `templates/output.html`, **6 tabs (Fit/CV/Grounding/
+  Changes/Scores/Reasoning)**; word-level diffs via `difflib`. `cv_final.md` is the
+  clean artefact. The **Fit tab** (F-39, default-active) renders the role-fit summary —
+  `value_alignment_notes` (CVCM "why I fit", D-33) + transferable strengths + gaps — so
+  it's visible after **any** run incl. `--yes`/auto (which never pauses at the Phase-1
+  checkpoint); pass `value_alignment_notes`/`skills_transferable`/`gaps` from `fit`.
 - **Phase 6 `--docx` (stretch, F-33):** `phase6_docx.py` renders the SAME assembled
   markdown as `cv_final.md` into a styled `.docx`, applying formatting *conventions*
   harvested from a source CV in `data/cvs/` (body font/size, name/heading size, heading

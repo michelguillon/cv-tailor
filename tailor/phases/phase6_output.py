@@ -224,6 +224,14 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
         "role_title": jd.role_title,
         "outcome": fit.outcome,
         "fit_score": round(fit.overall_fit_score, 3),
+        # Role-fit summary (F-39): the CVCM value-alignment narrative + transferable
+        # strengths + gaps, so "why am I a fit" is visible after any run (incl. --yes/auto,
+        # which never pauses at the Phase-1 checkpoint). value_alignment_notes is None
+        # without a CVCM (D-33) — the template falls back to the no-fit reason.
+        "value_alignment_notes": getattr(fit, "value_alignment_notes", None),
+        "no_fit_reason": fit.no_fit_reason,
+        "skills_transferable": list(fit.skills_transferable),
+        "gaps": fit.gaps,
         "converged": iterations[-1].keyword_coverage if iterations else None,
         "cv_html": _md_to_html(cv_md),
         "changes": _build_changes(ctx, manifest, config),

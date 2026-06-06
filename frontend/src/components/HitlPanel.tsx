@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, Send, Check, X, Wand2, AlertTriangle, Loader2 } from "lucide-react";
+import { MessageSquare, Send, Check, X, Wand2, AlertTriangle, Loader2, Sparkles } from "lucide-react";
 import type { HitlCheckpoint, HitlDecision } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -98,6 +98,17 @@ function FitBody({ payload, busy, onDecide }: { payload: Payload; busy: boolean;
           {Math.round((payload.fit_score as number) * 100)}% coverage
         </span>
       </p>
+
+      {payload.value_alignment_notes ? (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-primary">
+            <Sparkles className="h-3.5 w-3.5" /> Why you’re a fit
+          </div>
+          <p className="text-xs leading-relaxed text-foreground">
+            {String(payload.value_alignment_notes)}
+          </p>
+        </div>
+      ) : null}
 
       {noFit ? (
         <p className="flex items-start gap-2 text-destructive">

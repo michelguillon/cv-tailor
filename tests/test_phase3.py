@@ -199,6 +199,58 @@ def test_rejected_minor_suggestion_forwarded(tmp_path):
     assert "major suggestion" not in res.memory.rejected_suggestions
 
 
+# --------------------------------------------------------------------------- #
+# (c) graceful degradation on a writer failure (F-39)                          #
+# --------------------------------------------------------------------------- #
+
+def _failing_create(**kwargs):
+    raise RuntimeError("simulated provider outage")
+
+
+def fake_gpt_failing():
+    """A GPT client whose every call raises — simulates a transient provider outage."""
+    return types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_failing_create)))
+
+
+def test_gpt_failure_degrades_to_claude_only(tmp_path):
+    """A GPT writer failure must NOT abort the run: the loop proceeds with the Claude
+    draft (verbatim, not a synthesised reword) and the section is still produced (F-39)."""
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx, {"profile": ("profile", False)})
+    # orchestrator would synthesise a reword — degradation must override to the survivor
+    # (claude) verbatim, since there's only one real draft to merge.
+    dec = {"selected_base": "synthesis", "final_text": "profile MERGED reword", "direction": "d",
+           "synthesis_notes": "n", "claude_quality": 8.0, "gpt_quality": 8.0,
+           "converged": False, "rubric_additions": []}
+    cfg = {"profile": {"claude_items": [], "gpt_items": [], "decision": dec}}
+
+    res = refine(manifest, jd(), rubric(), budgets(), ctx, model="m", max_iterations=1,
+                 claude_client=fake_claude(cfg), openai_client=fake_gpt_failing())
+
+    assert len(res.iterations) == 1                       # ran to completion, no crash
+    ps = res.iterations[0].section_scores["profile"]
+    assert ps.selected_writer == "claude"                # forced to survivor, not "synthesis"
+    # claude text verbatim — NOT the synthesised reword (no drift on the degraded path)
+    assert ctx.read_section("profile", version=1).strip() == "profile alpha beta"
+    events = [__import__("json").loads(l)
+              for l in (ctx.output_dir / "run_log.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert any(e.get("event") == "writer_degraded" for e in events)
+
+
+def test_both_writers_failing_surfaces(tmp_path):
+    """If BOTH writers fail there is nothing to draft — surface it (R-09), don't ship blank."""
+    import pytest
+    from tailor.tools.gpt_writer import WriterError
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx, {"profile": ("profile", False)})
+    failing_claude = types.SimpleNamespace(messages=types.SimpleNamespace(create=_failing_create))
+
+    with pytest.raises(WriterError):
+        refine(manifest, jd(), rubric(), budgets(), ctx, model="m", max_iterations=1,
+               claude_client=failing_claude, openai_client=fake_gpt_failing())
+
+
 def test_rubric_extended_during_loop(tmp_path):
     ctx = RunContext.create(run_id="r", base_dir=tmp_path)
     manifest = setup(ctx, {"profile": ("profile", False)})

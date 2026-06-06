@@ -412,6 +412,46 @@ what changed (if anything).*
 
 ---
 
+### F-39 — Two user-driven features for the July "evaluate 20 jobs" workflow: surface the value-alignment "why I fit" in the UI, and degrade gracefully when a writer fails
+
+**Driven by the F-37 finding** that the CVCM's standout value is the *explanation* (the
+`value_alignment_notes`), not the score — "when evaluating 20 jobs I care more about *why am I a
+fit* than whether the score is 0.647 or 0.612." Plus the F-38 aside that a transient GPT failure
+aborted whole runs. Both target the user becoming the primary user.
+
+**1. Render `value_alignment_notes` — in two places, because of how the user runs it.** The backend
+already emitted it in the fit checkpoint payload (`api/runner.fit_payload`); it was never rendered.
+- **Live fit panel** (`HitlPanel.FitBody`): a "Why you're a fit" callout above the section mix —
+  for *conversational* runs that pause at the Phase-1 checkpoint.
+- **Persisted report** (`templates/output.html` + `phase6_output`): a new **Fit tab** (first,
+  default-active) with the value-alignment narrative + Strong alignment (transferable skills) +
+  Potential gaps. This is the one that matters for the **`--yes`/auto** July workflow, which *never
+  pauses at the fit checkpoint* — so the live panel alone would be invisible there. The report shows
+  after any run and is the iframe the web OutputPanel embeds, so both web and standalone get it. Kept
+  the clean CV on its own tab (no pollution). Falls back to `no_fit_reason` when there's no CVCM
+  (`value_alignment_notes` is None without one, D-33). Validated by **regenerating an existing CVCM
+  run's report from its checkpoints** (`tmp/sweep/regen_report.py`, no spend) — Fit tab + prose render.
+
+**2. Graceful degradation on a writer failure (`phase3_refinement`).** Before: `gpt_writer` (or
+`claude_writer`) raising `WriterError` after its one R-09 retry **aborted the entire run** — the F-38
+JPMC validation lost a 6-minute run to one transient GPT hiccup. Now each writer call is wrapped
+(`_safe_write` → draft or None on any exception, logged loudly as `writer_failed`). If **exactly one**
+writer fails, the loop **degrades to the survivor**: a stand-in draft (survivor's text, empty items)
+lets `adjudicate` still score/direct the section, then the selected text is forced to the survivor
+*verbatim* (no synthesis reword of a single source) with honest provenance (`selected_base` set to the
+survivor), the failed writer's pushback is skipped (it'd just fail again), and a `writer_degraded`
+event flows to the audit log + SSE. Only if **both** writers fail is it surfaced (`WriterError`) —
+genuine inability to draft, never ship a blank section. The stand-in's empty `items` means the
+zero-major freeze logic counts only the survivor's items (no double-count). Best/worst case: *GPT
+timeout → Claude-only → slightly lower confidence → CV still generated*, instead of a dead run.
+
+**Tests:** +2 in `test_phase3.py` (GPT-fails → claude-only verbatim + `writer_degraded` logged; both-fail
+→ `WriterError`). Suite **248 green**. Frontend `tsc -b && vite build` clean. **Deferred per the user:**
+full-corpus-union grounding and a Sonnet verifier stay future enhancements (low value now).
+**Affects D-33, the F-35 verifier/report, D-28 dual-writer loop, R-09; builds on F-37/F-38.**
+
+---
+
 ### F-38 — The Goodhart fix at the metric: `keyword_coverage` now counts only SOURCE-SUPPORTED keywords — fabrication stops being a way to score (live: 5→1 flags, coverage de-inflates honestly, convergence intact)
 
 **Why (the F-37 evidence made it undeniable):** `keyword_coverage`/`union_coverage` counted any
