@@ -466,10 +466,13 @@ class SectionScore:
 class IterationScore:
     iteration: int
     section_scores: dict[str, SectionScore]   # section_id → SectionScore
-    keyword_coverage: float       # UNION coverage across non-static sections (F-15):
-                                  #   the CV-level "fraction of the rubric covered
-                                  #   anywhere". (Earlier draft said "weighted mean";
-                                  #   union matches the 61→74→83% example below and F-11.)
+    keyword_coverage: float       # SOURCE-GROUNDED UNION coverage across non-static
+                                  #   sections (F-15 + F-38): the CV-level "fraction of
+                                  #   the rubric covered anywhere AND supported by the raw
+                                  #   corpus" — an inserted keyword the source can't back
+                                  #   counts 0 (the Goodhart fix). (Earlier draft said
+                                  #   "weighted mean"; union matches F-11. Absolute values
+                                  #   are lower post-F-38 — they exclude fabricated coverage.)
     critique_score: float | None  # mean of selected-draft quality across active sections;
                                   #   None when every non-static section is frozen.
                                   #   "selected draft" = whichever writer the orchestrator
@@ -1142,6 +1145,9 @@ collection metric matches config. (All confirmed: 83 sections, 7 CVs.)
 Build `phases/phase0_jd_analysis.py` and `tools/scorer.py`.
 `scorer.py` now operates at section level: `keyword_coverage(section_text, rubric)`
 returns a float for a single section. Aggregate score is derived from section scores.
+Post-F-38, the Phase-3 calls pass `source_text` so coverage is **source-grounded** (an
+inserted keyword the candidate's corpus can't back scores 0 — the Goodhart fix); Phase 1
+scores the raw corpus, so it passes no source and is unchanged.
 
 *Verification:* `keyword_coverage(real_section, rubric_from_real_jd)` returns
 a plausible float; `ScoringRubric` from a real JD looks sensible.

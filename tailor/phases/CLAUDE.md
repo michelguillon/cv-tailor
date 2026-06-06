@@ -26,7 +26,11 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   *enforced* by the orchestrator, which sees the source and gates fabrication —
   fabrication caps a draft's score and blocks convergence (F-34). Why this matters:
   `keyword_coverage` is a scored target, so without these guards a fluent model games
-  it by fabricating (Goodhart).
+  it by fabricating (Goodhart). **The metric itself is now source-grounded (F-38):**
+  `keyword_coverage`/`union_coverage` count a keyword only where the candidate's raw
+  source evidences it, so an inserted-but-unsupported keyword earns *zero* coverage —
+  the optimisation target no longer rewards the very thing the rules forbid. Prompt
+  rules + orchestrator gate + verifier + honest metric all point the same way.
 - **HITL is preview-before-apply** (Phases 1, 4, 5): show what changes, then ask.
 
 ## phase3_refinement.py — the dual-writer agentic loop (D-28, D-01, D-05, D-12)
@@ -50,10 +54,12 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   `abs(quality_delta) < 0.5`. Other exits: all frozen; soft-stop when the iteration
   had zero `major` items; `max_iterations` as the hard ceiling (most informative
   reason wins, never exceeds the cap). Thresholds confirmed on real runs (F-16).
-- **Aggregate `keyword_coverage` is UNION coverage** across non-static sections
-  (F-15). Aggregate `critique_score` is the mean of the **selected** draft's
-  quality over *active* sections, so it can dip as easy sections freeze — expected,
-  absorbed by the 0.5 threshold (F-16).
+- **Aggregate `keyword_coverage` is SOURCE-GROUNDED UNION coverage** across
+  non-static sections (F-15 + F-38): a keyword counts only where the raw corpus
+  supports it (sources fall back to the draft when no Phase-2 source was persisted,
+  preserving old behaviour for tests). Aggregate `critique_score` is the mean of the
+  **selected** draft's quality over *active* sections, so it can dip as easy sections
+  freeze — expected, absorbed by the 0.5 threshold (F-16).
 
 ## phase4_hitl / phase5_validation / phase6_output — review, format, emit (Step 7)
 

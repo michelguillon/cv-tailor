@@ -412,6 +412,63 @@ what changed (if anything).*
 
 ---
 
+### F-38 — The Goodhart fix at the metric: `keyword_coverage` now counts only SOURCE-SUPPORTED keywords — fabrication stops being a way to score (live: 5→1 flags, coverage de-inflates honestly, convergence intact)
+
+**Why (the F-37 evidence made it undeniable):** `keyword_coverage`/`union_coverage` counted any
+rubric keyword *present in the draft*, regardless of whether the candidate's CV supports it. So the
+optimisation target rewarded inserting JD phrases the source doesn't evidence — textbook Goodhart.
+F-34 hardened the writer prompts, the orchestrator gate, and (F-35) added the verifier, but those
+*fight* a metric pointing the wrong way: the prompts say "don't insert unsupported keywords" while
+the score says "more keywords = better." F-34 explicitly **deferred** the deeper fix (stop the metric
+itself rewarding unsupported keywords); F-37's sweep (drift scaling with iterations, 18–19 flags/4
+runs) is the evidence that it was time.
+
+**The fix (minimal, surgical — the metric, not the loop):** `scorer.py` gains an optional
+`source_text`/`source_texts`. When supplied, a keyword counts only when present in the draft **AND**
+evidenced by the candidate's raw source; the denominator stays the full rubric pool, so an inserted
+keyword the source can't back adds **zero** — coverage can no longer be raised by fabricating, and
+max achievable coverage is bounded by what the corpus actually supports. **Opt-in by design:** no
+source arg → draft-only scoring, unchanged. Phase 1 scores the *raw corpus* (text == source, no
+divergence possible) so it passes none and is untouched; Phase 3 threads each section's raw source
+(the `sections/<id>_source.md` from F-35) into the per-section decision coverage, the frozen-section
+row, and the aggregate union. `adjudicate` maps an absent source (`""`, unit tests / no Phase-2
+source) to draft-only rather than zeroing — production always has a real source (`_raw_source` falls
+back to the draft, never empty). Tests: +6 in `test_scorer.py` (supported-coverage caps, surfacing
+credit, union grounding, legacy-unchanged); suite **246 green**.
+
+**Live validation (Airwallex, CVCM on, demo/Haiku, 3 iters — same config as the F-37 baseline):**
+
+| | coverage trajectory | frozen | convergence | fabrication flags |
+|---|---|---|---|---|
+| **before** (F-37 Test B) | 0.571 → 0.619 (*climbing as keywords inserted*) | 0 → 1 | dual_signal | **5** |
+| **after** (this fix) | 0.381 → 0.364 (*honest — fabricated kw no longer count*) | **2 → 2** | dual_signal | **1** |
+
+Three things this confirms: (1) **flags dropped 5→1** — with no metric reward for insertion, the
+loop stops manufacturing JD phrases (the remaining flag is a minor date detail, "across EMEA
+(2019–2023)"); (2) **coverage de-inflated** (0.62→0.36) and that is the metric becoming *truthful*,
+not a regression — it now reports the supportable fraction, so don't compare the new absolute number
+to old dashboards; (3) **convergence still fires** (`dual_signal_converged`) and in fact sections
+**froze earlier** (2 at iter 1 vs 0 before) — when the score isn't chasing fabricated coverage,
+sections settle. The delta-based thresholds (D-05/F-16) are unaffected: they measure plateau, not
+absolute level. **JPMC (the F-37 8-flag spike) confirms it harder:** flags **8→4**, coverage
+**0.88→0.44**, and it now **converges at iter 2** where before it thrashed to max-iter (0.882 →
+0.778 → 0.789, never plateauing). The inflated 0.88 *was* the fabricated keywords — strip them and
+coverage is a stable, honest 0.438 that plateaus cleanly. Across both JDs: flags **13→5**, coverage
+roughly halved (truthful), convergence improved in both. The residual flags (e.g. JPMC's invented
+"€25M in Northern Europe revenue") are genuine embellishments the verifier still catches — the metric
+fix removes the *systematic* incentive; the gate remains the backstop for one-off fluency drift.
+
+**Aside (robustness obs, not this fix):** one JPMC validation run aborted on a transient
+`gpt_writer.WriterError` ("no valid draft" after its single R-09 retry) — a GPT-4o-mini hiccup on one
+section currently aborts the whole run. Pre-existing behaviour (surface, don't corrupt); a future
+hardening could degrade gracefully (fall back to the Claude draft for that section). Logged, not fixed.
+
+**Affects D-04, D-05, D-25; closes the Goodhart fix F-34 deferred; builds on F-35/F-37.** The trust
+story is now four aligned layers: writer rules (don't) → orchestrator gate (caps fabrication) →
+honest metric (no reward for it) → verifier (catches any that slips). The metric was the missing one.
+
+---
+
 ### F-37 — Robustness sweep + CVCM A/B (8 demo runs, 4 JDs × {no-CVCM, CVCM}, 3 iters): the trust gate holds under variety; CVCM lifts fit/coherence without leaking or weakening the gate; drift scales with iteration count
 
 **What was run:** the deferred robustness sweep, structured as a controlled A/B. 4 JDs

@@ -29,9 +29,12 @@ D-04, tools/rubric.py), then dual-signal convergence / soft-stop / max_iteration
 suggestions, frozen set, score history) is forwarded each iteration as structured
 state — a shared whiteboard, not prose reasoning (D-30, D-06-compatible).
 
-Aggregate keyword_coverage is UNION coverage across non-static sections (F-15);
-aggregate quality is the mean of the SELECTED draft's quality across active
-sections, so it can dip as easy sections freeze — absorbed by the 0.5 threshold.
+Aggregate keyword_coverage is SOURCE-GROUNDED UNION coverage across non-static
+sections (F-15 + F-38): a keyword counts only where the candidate's raw corpus
+supports it, so fabricated keywords never register as coverage gained (the Goodhart
+fix — the metric stops rewarding what the writer rules already forbid). Aggregate
+quality is the mean of the SELECTED draft's quality across active sections, so it
+can dip as easy sections freeze — absorbed by the 0.5 threshold.
 """
 
 from __future__ import annotations
@@ -101,8 +104,17 @@ def _raw_source(ctx, sid, fallback: str) -> str:
 
 
 def _aggregate_keyword_coverage(ctx, manifest, rubric) -> float:
-    texts = [_current_text(ctx, manifest, sid) for sid, m in manifest.items() if not m["static"]]
-    return round(union_coverage(texts, rubric), 4) if texts else 0.0
+    """UNION coverage across non-static sections — SOURCE-GROUNDED (F-38): a keyword
+    counts only where the candidate's raw corpus supports it, so fabricated keywords
+    add nothing to the convergence signal. Sources fall back to the draft when no
+    Phase-2 source was persisted (older runs / unit tests), preserving old behaviour."""
+    items = [(sid, _current_text(ctx, manifest, sid))
+             for sid, m in manifest.items() if not m["static"]]
+    if not items:
+        return 0.0
+    texts = [t for _, t in items]
+    sources = [_raw_source(ctx, sid, t) for sid, t in items]
+    return round(union_coverage(texts, rubric, source_texts=sources), 4)
 
 
 def _write_writer_draft(ctx, draft):
@@ -248,9 +260,11 @@ def refine(
         # frozen sections still need a SectionScore row (critique fields None)
         for sid in nonstatic:
             if sid not in section_scores:
+                frozen_text = _current_text(ctx, manifest, sid)
                 section_scores[sid] = SectionScore(
                     section_id=sid, section_type=section_types[sid],
-                    keyword_coverage=round(keyword_coverage(_current_text(ctx, manifest, sid), rubric), 4),
+                    keyword_coverage=round(keyword_coverage(
+                        frozen_text, rubric, source_text=_raw_source(ctx, sid, frozen_text)), 4),
                     claude_quality=None, gpt_quality=None, selected_writer=None,
                     converged=True, current_version=manifest[sid]["version"])
 

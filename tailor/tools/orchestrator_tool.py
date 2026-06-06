@@ -15,8 +15,10 @@ Two entry points:
   pushback (D-29).
 
 `keyword_coverage` on the decision is computed in code by the scorer (D-25),
-not asked of the model. Proposed `rubric_additions` are raw here — the loop
-JD-validates and caps them via tools/rubric.py.
+not asked of the model — and it is **source-grounded** (F-38): only keywords the
+section's raw source supports count, so an unsupported keyword the writer inserted
+earns no coverage (the Goodhart fix at the metric). Proposed `rubric_additions` are
+raw here — the loop JD-validates and caps them via tools/rubric.py.
 """
 
 from __future__ import annotations
@@ -188,7 +190,10 @@ def adjudicate(
         section_id=section_id,
         selected_base=base,
         direction=data["direction"].strip(),
-        keyword_coverage=round(keyword_coverage(selected_text, rubric), 4),
+        # `source_text or None`: an absent source (unit tests / no Phase-2 source) has no
+        # ground truth to grade supportedness against, so fall back to draft-only scoring
+        # rather than zeroing coverage. Production always passes a real source (F-38).
+        keyword_coverage=round(keyword_coverage(selected_text, rubric, source_text=source_text or None), 4),
         claude_quality=float(data["claude_quality"]),
         gpt_quality=float(data["gpt_quality"]),
         converged=bool(data["converged"]),

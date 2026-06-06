@@ -103,3 +103,55 @@ def test_coverage_is_deterministic():
     r = rubric(["pre-sales", "emea", "payments"])
     text = "pre-sales in EMEA"
     assert keyword_coverage(text, r) == keyword_coverage(text, r)
+
+
+# --- supported coverage: the Goodhart fix (F-38) -----------------------------
+
+def test_supported_coverage_ignores_unsupported_keyword():
+    """A keyword present in the DRAFT but absent from SOURCE earns no coverage —
+    inserting it cannot raise the score (the anti-Goodhart invariant)."""
+    r = rubric(["pre-sales", "emea", "payments", "fintech"])
+    draft = "Led pre-sales across EMEA for a fintech payments platform."
+    source = "Led pre-sales across EMEA for an adtech platform."   # no fintech, no payments
+    # draft-only would credit all 4; source supports only pre-sales + emea
+    assert keyword_coverage(draft, r) == 1.0
+    assert keyword_coverage(draft, r, source_text=source) == 0.5
+    assert matched_keywords(draft, r.required_keywords, source_text=source) == ["pre-sales", "emea"]
+
+
+def test_supported_coverage_credits_real_strength_surfaced():
+    """A keyword the source supports but the draft hadn't surfaced yet still requires
+    the draft to mention it — supported coverage rewards SURFACING real content."""
+    r = rubric(["pre-sales", "payments"])
+    source = "Ran pre-sales and built the payments integration."
+    draft_missing = "Ran pre-sales."                       # payments supported but not surfaced
+    draft_surfaced = "Ran pre-sales and the payments work."
+    assert keyword_coverage(draft_missing, r, source_text=source) == 0.5
+    assert keyword_coverage(draft_surfaced, r, source_text=source) == 1.0
+
+
+def test_supported_coverage_caps_at_what_source_supports():
+    """Max achievable coverage is bounded by the source: a perfectly keyword-stuffed
+    draft cannot exceed the fraction the corpus actually evidences."""
+    r = rubric(["a-term", "b-term", "c-term"])
+    stuffed = "a-term b-term c-term everywhere"            # all three in the draft
+    source = "only a-term is real here"                     # source supports just one
+    assert keyword_coverage(stuffed, r, source_text=source) == 1 / 3
+
+
+def test_union_coverage_source_grounded():
+    """Union coverage counts a keyword only if it appears in some draft AND the
+    combined source supports it."""
+    r = rubric(["pre-sales", "emea", "payments", "fintech"])
+    drafts = ["Profile: pre-sales fintech leader", "Experience: EMEA payments"]
+    sources = ["Profile: pre-sales leader", "Experience: EMEA adtech"]   # no fintech, no payments
+    assert union_coverage(drafts, r) == 1.0                              # draft-only: all 4
+    assert union_coverage(drafts, r, source_texts=sources) == 0.5        # only pre-sales + emea
+
+
+def test_source_none_preserves_legacy_behaviour():
+    """No source argument → scores the draft alone (Phase 1 / older runs unchanged)."""
+    r = rubric(["pre-sales", "emea", "payments"])
+    text = "pre-sales in EMEA and payments"
+    assert keyword_coverage(text, r, source_text=None) == keyword_coverage(text, r)
+    assert union_coverage([text], r, source_texts=None) == union_coverage([text], r)

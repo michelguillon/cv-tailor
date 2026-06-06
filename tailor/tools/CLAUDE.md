@@ -40,7 +40,8 @@ target (D-27/F-13), and the deterministic length-budget items (D-14) — applied
   text; drafts live on disk, D-07 #3), `selected_text` is what the loop
   checkpoints. Pure claude/gpt picks use the chosen draft verbatim (no rewrite
   drift); synthesis returns the orchestrator-merged text (F-18). `keyword_coverage`
-  is computed in code by the scorer (D-25), not asked of the model. Proposed
+  is computed in code by the scorer (D-25), not asked of the model, and is
+  **source-grounded** (F-38: only source-supported keywords count). Proposed
   `rubric_additions` are raw — the loop JD-validates + caps them via `rubric.py`.
 
 ## verifier.py — the fabrication gate (F-35)
@@ -66,3 +67,10 @@ target (D-27/F-13), and the deterministic length-budget items (D-14) — applied
 - **Token-subset matching, not exact-phrase** (D-25/F-10). `keyword_coverage` is
   per-section; `union_coverage` is CV-level (fraction covered anywhere) — the
   aggregate the loop uses for `IterationScore.keyword_coverage` (F-15).
+- **Supported coverage = the Goodhart fix (F-38).** Pass `source_text`/`source_texts`
+  and a keyword counts only when present in the draft AND evidenced by the source; an
+  inserted-but-unsupported keyword earns no coverage (denominator stays the full pool,
+  so the score is monotone-honest — surfacing real strength raises it, inventing one
+  does not). **No source arg → draft-only scoring, unchanged** — Phase 1 scores the
+  raw corpus (text == source) so it passes none; Phase 3 passes each section's raw
+  source. `adjudicate` maps an absent source (`""`) to draft-only, never zeroing.
