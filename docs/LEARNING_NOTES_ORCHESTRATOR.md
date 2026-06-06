@@ -507,7 +507,10 @@ the current-orchestrator robustness sweep (CVCM is auto-loaded in normal operati
    "the draft is fabrication-free." An interactive user strips them at the Phase-4 gate; an `--yes`
    user must read the Grounding tab before sending. **Deliberately NOT auto-reverting** flagged spans
    to source: the coarse-span case ($5M) shows auto-strip would delete real content. Documented, not
-   "fixed" — auto-removal is the wrong call.
+   "fixed" — auto-removal is the wrong call. **Resolved (user, 2026-06-06):** `--yes` should NOT
+   refuse-to-finish or hard-block on flags either — the candidate is the final gatekeeper (applies +
+   final-reviews manually), so the CV ships flagged-but-produced and the human gate catches anything
+   that slips. Confirms D-18; the open "(b)" from the verdict below is closed.
 
 3. **Drift scales with iteration count.** 18–19 flags/4-runs at 3 iters vs the historical ~1 flag at
    1 iter (F-35). Each refinement pass is another chance for a fluent writer to reach for a JD phrase.
@@ -555,10 +558,11 @@ the current-orchestrator robustness sweep (CVCM is auto-loaded in normal operati
 
 **Verdict:** the trust architecture (F-34/F-35) is robust across JD variety and CVCM on/off — it
 catches genuine drift and never lets CVCM wording leak. CVCM earns its place on *fit + honest
-gap-naming + narrative coherence*. **No code change made:** the sweep validates the existing design;
-the two judgment calls it surfaces — (a) the deferred `keyword_coverage` Goodhart fix, (b) whether
-`--yes` should refuse-to-finish / hard-warn when flags > 0 — are design decisions for the user, not
-defects to silently patch. **Affects D-04/D-05/D-18/D-33; builds on F-34/F-35/F-36.**
+gap-naming + narrative coherence*. **No code change made *in this sweep*:** it validates the existing
+design; the two judgment calls it surfaced were left to the user — **(a) the deferred
+`keyword_coverage` Goodhart fix → DONE in F-38** (source-grounded coverage); **(b) whether `--yes`
+should refuse-to-finish / hard-warn when flags > 0 → resolved: NO** (the candidate is the final
+gatekeeper; ship flagged, confirms D-18). **Affects D-04/D-05/D-18/D-33; builds on F-34/F-35/F-36.**
 **Caveats (honest):** one run per cell (directional, not statistical); demo/Haiku only (Sonnet's
 calibration, F-30, would likely drift less and converge tighter); 3-iter inflates the flag counts
 vs a 1-iter demo; JPMC's A-vs-B flag delta is confounded by the extra iteration B ran.
