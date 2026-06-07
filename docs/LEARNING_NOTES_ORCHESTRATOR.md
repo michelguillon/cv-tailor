@@ -2714,3 +2714,35 @@ external records. The JD tab makes the output fully self-contained.
 
 Also useful during a demo: showing the raw JD alongside the tailored CV makes
 the tailoring quality immediately legible to an observer.
+
+---
+
+### D-38 — Full Mode Unlock Gate: a signed capability cookie, not full auth (planned)
+
+**What was decided (spec'd; not yet built):**
+For a single public deployment, demo mode stays open to all; **full** (Sonnet) mode is
+restricted behind a **one-time unlock** that issues a **signed, HttpOnly capability
+cookie**. The user enters the full-mode key once; the backend validates it against
+`FULL_MODE_KEY` and sets the cookie; subsequent full runs are gated on the cookie, not on
+re-submitting the key. A `GET /api/capabilities` response (`demo_available`,
+`full_configured`, `full_unlocked`) drives the UI to show full, prompt to unlock, or hide
+it. Full SPEC in **§12.7**.
+
+**Load-bearing reasons:**
+- **Not full auth — a spend guard.** The goal is to stop accidental/public use of the
+  expensive mode on a recruiter-facing portfolio app, not to build accounts/roles. A
+  passphrase-unlock + capability cookie is the minimum that achieves "public demo, private
+  full" without a login system.
+- **The key must never live in the browser.** Sending the raw key on every full run (the
+  current Web flow) keeps a secret in client state and on the wire repeatedly. A one-time
+  unlock → signed cookie means the key is entered once and only the *capability* (a signed
+  "unlocked until `<exp>`" token) persists — HttpOnly, so JS can't read it.
+- **Backend is the source of truth; UI hiding is convenience.** Full runs are refused
+  (403) without a valid cookie even if the UI is bypassed; the gate **fails closed** when
+  `FULL_MODE_KEY` is unset (blank key on the server ⇒ demo-only, no dead UI option).
+- **CLI unchanged.** No browser, no cookie — the CLI keeps `--key`; `resolve_run_config`'s
+  key check (§3.7) stays for non-Web use. The cookie is purely the Web gate.
+
+**Deferred (optional):** operational caps (full runs/day, spend/day, concurrent full runs)
+build on `cost_cap_usd` — which today is *reported*, not a hard mid-run stop — so they'd
+add a hard stop + in-memory daily counters. Not required for the first cut.

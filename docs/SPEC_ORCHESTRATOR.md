@@ -207,6 +207,8 @@ modes:
 
 **Why config-driven rather than code-branching:** Any mode difference expressed as a config value is immediately readable, testable, and adjustable without touching code. The Week 2 pattern of `AGENT_MODEL` / `CLASSIFIER_MODEL` constants generalises here to a full `RunConfig` object.
 
+**How the key is enforced.** `resolve_run_config` reads `FULL_MODE_KEY` from the **environment** directly (the `full_mode_key: "${FULL_MODE_KEY}"` line above is documentation — YAML does not expand env vars). Full mode requires the env var to be set **and** the supplied key to match, else `ConfigError`. The **CLI** passes the key via `--key`. The **Web UI** moves to a one-time unlock that issues a signed capability cookie instead of sending the raw key per run — see **§12.7 (planned, D-38)**; the cookie becomes the Web gate while `--key` stays the CLI gate.
+
 ---
 
 ### 3.8 — RAG with metadata over context window
@@ -1659,3 +1661,95 @@ Render final CV tabs inline. Download endpoints for `cv_final.md` and
 **UI Step 6 — Production compose + polish**
 Multi-stage frontend build (nginx-alpine). `docker-compose.prod.yml` overlay.
 Demo hardening: error states, loading indicators, empty corpus state.
+
+---
+
+### 12.7 — Full Mode Unlock Gate (planned enhancement, D-38)
+
+> **Status: planned — not yet built.** This supersedes the current full-mode UI
+> flow for the Web path. Today the backend already key-gates full mode
+> (`resolve_run_config`, §3.7: 400 if `FULL_MODE_KEY` unset or the submitted key
+> mismatches) and the Run page sends the **raw key in the body of every full run**.
+> This enhancement replaces per-run raw-key submission with a **one-time unlock that
+> issues a signed, HttpOnly capability cookie**, so the key is entered once and never
+> stored in the browser. The **CLI is unchanged** — `--key` stays the CLI gate (no
+> browser, no cookie); the cookie mechanism is Web-only.
+
+**Objective.** A single publicly-deployed instance exposes low-cost **demo** mode to
+visitors while restricting high-cost **full** (Sonnet) mode to authorised use. This is
+**not** full authentication — it is a guard against accidental or public use of the
+expensive mode, keeping the portfolio app simple and usable. Demo stays open and default;
+full requires an unlock.
+
+**Modes.**
+- **Demo** — public, low-cost config, default, no unlock (the §3.7 `demo` mode).
+- **Full** — restricted, higher-cost config (the §3.7 `full` mode), requires unlock.
+
+**Unlock flow (Web).**
+1. User selects Full mode. If not already unlocked, the UI shows an unlock prompt for
+   the full-mode key (a password field — never persisted in React state, `localStorage`,
+   or a readable cookie).
+2. UI `POST`s the key to a new endpoint, e.g. `POST /api/full-mode/unlock {key}`.
+3. Backend validates the key against `FULL_MODE_KEY`. On success it sets a **signed,
+   HttpOnly capability cookie** (e.g. `cv_full=<signed token>`) and returns `{unlocked:true}`;
+   on failure returns `401` and sets nothing (user stays in demo).
+4. UI flips to "full unlocked"; subsequent full runs rely on the **server-issued cookie**
+   (sent automatically by the browser), not repeated key entry.
+
+**Backend enforcement (the source of truth).** A full-mode run (`POST /api/runs` with
+`mode:"full"`) is **rejected with 403** unless **all** hold:
+- full mode is configured server-side (`FULL_MODE_KEY` set), and
+- the request carries a **valid, unexpired, signature-verified** capability cookie.
+The run path stops reading a `key` from the request body for the Web flow; it checks the
+cookie instead, then resolves the full `RunConfig`. **Fail closed:** missing/invalid
+config or cookie ⇒ full is refused (demo only). UI hiding is convenience only and is
+never relied on for protection.
+
+**Capabilities endpoint.** A lightweight `GET /api/capabilities` (or an extension of
+`/api/health`) returns, for the current request:
+```json
+{ "demo_available": true, "full_configured": true, "full_unlocked": false }
+```
+- `full_configured` — `FULL_MODE_KEY` is set server-side.
+- `full_unlocked` — the request carries a valid capability cookie.
+The UI uses this to choose: show full directly (configured + unlocked), show the unlock
+prompt (configured + not unlocked), or **hide/disable full** (not configured) — which makes
+a blank-key public deploy cleanly demo-only with no dead option.
+
+**Capability cookie design.**
+- Signed token (HMAC over an expiry/nonce with a server secret — e.g. `itsdangerous`),
+  proving "unlocked until `<exp>`". The raw key is **not** stored in the cookie.
+- Attributes: `HttpOnly`; `SameSite=Lax`; `Secure` in production (behind Cloudflare TLS);
+  `Path=/api`; an expiry (`Max-Age`) chosen for owner convenience vs. exposure (hours–days).
+- Server secret from env (a dedicated signing secret, or derived from `FULL_MODE_KEY` so
+  rotating the key invalidates outstanding cookies). Expiry-based invalidation; an optional
+  `POST /api/full-mode/lock` clears the cookie.
+
+**UX requirements.** Demo is the default for public users; selecting full triggers the
+unlock flow only if needed; once unlocked, no re-entry for the valid session; a failed
+unlock keeps the user in demo; full is clearly labelled **higher-cost / restricted**; the
+selected mode is visible on the run screen **before** execution.
+
+**Safety requirements.** No raw key client-side; no key sent per run; no frontend-only
+enablement; signed server-issued cookie; secure cookie settings in prod; full mode fails
+closed when configuration is missing or invalid.
+
+**Optional cost controls (future, before wider sharing).** Full mode may also enforce
+operational caps — max full-mode runs/day, max estimated full-mode spend/day, max
+concurrent full-mode runs, with a clear warning at the cap. These build on the per-mode
+`cost_cap_usd` (§3.7/D-08) — note that today the cap is **reported** after a run, not a
+hard mid-run stop, so enforcement would add a hard stop + in-memory daily counters (same
+shape as a per-IP rate limit). Optional for the initial implementation.
+
+**Success criteria.** Public visitors use demo with no setup; full cannot be triggered by
+unauthorised users; the owner unlocks full with one key entry; the key is never persisted
+in the browser; backend enforcement prevents bypassing the UI; the app stays a single
+deployed instance with no full auth.
+
+**Impact when implemented** (for the build): backend — new `unlock` / `capabilities`
+(+ optional `lock`) endpoints, a cookie sign/verify helper, `start_run` changed to gate
+full on the cookie (not the body key), a new signing-secret env var; frontend — fetch
+capabilities, an unlock dialog, mode state driven by capabilities, drop the raw-key-per-run;
+tests — unlock success/fail, 403 on a full run without a valid cookie, capabilities states,
+cookie expiry/signature. The CLI `--key` path and `resolve_run_config`'s key check are
+retained for non-Web use.
