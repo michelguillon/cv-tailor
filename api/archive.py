@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from tailor.audit import read_entries
+from tailor.phases.phase6_output import summary_card
 
 __all__ = ["list_runs", "run_detail", "run_file"]
 
@@ -45,6 +46,12 @@ def _summary(run_dir: Path) -> dict:
         fit = json.loads(p1.read_text(encoding="utf-8"))
         outcome = fit.get("outcome")
         fit_score = fit.get("overall_fit_score")
+    # Summary card (D-34): derive from the footer's grounded_coverage + fabrication_flags
+    # via the same helper Phase 6 uses (single source of truth, F-43). Old runs whose
+    # footer predates these fields → card numbers are None (the UI degrades gracefully).
+    grounded = footer.get("grounded_coverage")
+    unsupported = footer.get("fabrication_flags")
+    card = summary_card(outcome or "", fit_score, grounded, unsupported or 0)
     return {
         "run_id": run_dir.name,
         "mode": footer.get("mode"),
@@ -54,6 +61,10 @@ def _summary(run_dir: Path) -> dict:
         "iterations": footer.get("iterations_run"),
         "cost_estimated_usd": footer.get("total_estimated_usd"),
         "cost_breakdown": footer.get("cost_breakdown_estimated_usd"),
+        "grounded_coverage": grounded,
+        "unsupported_claims": unsupported,
+        "status": card["status"] if outcome is not None else None,
+        "fit_band": card["fit_band"] if fit_score is not None else None,
         "has_md": (run_dir / "cv_final.md").exists(),
         "has_html": (run_dir / "cv_final.html").exists(),
     }

@@ -84,9 +84,17 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
 - **Phase 6:** checkpoint-driven (D-07 #3) — reads section files + the manifest,
   never the corpus. Order = (config `cv_sections` type index, then `position`); the
   manifest carries `position` + `title` from Phase 2 (F-23). Highest version per
-  section (or static). Jinja `templates/output.html`, **6 tabs (Fit/CV/Grounding/
-  Changes/Scores/Reasoning)**; word-level diffs via `difflib`. `cv_final.md` is the
-  clean artefact. The **Fit tab** (F-39, default-active) renders the role-fit summary —
+  section (or static). Jinja `templates/output.html`, **7 tabs (Fit/CV/Grounding/
+  Changes/Scores/Reasoning/JD)** + a **sticky summary card** (D-34/F-43); word-level
+  diffs via `difflib`. `cv_final.md` is the clean artefact.
+- **Summary card + JD tab (D-34/D-37/F-43):** the card reuses signals the pipeline
+  already produces — **no extra LLM pass**. `summary_card(outcome, fit_score,
+  grounded_coverage, unsupported)` is the single source of truth for the fit band +
+  status (`api/archive.py` imports it, so the web card and HTML card can't drift).
+  Grounded coverage = the final iteration's source-grounded `keyword_coverage` (F-38);
+  unsupported = the verifier's flag count (F-35). `generate_output(jd_raw=…)` feeds the
+  JD tab; `run.py` persists `jd_raw.txt` and puts `grounded_coverage`/`fabrication_flags`
+  on the `run_complete` footer. The **Fit tab** (F-39, default-active) renders the role-fit summary —
   `value_alignment_notes` (CVCM "why I fit", D-33) + transferable strengths + gaps — so
   it's visible after **any** run incl. `--yes`/auto (which never pauses at the Phase-1
   checkpoint); pass `value_alignment_notes`/`skills_transferable`/`gaps` from `fit`.

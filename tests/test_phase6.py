@@ -2,8 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from tailor.models import FitAssessment, IterationScore, JDAnalysis, ScoringRubric, SectionScore
-from tailor.phases.phase6_output import assemble_markdown, generate_output
+from tailor.phases.phase6_output import assemble_markdown, generate_output, summary_card
 from tailor.run_context import RunContext
 
 CONFIG = {"cv_sections": ["header", "profile", "skills", "experience", "ai_projects",
@@ -137,3 +139,62 @@ def test_static_section_marked_verbatim_in_changes(tmp_path):
     out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)
     html = Path(out["html"]).read_text(encoding="utf-8")
     assert "copied verbatim" in html
+
+
+# --------------------------------------------------------------------------- #
+# Summary card (D-34) + JD tab (D-37)                                          #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("outcome,fit,grounded,unsup,band,status", [
+    ("strong", 0.90, 0.80, 0, "strong", "Submit-ready"),   # strong + 0 flags → submit-ready
+    ("strong", 0.90, 0.80, 2, "strong", "Review Required"),  # flags downgrade a strong fit
+    ("partial", 0.58, 0.36, 1, "partial", "Review Required"),
+    ("partial", 0.58, 0.36, 0, "partial", "Review Required"),  # <75% → review even with 0 flags
+    ("no_fit", 0.20, 0.10, 0, "low", "Do Not Submit"),
+])
+def test_summary_card_status_and_band(outcome, fit, grounded, unsup, band, status):
+    card = summary_card(outcome, fit, grounded, unsup)
+    assert card["fit_band"] == band and card["status"] == status
+    assert card["fit_pct"] == round(fit * 100) and card["grounded_pct"] == round(grounded * 100)
+    assert card["unsupported"] == unsup
+
+
+def test_summary_card_handles_missing_numbers():
+    card = summary_card("partial", None, None, 0)
+    assert card["fit_pct"] is None and card["grounded_pct"] is None
+    assert card["fit_band"] == "low" and card["status"] == "Review Required"
+
+
+def test_generate_output_renders_summary_card(tmp_path):
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    fit = FitAssessment(outcome="partial", overall_fit_score=0.58)
+    rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
+    # iters() final keyword_coverage is 0.6 → grounded 60%; no verification_flags → 0 unsupported
+    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)
+    html = Path(out["html"]).read_text(encoding="utf-8")
+    assert "Grounded Coverage:" in html and "60%" in html
+    assert "Unsupported Claims:" in html
+    assert "Status: Review Required" in html
+
+
+def test_jd_tab_renders_raw_jd(tmp_path):
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    fit = FitAssessment(outcome="strong", overall_fit_score=0.9)
+    rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
+    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG,
+                          jd_raw="Director of Solutions Engineering — EMEA. Lead the team.")
+    html = Path(out["html"]).read_text(encoding="utf-8")
+    assert 'data-tab="jd"' in html
+    assert "Director of Solutions Engineering — EMEA. Lead the team." in html
+
+
+def test_jd_tab_empty_state_without_jd(tmp_path):
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    fit = FitAssessment(outcome="strong", overall_fit_score=0.9)
+    rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
+    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)  # no jd_raw
+    html = Path(out["html"]).read_text(encoding="utf-8")
+    assert "JD not recorded for this run." in html

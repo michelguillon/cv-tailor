@@ -16,6 +16,12 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   in prod (which serves the bundle and proxies `/api`).
 - **Pages under `src/pages/`**, one per mode (Corpus, Run, …); `App.tsx` is the shell
   + tab nav. Keep pages thin: fetch via `api`, render with `ui/` primitives.
+- **Output panel summary card (D-34/F-43):** `OutputPanel` renders a summary card —
+  fit band + %, grounded coverage, unsupported claims (⚠ when >0), derived status — from
+  the run's archive fields (`grounded_coverage`, `unsupported_claims`, `status`,
+  `fit_band`); the embedded `cv_final.html` iframe carries its own sticky card + the JD
+  tab, so there's no separate React JD view. The card numbers come from existing engine
+  signals (coverage F-38 + verifier flags F-35), not a new pass.
 - **Corpus write path (D-36/F-42):** `CorpusPage` opens `CvWizard` (Add + Replace,
   4 steps: upload → metadata form → section-inventory gate → confirm) and
   `EditMetadataDialog` (one step, no inventory) over the `ui/dialog.tsx` modal.

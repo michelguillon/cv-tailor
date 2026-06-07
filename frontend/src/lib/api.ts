@@ -146,6 +146,11 @@ export interface ArchiveRun {
   iterations: number | null;
   cost_estimated_usd: number | null;
   cost_breakdown?: Record<string, number> | null;
+  // Summary card (D-34): grounded coverage (F-38) + verifier flags (F-35) + derived status.
+  grounded_coverage: number | null;
+  unsupported_claims: number | null;
+  status: string | null;
+  fit_band: string | null;
   has_md: boolean;
   has_html: boolean;
 }

@@ -412,6 +412,50 @@ what changed (if anything).*
 
 ---
 
+### F-43 — Sticky summary card (D-34) + JD tab (D-37): the card reuses existing trust signals instead of a new Phase-5 grounding pass
+
+**What was built:** a fixed **summary card** on every tab of `cv_final.html` (and the web
+OutputPanel) — fit band + %, grounded coverage %, unsupported-claims count, derived
+status, run id — plus a **JD tab** rendering the raw job description verbatim (D-37). The
+card answers "should I submit this?" without navigating to the Fit tab; the JD tab makes
+the report self-contained.
+
+**The decision that shaped it (supersedes part of the committed D-34/SPEC plan).** D-34 as
+designed called for a *new Phase-5 Haiku "grounding pass"* to compute the two numbers. But
+the pipeline **already produces both**, and reusing them is cheaper *and* more correct:
+- **Grounded Coverage** = the final iteration's `keyword_coverage`, which is already
+  **source-grounded** (F-38 — a keyword counts only where the candidate's raw CV evidences
+  it). That is exactly "how much of the JD/rubric the CV *honestly* covers."
+- **Unsupported Claims** = the **verifier's** `fabrication_flags` (F-35 — claims in the final
+  CV not supported by the candidate's own source). This is a *sharper* authenticity signal
+  than D-34's proposed "claims not traceable to the JD": a real achievement the JD doesn't
+  mention is not a fault, but a claim not in the candidate's CV is. It also keeps the card
+  **consistent with the existing Grounding tab** (same number) rather than introducing a
+  second, conflicting "unsupported claims" concept.
+
+So **no new LLM call, zero added spend**, and the card is a faithful surface over the trust
+layers the engine already runs (writer rules → orchestrator gate → honest metric →
+verifier, F-38). `summary_card()` in `phase6_output.py` is the single source of truth for
+the fit band (🟢≥75 / 🟡40–74 / 🔴<40) and status (`no_fit`→Do Not Submit; `unsupported>0`
+or fit<75%→Review Required; else Submit-ready); `api/archive.py` imports the *same* helper
+so the web card and the HTML card can never drift. The two numbers ride the `run_complete`
+footer (`grounded_coverage`, `fabrication_flags`) so the archive shows the card without
+re-deriving; the raw JD is persisted to `outputs/<run_id>/jd_raw.txt` (self-describing run
+dir, F-40) and threaded into `generate_output(jd_raw=…)`.
+
+**Stale-plan note:** the committed SPEC §12.4 tab list said six tabs and omitted **Grounding**
+(shipped in F-35); the real set is now **Fit · CV · Grounding · Changes · Scores · Reasoning ·
+JD** (7). Docs reconciled.
+
+**Verified:** 275 tests green (+9: card status/band cases, card render, JD tab + empty-state,
+archive card fields); frontend build clean; a no-spend report regen shows the card
+(Fit Partial 58% · Grounded 89% · Unsupported 0 · Review Required) on every tab and the JD
+empty-state for pre-feature runs. **Affects** D-34 (card sourced from existing signals, no
+Phase-5 pass), D-37 (JD tab), §9/§12.4, `phase6_output.py`, `run.py`, `archive.py`,
+`templates/output.html`, and the web OutputPanel.
+
+---
+
 ### F-42 — Corpus UI write path (Add / Edit Metadata / Replace): synchronous two-step ingest, budgets from ChromaDB, and an Edit that must touch ChromaDB to be visible
 
 **What was built (D-36 §12.1):** the corpus page gains the full CV lifecycle from the
@@ -2576,11 +2620,16 @@ A fixed header card visible on every tab of `cv_final.html` and the web UI outpu
 panel. Does not scroll away. Shows fit outcome, grounded coverage %, unsupported
 claims count, status label, and run ID. Populated at Phase 6 render time.
 
-The card requires Phase 5 (Haiku) to run a grounding check pass in addition to
-the existing formatting check — a second prompt that reviews the final assembled
-CV against the JD and rubric, counting: (a) claims directly traceable to a
-requirement (grounded coverage), and (b) positive claims the CV makes that the
-JD doesn't support (unsupported claims). Two outputs from one phase, same model.
+**Implemented (F-43) — sourced from existing signals, NOT a new Phase-5 pass.**
+The original design called for a Phase-5 Haiku grounding pass to compute the two
+numbers. In build we found the pipeline already produces both, so the card reuses
+them (zero added spend, more correct): **grounded coverage** = the final iteration's
+source-grounded `keyword_coverage` (F-38); **unsupported claims** = the verifier's
+`fabrication_flags` (F-35 — claims not in the candidate's own CV, a sharper signal
+than "claims not in the JD", and consistent with the Grounding tab). No second Haiku
+prompt was added. `phase6_output.summary_card()` is the single source of truth for the
+band + status (reused by `api/archive.py`). The two numbers ride the `run_complete`
+footer; the original "two outputs from one Phase-5 prompt" idea is dropped.
 
 **Load-bearing reason:**
 Without a persistent summary, the human must navigate to the Fit tab to understand

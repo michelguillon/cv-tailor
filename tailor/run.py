@@ -123,6 +123,9 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
     hitl = hitl or TerminalHITL()
     ctx = RunContext.create(run_id=run_id, base_dir=output_dir)
     jd_text = Path(jd_path).read_text(encoding="utf-8")
+    # Persist the raw JD so the run dir is self-describing (F-40) and Phase 6 can render
+    # the JD tab (D-37) — and a report can be regenerated from disk with the JD intact.
+    (ctx.output_dir / "jd_raw.txt").write_text(jd_text, encoding="utf-8")
     cvcm = load_cvcm()        # optional candidate value model (§3.9/D-33); None if absent
 
     summary = {"run_id": ctx.run_id, "mode": rc.mode, "output_dir": str(ctx.output_dir)}
@@ -224,7 +227,8 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # can't be regenerated faithfully from disk (F-40).
         ctx.write_checkpoint("final_manifest", result.manifest)
         out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations,
-                              config=config, source_docx=source_docx, verification_flags=flags)
+                              config=config, source_docx=source_docx, verification_flags=flags,
+                              jd_raw=jd_text)
         emit("phase_complete", phase="phase6_output")
 
         footer = _finalise(ctx, tracker, rc, iterations_run=len(result.iterations))
@@ -240,9 +244,14 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         })
         if rc.cost_cap_usd and footer["total_estimated_usd"] > rc.cost_cap_usd:
             summary["cost_cap_exceeded"] = True
+        # grounded_coverage (final source-grounded keyword coverage, F-38) + fabrication_flags
+        # (F-35) ride the footer so the archive can show the summary card without re-deriving.
+        grounded_coverage = result.iterations[-1].keyword_coverage if result.iterations else None
+        summary["grounded_coverage"] = grounded_coverage
         emit("run_complete", run_id=ctx.run_id, outcome=fit.outcome,
              converged=result.converged, convergence_reason=result.convergence_reason,
-             iterations=len(result.iterations),
+             iterations=len(result.iterations), grounded_coverage=grounded_coverage,
+             fabrication_flags=flag_count,
              cost_estimated_usd=footer["total_estimated_usd"],
              cost_breakdown=footer["cost_breakdown_estimated_usd"])
     return summary

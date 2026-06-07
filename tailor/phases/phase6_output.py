@@ -31,9 +31,43 @@ import jinja2
 
 from tailor.audit import read_entries
 
-__all__ = ["assemble_markdown", "generate_output"]
+__all__ = ["assemble_markdown", "generate_output", "summary_card"]
 
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+# --------------------------------------------------------------------------- #
+# Summary card (D-34) — the at-a-glance "should I submit this?" header         #
+#                                                                              #
+# Sourced from signals the pipeline already produces (F-43): grounded coverage #
+# is the final iteration's source-grounded keyword_coverage (F-38); unsupported#
+# claims is the verifier's flag count (F-35). No new LLM pass. This is the     #
+# single source of truth for the card — api/archive.py reuses it.             #
+# --------------------------------------------------------------------------- #
+
+def summary_card(outcome: str, fit_score: float | None, grounded_coverage: float | None,
+                 unsupported: int) -> dict:
+    """Derive the sticky summary card fields. `fit_score`/`grounded_coverage` are
+    fractions (0–1) or None; `unsupported` is the verifier flag count."""
+    fit_pct = None if fit_score is None else round(fit_score * 100)
+    grounded_pct = None if grounded_coverage is None else round(grounded_coverage * 100)
+    if fit_pct is None:
+        band = "low"
+    elif fit_pct >= 75:
+        band = "strong"
+    elif fit_pct >= 40:
+        band = "partial"
+    else:
+        band = "low"
+    band_label = {"strong": "Strong", "partial": "Partial", "low": "No Fit / Review"}[band]
+    if outcome == "no_fit":
+        status = "Do Not Submit"
+    elif unsupported > 0 or fit_pct is None or fit_pct < 75:
+        status = "Review Required"
+    else:
+        status = "Submit-ready"
+    return {"fit_label": band_label, "fit_pct": fit_pct, "fit_band": band,
+            "grounded_pct": grounded_pct, "unsupported": unsupported, "status": status}
 
 
 def _inline(text: str) -> str:
@@ -211,10 +245,11 @@ def _build_grounding(flags) -> dict:
 
 def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
                     config, template_dir: str | Path = TEMPLATE_DIR,
-                    source_docx=None, verification_flags=None) -> dict:
+                    source_docx=None, verification_flags=None, jd_raw: str = "") -> dict:
     """Write cv_final.md + cv_final.html (+ cv_final.docx when `source_docx` is given,
     the --docx stretch). `verification_flags` ({sid: [CritiqueItem]}) feeds the report's
-    Grounding tab (F-35). Returns {'md', 'html'[, 'docx']} paths."""
+    Grounding tab (F-35); `jd_raw` is the raw JD for the JD tab (D-37). Returns
+    {'md', 'html'[, 'docx']} paths."""
     cv_md = assemble_markdown(ctx, manifest, config)
     md_path = ctx.output_dir / "cv_final.md"
     md_path.write_text(cv_md, encoding="utf-8")
@@ -224,10 +259,18 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
         autoescape=jinja2.select_autoescape(["html"]),
     )
     template = env.get_template(TEMPLATE_NAME)
+    grounding = _build_grounding(verification_flags)
+    grounded_coverage = iterations[-1].keyword_coverage if iterations else None
     context = {
         "role_title": jd.role_title,
         "outcome": fit.outcome,
         "fit_score": round(fit.overall_fit_score, 3),
+        # Sticky summary card (D-34) — sourced from existing signals (F-43): grounded
+        # coverage = final iteration's source-grounded keyword_coverage (F-38);
+        # unsupported = verifier flag count (F-35). No new LLM pass.
+        "summary_card": summary_card(fit.outcome, fit.overall_fit_score,
+                                     grounded_coverage, grounding["total"]),
+        "jd_raw": jd_raw,                                  # raw JD for the JD tab (D-37)
         # Role-fit summary (F-39): the CVCM value-alignment narrative + transferable
         # strengths + gaps, so "why am I a fit" is visible after any run (incl. --yes/auto,
         # which never pauses at the Phase-1 checkpoint). value_alignment_notes is None
@@ -241,7 +284,7 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
         "changes": _build_changes(ctx, manifest, config),
         "scores": _build_scores(manifest, iterations, config),
         "reasoning": _build_reasoning(ctx),
-        "grounding": _build_grounding(verification_flags),
+        "grounding": grounding,
         "rubric": final_rubric,
         "run_id": ctx.run_id,
     }

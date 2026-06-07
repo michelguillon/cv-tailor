@@ -1291,25 +1291,27 @@ Fit indicator colours: 🟢 Strong (≥75%) · 🟡 Partial (40–74%) · 🔴 N
 
 Fields:
 - `Fit` — outcome label + `overall_fit_score` as percentage
-- `Grounded Coverage` — proportion of CV claims directly traceable to a rubric
-  keyword or JD requirement (computed by Phase 5 Haiku validation pass)
-- `Unsupported Claims` — count of statements in the final CV that the validator
-  could not ground in the JD or rubric (distinct from keyword gaps; these are
-  positive claims the CV makes that the JD doesn't support)
-- `Status` — derived: "Strong" if fit strong + 0 unsupported claims; "Review
-  Required" if partial or any unsupported claims; "Do Not Submit" if no_fit
+- `Grounded Coverage` — the final iteration's **source-grounded** `keyword_coverage`
+  (F-38): the fraction of JD/rubric keywords the CV covers *and* the candidate's raw
+  source evidences (an unsupported keyword earns no coverage)
+- `Unsupported Claims` — the **verifier's** `fabrication_flags` (F-35): count of claims
+  in the final CV not supported by the candidate's own source CV (same number as the
+  Grounding tab)
+- `Status` — derived: "Submit-ready" if fit ≥75% + 0 unsupported claims; "Review
+  Required" if fit <75% or any unsupported claims; "Do Not Submit" if no_fit
 - `Run` — `run_id` for traceability
 
-Note: `Grounded Coverage` and `Unsupported Claims` require Phase 5 (Haiku
-formatting validation) to also run a grounding check pass — a lightweight
-second prompt that reviews the final assembled CV against the JD and rubric.
-This is additive to the existing formatting check; same model, same phase,
-separate prompt. The two outputs (formatting corrections + grounding report)
-are both written to `run_log.jsonl`.
+Note (F-43): the card is sourced from signals the pipeline **already** produces — there
+is **no** extra Phase-5 grounding pass and no added LLM spend. `phase6_output.summary_card()`
+is the single source of truth for the band + status (reused by `api/archive.py` so the web
+card and HTML card can't drift); `grounded_coverage` + `fabrication_flags` ride the
+`run_complete` footer.
 
 **Fit tab** (F-39, default-active) — role-fit summary: the CVCM value-alignment narrative ("why am I a fit", D-33), transferable strengths, and gaps. Visible after any run including `--yes`/auto (which never pauses at the Phase-1 checkpoint). Falls back to the no-fit reason when there's no CVCM.
 
 **CV tab** — clean, printable. No reasoning, no annotations. This is the submittable artefact.
+
+**Grounding tab** (F-35) — the verifier's unsupported-claim flags: claims in the final CV the candidate's own source corpus doesn't support, raised at the review step. All-clear when zero. The summary card's `Unsupported Claims` count is this same number.
 
 **Changes tab** — word-level diff between the starting CV and the final CV. Additions in green, removals in red. Shows specifically what changed across all iterations combined.
 
@@ -1317,7 +1319,7 @@ are both written to `run_log.jsonl`.
 
 **Reasoning tab** — collapsible audit trail, one entry per `ReasoningEntry` log item. Grouped by phase. "Why did the orchestrator reject this suggestion?" is answerable from here.
 
-**JD tab** — the raw job description exactly as pasted. No analysis, no annotations, no highlighting. Purpose: traceability — knowing which role a run was for without needing to open an external file. Stored as `run_log` header field `jd_raw: str` and rendered verbatim.
+**JD tab** (D-37) — the raw job description exactly as pasted. No analysis, no annotations, no highlighting. Purpose: traceability — knowing which role a run was for without needing to open an external file. Persisted to `outputs/<run_id>/jd_raw.txt` (and `PipelineOutput.jd_raw`), rendered verbatim. Empty-state for pre-feature runs that didn't record it.
 
 ### cv_final.md
 
@@ -1572,18 +1574,23 @@ pipeline thread — the same handler interface as the CLI's `TerminalHITL`:
 
 ### 12.4 — Output panel
 
-Sticky summary card at the top (always visible regardless of active tab):
+Sticky summary card at the top (always visible regardless of active tab, D-34/F-43 —
+sourced from existing signals, no extra LLM pass):
 ```
 🟡 Fit: Partial (58%)  ·  ✓ Grounded Coverage: 36%  ·  ⚠ Unsupported Claims: 1
 Status: Review Required  ·  Run: run_20260606_114928
 ```
+The web OutputPanel renders this card from the run's archive summary
+(`grounded_coverage`, `unsupported_claims`, `status`, `fit_band`); the embedded
+`cv_final.html` iframe carries its own copy of the card + the JD tab.
 
-Six tabs rendered inline (matching `cv_final.html`):
+Seven tabs rendered inline (matching `cv_final.html`):
 
 ```
 [Fit]        Default-active. CVCM value-alignment narrative, transferable
              strengths, gaps. Falls back to no-fit reason if no CVCM.
 [CV]         Clean assembled CV — copy-to-clipboard button
+[Grounding]  Verifier's unsupported-claim flags (vs the candidate's source CV)
 [Changes]    Per-section version diffs across all iterations
 [Scores]     Keyword coverage + quality score per iteration per section
 [Reasoning]  Collapsible audit trail by phase

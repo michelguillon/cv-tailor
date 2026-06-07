@@ -329,7 +329,8 @@ def archive_dir(tmp_path, monkeypatch):
         "\n".join([
             json.dumps({"phase": "phase0", "event": "jd_analysed", "reasoning": "Director, SE"}),
             json.dumps({"type": "run_complete", "mode": "demo", "iterations_run": 1,
-                        "total_estimated_usd": 0.1,
+                        "total_estimated_usd": 0.1, "grounded_coverage": 0.36,
+                        "fabrication_flags": 1,
                         "cost_breakdown_estimated_usd": {"anthropic_haiku": 0.1}}),
         ]) + "\n", encoding="utf-8")
     (rd / "phase0_jd_analysis.json").write_text(json.dumps({"role_title": "Director, SE"}), encoding="utf-8")
@@ -365,6 +366,17 @@ def test_run_report_and_download(client, archive_dir):
     md = client.get("/api/runs/run_demo/files/cv_final.md")
     assert md.status_code == 200 and "clean cv text" in md.text
     assert client.get("/api/runs/run_demo/files/evil.sh").status_code == 404   # not downloadable
+
+
+def test_archive_exposes_summary_card_fields(client, archive_dir):
+    """The archive surfaces the D-34 card numbers (grounded coverage, unsupported claims,
+    derived status) from the run_complete footer — for the OutputPanel card."""
+    r = client.get("/api/runs/archive").json()[0]
+    assert r["grounded_coverage"] == 0.36 and r["unsupported_claims"] == 1
+    # partial fit (0.58) + 1 unsupported claim → Review Required; band from fit score
+    assert r["status"] == "Review Required" and r["fit_band"] == "partial"
+    d = client.get("/api/runs/run_demo/detail").json()
+    assert d["status"] == "Review Required" and d["grounded_coverage"] == 0.36
 
 
 def test_archive_unknown_run_404(client, archive_dir):

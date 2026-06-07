@@ -5,8 +5,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-/** View one completed run: summary header, downloads, and the full Phase-6 report
- *  (CV / Changes / Scores / Reasoning) embedded inline. Works for live and demo runs. */
+const FIT_BAND_VARIANT: Record<string, "success" | "secondary" | "destructive"> = {
+  strong: "success",
+  partial: "secondary",
+  low: "destructive",
+};
+
+/** View one completed run: the D-34 summary card, downloads, and the full Phase-6 report
+ *  (Fit / CV / Grounding / Changes / Scores / Reasoning / JD) embedded inline. Works for
+ *  live and demo runs. */
 export function OutputPanel({ runId, onBack }: { runId: string; onBack: () => void }) {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,25 +40,43 @@ export function OutputPanel({ runId, onBack }: { runId: string; onBack: () => vo
 
       {detail && (
         <>
+          {/* Summary card (D-34): the at-a-glance "should I submit this?" header. */}
           <Card>
-            <CardContent className="flex flex-wrap items-center gap-3 pt-6 text-sm">
-              <div className="font-medium">{detail.role_title ?? detail.run_id}</div>
-              {detail.outcome && (
-                <Badge variant={detail.outcome === "strong" ? "success" : "secondary"}>
-                  {detail.outcome}
+            <CardContent className="space-y-2 pt-6 text-sm">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="font-medium">{detail.role_title ?? detail.run_id}</div>
+                <Badge variant={(detail.fit_band ? FIT_BAND_VARIANT[detail.fit_band] : undefined) ?? "secondary"}>
+                  Fit: {detail.outcome ?? "—"}
+                  {detail.fit_score != null && ` (${(detail.fit_score * 100).toFixed(0)}%)`}
                 </Badge>
-              )}
-              {detail.mode && <Badge variant="outline">{detail.mode}</Badge>}
-              <span className="text-muted-foreground">
-                {detail.iterations} iteration(s)
-                {detail.fit_score != null && ` · fit ${(detail.fit_score * 100).toFixed(0)}%`}
-              </span>
-              {detail.cost_estimated_usd != null && (
-                <span className="ml-auto font-medium tabular-nums">
-                  ${detail.cost_estimated_usd.toFixed(4)}{" "}
-                  <span className="text-muted-foreground">est.</span>
+                {detail.mode && <Badge variant="outline">{detail.mode}</Badge>}
+                {detail.cost_estimated_usd != null && (
+                  <span className="ml-auto font-medium tabular-nums">
+                    ${detail.cost_estimated_usd.toFixed(4)}{" "}
+                    <span className="text-muted-foreground">est.</span>
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
+                <span>
+                  ✓ Grounded coverage:{" "}
+                  <span className="font-medium text-foreground tabular-nums">
+                    {detail.grounded_coverage != null
+                      ? `${(detail.grounded_coverage * 100).toFixed(0)}%`
+                      : "—"}
+                  </span>
                 </span>
-              )}
+                <span className={detail.unsupported_claims ? "text-destructive" : undefined}>
+                  {detail.unsupported_claims ? "⚠" : "✓"} Unsupported claims:{" "}
+                  <span className="font-medium tabular-nums">{detail.unsupported_claims ?? "—"}</span>
+                </span>
+                {detail.status && (
+                  <span>
+                    Status: <span className="font-medium text-foreground">{detail.status}</span>
+                  </span>
+                )}
+                <span>· {detail.iterations} iteration(s)</span>
+              </div>
             </CardContent>
           </Card>
 

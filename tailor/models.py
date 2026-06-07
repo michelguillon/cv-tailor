@@ -349,5 +349,6 @@ class PipelineOutput(Serializable):
     iterations: list[IterationScore] = field(default_factory=list)
     # per model: "anthropic_sonnet", "anthropic_haiku", "openai_gpt4o_mini", "mistral_small"
     cost_breakdown: dict[str, float] = field(default_factory=dict)
+    jd_raw: str = ""             # raw JD as submitted; rendered verbatim in the JD tab (D-37)
     # Note: intermediate drafts are NOT stored here — each phase checkpoints its
     # section files to outputs/<run_id>/sections/; Phase 6 reads them from disk.

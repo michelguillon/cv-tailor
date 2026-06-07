@@ -10,11 +10,22 @@
   * { box-sizing: border-box; }
   body { font: 15px/1.55 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
          color: var(--fg); margin: 0; background: #fafafa; }
-  header { padding: 18px 28px; border-bottom: 1px solid var(--line); background: #fff; }
-  header h1 { margin: 0 0 4px; font-size: 19px; }
-  header .meta { color: var(--muted); font-size: 13px; }
+  header { padding: 14px 28px; border-bottom: 1px solid var(--line); background: #fff;
+           position: sticky; top: 0; z-index: 3; }
+  header h1 { margin: 0 0 8px; font-size: 19px; }
+  /* Sticky summary card (D-34): always visible, never scrolls away. */
+  .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 13px; }
+  .summary .fit { font-weight: 700; padding: 2px 10px; border-radius: 12px; }
+  .summary .fit.strong { background: var(--addbg); color: var(--add); }
+  .summary .fit.partial { background: #fff4e0; color: #9a6700; }
+  .summary .fit.low { background: var(--delbg); color: var(--del); }
+  .summary .metric { color: var(--fg); }
+  .summary .metric .lbl { color: var(--muted); }
+  .summary .sep { color: var(--line); }
+  .summary .status { font-weight: 600; }
+  .summary .run { color: var(--muted); }
   nav { display: flex; gap: 4px; padding: 0 28px; background: #fff; border-bottom: 1px solid var(--line);
-        position: sticky; top: 0; }
+        position: sticky; top: 76px; z-index: 2; }
   nav button { border: none; background: none; padding: 12px 16px; font: inherit; cursor: pointer;
                color: var(--muted); border-bottom: 2px solid transparent; }
   nav button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
@@ -57,8 +68,17 @@
 <body>
 <header>
   <h1>{{ role_title }}</h1>
-  <div class="meta">Fit: {{ outcome }} ({{ '%.0f'|format(fit_score * 100) }}%) ·
-    run {{ run_id }} · rubric v{{ rubric.version }}</div>
+  <div class="summary">
+    <span class="fit {{ summary_card.fit_band }}">Fit: {{ summary_card.fit_label }}{% if summary_card.fit_pct is not none %} ({{ summary_card.fit_pct }}%){% endif %}</span>
+    <span class="metric"><span class="lbl">✓ Grounded Coverage:</span>
+      {{ (summary_card.grounded_pct ~ '%') if summary_card.grounded_pct is not none else '—' }}</span>
+    <span class="metric {{ 'flag' if summary_card.unsupported else 'ok' }}">
+      {{ '⚠' if summary_card.unsupported else '✓' }} <span class="lbl">Unsupported Claims:</span> {{ summary_card.unsupported }}</span>
+    <span class="sep">|</span>
+    <span class="status">Status: {{ summary_card.status }}</span>
+    <span class="sep">|</span>
+    <span class="run">Run: {{ run_id }} · rubric v{{ rubric.version }}</span>
+  </div>
 </header>
 <nav>
   <button class="tab-btn active" data-tab="fit">Fit</button>
@@ -67,6 +87,7 @@
   <button class="tab-btn" data-tab="changes">Changes</button>
   <button class="tab-btn" data-tab="scores">Scores</button>
   <button class="tab-btn" data-tab="reasoning">Reasoning</button>
+  <button class="tab-btn" data-tab="jd">JD</button>
 </nav>
 <main>
   <section id="fit" class="tab active">
@@ -164,6 +185,17 @@
       {% endfor %}
     </details>
     {% endfor %}
+  </section>
+
+  <section id="jd" class="tab">
+    {% if jd_raw %}
+    <div class="card">
+      <h3>Job description <span class="vers">as submitted — verbatim, no analysis</span></h3>
+      <pre style="white-space: pre-wrap; font: inherit; margin: 0;">{{ jd_raw }}</pre>
+    </div>
+    {% else %}
+    <div class="card"><div class="vers">JD not recorded for this run.</div></div>
+    {% endif %}
   </section>
 </main>
 <script>
