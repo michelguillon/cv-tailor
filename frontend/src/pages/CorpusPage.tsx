@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Trash2, ChevronDown, ChevronRight, Plus, Pencil, Upload } from "lucide-react";
+import { RefreshCw, Trash2, ChevronDown, ChevronRight, Plus, Pencil, Upload, Lock, LockOpen } from "lucide-react";
 import { api, type CorpusStats, type CVItem } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CvWizard } from "@/components/CvWizard";
 import { EditMetadataDialog } from "@/components/EditMetadataDialog";
+import { useUnlock } from "@/components/UnlockProvider";
 
 // Which modal is open over the corpus list, if any.
 type Modal =
@@ -21,6 +22,11 @@ export function CorpusPage() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
+
+  // Corpus writes are gated on the owner unlock (D-39/§12.8) — the SAME capability that
+  // unlocks full mode. Reads stay public; a write control opens the shared unlock dialog
+  // when locked, and is hidden entirely when no owner key is configured (read-only deploy).
+  const { configured, unlocked, requestUnlock, lock } = useUnlock();
 
   async function load() {
     setLoading(true);
@@ -40,7 +46,20 @@ export function CorpusPage() {
     void load();
   }, []);
 
+  // Open a write flow only once the session is unlocked (requestUnlock resolves true
+  // immediately if already unlocked, false if the user cancels the prompt).
+  async function openAdd() {
+    if (await requestUnlock()) setModal({ kind: "add" });
+  }
+  async function openEdit(cv: CVItem) {
+    if (await requestUnlock()) setModal({ kind: "edit", cv });
+  }
+  async function openReplace(cv: CVItem) {
+    if (await requestUnlock()) setModal({ kind: "replace", cv });
+  }
+
   async function onDelete(filename: string, label: string) {
+    if (!(await requestUnlock())) return;
     if (!window.confirm(`Remove ${label} from the corpus? This deletes its sections from ChromaDB.`))
       return;
     try {
@@ -65,13 +84,20 @@ export function CorpusPage() {
             The ingested CV versions tailoring draws from. Sections are the unit of retrieval.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
-          <Button size="sm" onClick={() => setModal({ kind: "add" })}>
-            <Plus className="h-4 w-4" /> Add CV
-          </Button>
+        <div className="flex items-center gap-3">
+          <LockStatus configured={configured} unlocked={unlocked} onLock={() => void lock()} />
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => void load()}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            {/* Write controls appear only on a deployment with an owner key (D-39); selecting
+                one opens the shared unlock dialog unless this session is already unlocked. */}
+            {configured && (
+              <Button size="sm" onClick={() => void openAdd()}>
+                <Plus className="h-4 w-4" /> Add CV
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -85,9 +111,11 @@ export function CorpusPage() {
         <Card>
           <CardContent className="flex flex-col items-center gap-4 py-12 text-center text-sm text-muted-foreground">
             <p>No CVs in the corpus yet. Add one to get started.</p>
-            <Button onClick={() => setModal({ kind: "add" })}>
-              <Plus className="h-4 w-4" /> Add CV
-            </Button>
+            {configured && (
+              <Button onClick={() => void openAdd()}>
+                <Plus className="h-4 w-4" /> Add CV
+              </Button>
+            )}
             <div className="text-xs">
               Or seed from the host:
               <pre className="mt-2 inline-block rounded-md bg-muted px-3 py-2 text-left">
@@ -126,15 +154,21 @@ export function CorpusPage() {
                     {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                     Sections
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => setModal({ kind: "edit", cv })}>
-                    <Pencil className="h-4 w-4" /> Edit
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setModal({ kind: "replace", cv })}>
-                    <Upload className="h-4 w-4" /> Replace
-                  </Button>
-                  <Button variant="destructive" size="icon" onClick={() => void onDelete(cv.filename, cv.display_name)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {/* Write actions are shown only on an owner-keyed deployment (D-39); each
+                      opens the unlock dialog when locked, then proceeds. */}
+                  {configured && (
+                    <>
+                      <Button variant="outline" size="sm" onClick={() => void openEdit(cv)}>
+                        <Pencil className="h-4 w-4" /> Edit
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => void openReplace(cv)}>
+                        <Upload className="h-4 w-4" /> Replace
+                      </Button>
+                      <Button variant="destructive" size="icon" onClick={() => void onDelete(cv.filename, cv.display_name)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </>
+                  )}
                 </div>
               </CardHeader>
               {expanded && (
@@ -189,6 +223,39 @@ export function CorpusPage() {
         <EditMetadataDialog cv={modal.cv} onClose={() => setModal(null)} onDone={() => void load()} />
       )}
     </div>
+  );
+}
+
+// Makes clear that viewing is public but editing requires owner unlock (§12.8):
+// unlocked → enabled + a lock affordance; locked → "unlock to edit"; no key → read-only.
+function LockStatus({
+  configured,
+  unlocked,
+  onLock,
+}: {
+  configured: boolean;
+  unlocked: boolean;
+  onLock: () => void;
+}) {
+  if (configured && unlocked) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-success">
+        <LockOpen className="h-3.5 w-3.5" /> owner unlocked
+        <button
+          type="button"
+          onClick={onLock}
+          className="ml-1 text-muted-foreground underline-offset-2 hover:underline"
+        >
+          lock
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Lock className="h-3.5 w-3.5" />
+      {configured ? "viewing is public — unlock to edit" : "viewing is public — read-only deployment"}
+    </span>
   );
 }
 

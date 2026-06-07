@@ -412,6 +412,50 @@ what changed (if anything).*
 
 ---
 
+### F-45 — Corpus write gate built (D-39): mutating endpoints reuse the full-mode capability cookie; reads stay public
+
+**What shipped.** Corpus *reads* (`GET /stats`, `/cvs`, `/cvs/{filename}/metadata`) stay
+public; the five *mutating* endpoints (`POST /upload`, `/replace`, `/confirm`, `PATCH
+…/metadata`, `DELETE …`) are now gated. Backend: a `require_unlocked(request)` dependency
+in `api/security.py` reuses the D-38 primitives (`full_mode_configured` + `verify_token` on
+the `cv_full_mode` cookie) and 403s fail-closed; `corpus.py` attaches it per-route via
+`dependencies=[Depends(require_unlocked)]` (read routes untouched). Frontend: the §12.7
+unlock state moved out of `RunPage` into a shared `UnlockProvider` (context) that owns
+`api.capabilities()`, renders the one unlock dialog, and exposes `requestUnlock(): Promise<
+boolean>` / `unlocked` / `configured` / `lock`. `RunPage` and `CorpusPage` both consume it;
+corpus write controls route through `requestUnlock()` when locked and are hidden when no key
+is configured (read-only deployment), mirroring how full mode hides.
+
+**Decisions worth keeping:**
+- **One capability, reused.** No new cookie/secret/endpoint — the dependency is ~6 lines
+  over `verify_token`. The frontend reads the existing `full_unlocked` for both run + corpus
+  gating (D-39).
+- **Dependency, not inline.** Five endpoints share one `Depends(require_unlocked)`; cleaner
+  than copying the `runs.py` inline check five times, and "any future mutating endpoint"
+  just adds the dependency.
+- **Fail-closed = read-only without a key.** With `FULL_MODE_KEY` unset the corpus is
+  view-only on the API (the spec's intent for a public deploy). Local-dev writers set the
+  key (or seed via the CLI, which bypasses the API entirely).
+
+**Gotchas during build:**
+- **FastAPI parses the request body before solving dependencies.** For multipart `upload`/
+  `replace`, Starlette buffers the uploaded bytes into its *own* temp before `require_unlocked`
+  runs — so "reject before parsing" holds for *corpus* state (no `tmp/corpus/` staging, no
+  `preview_upload`, no embed) but not for the transient HTTP body spool. That's request
+  plumbing, discarded on the 403; documented so it isn't mistaken for a leak.
+- **Existing corpus mutation tests had no unlock** and would all 403 under the new gate. Added
+  an `unlocked` fixture (sets `FULL_MODE_KEY` + posts `/full-mode/unlock` so the TestClient
+  cookie jar carries `cv_full_mode`); the `corpus_dirs` fixture depends on it so add/replace/
+  confirm/edit tests pass unchanged, and the delete test takes it explicitly. New tests assert
+  403 when locked / unconfigured and that reads stay public.
+
+**Affects** D-39 (now built), §12.8 + §12.1 (endpoint gating note), `api/security.py`
+(`require_unlocked`), `api/routers/corpus.py`, `frontend/{components/UnlockProvider,App,
+pages/RunPage,pages/CorpusPage,lib/api}` (RunPage's unlock state extracted), `api/CLAUDE.md`,
+`frontend/CLAUDE.md`, `.env.example`, `tests/test_api.py`.
+
+---
+
 ### F-44 — Full Mode Unlock Gate built (D-38): one-time unlock → signed HttpOnly capability cookie; the raw key never lives in the browser
 
 **What shipped.** Full (Sonnet) mode is gated on a **capability cookie**, not a per-run
@@ -2780,3 +2824,40 @@ it. Full SPEC in **§12.7**.
 **Deferred (optional):** operational caps (full runs/day, spend/day, concurrent full runs)
 build on `cost_cap_usd` — which today is *reported*, not a hard mid-run stop — so they'd
 add a hard stop + in-memory daily counters. Not required for the first cut.
+
+---
+
+### D-39 — Corpus writes reuse the full-mode capability cookie (one unlock, both powers) (built, F-45)
+
+**What was decided (built — see F-45):**
+The corpus stays publicly browsable, but every operation that mutates persisted corpus
+state (add / replace / delete CV, re-index, edit metadata/sidecar) is gated on the **same**
+signed capability cookie that unlocks full mode (D-38/§12.7). No second key, secret, or
+cookie: one owner unlock authorises both expensive runs and corpus edits. Enforcement is a
+`require_unlocked` FastAPI dependency in `api/security.py` (reuses `verify_token`), attached
+to the five mutating endpoints in `api/routers/corpus.py`. Read endpoints stay public. Full
+SPEC in **§12.8**.
+
+**Load-bearing reasons:**
+- **Same threat, same guard.** The objective is identical to D-38 — keep a public,
+  recruiter-facing deployment inspectable while stopping anyone but the owner from changing
+  state. The minimum that achieves it is the existing capability cookie applied to writes;
+  building a second auth surface would be over-engineering for a portfolio app.
+- **One capability, not two.** The spec is explicit that the *same* unlock protects both
+  expensive runs and corpus writes ("use full mode if separately enabled by the same
+  capability state"). Reusing `cv_full_mode` + `verify_token` means the owner unlocks once;
+  the frontend reads the existing `full_unlocked` capability for both.
+- **Backend is the source of truth; UI hiding is convenience.** The 403 holds against a
+  direct `curl`; the dependency runs before the handler, so a refused write never parses,
+  embeds, indexes, or writes a corpus file. **Fail closed:** no `FULL_MODE_KEY` ⇒ the
+  deployment is read-only (writes 403 even for the owner — set the key to enable them).
+- **CLI untouched.** `corpus.ingest` writes the corpus directly (no API, no cookie); the
+  gate is only the Web write path, exactly as `--key` stays the CLI gate for full mode.
+
+**Behaviour change worth noting:** corpus writes used to be open on the API. They now
+require an unlock, and on a server with no `FULL_MODE_KEY` the UI corpus becomes view-only
+(seed via the CLI instead). This is the intended fail-closed posture, not a regression.
+
+**Reuse over new surface (R-05 spirit):** rather than a bespoke gate, the dependency is a
+thin wrapper over the D-38 token primitives — sign/verify, `full_mode_configured`, the
+cookie name — all already in `api/security.py`.

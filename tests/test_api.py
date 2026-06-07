@@ -45,6 +45,15 @@ def corpus_patched(monkeypatch):
                                          "by_section_type": {"header": 1, "profile": 1, "experience": 1}})
 
 
+@pytest.fixture
+def unlocked(client, monkeypatch):
+    """Authorise corpus writes (D-39/§12.8): set the owner key and unlock the TestClient so
+    its cookie jar carries the `cv_full_mode` capability cookie on subsequent requests."""
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    client.post("/api/full-mode/unlock", json={"key": "pw"})
+    return client
+
+
 # --------------------------------------------------------------------------- #
 # app + route shape                                                           #
 # --------------------------------------------------------------------------- #
@@ -386,7 +395,7 @@ def test_archive_unknown_run_404(client, archive_dir):
     assert client.get("/api/runs/nope/report").status_code == 404
 
 
-def test_corpus_delete_removes_sections(client, monkeypatch):
+def test_corpus_delete_removes_sections(client, monkeypatch, unlocked):
     class FakeCollection:
         def __init__(self):
             self.deleted_where = None
@@ -428,8 +437,11 @@ def _inventory(n=6, below=False):
 
 
 @pytest.fixture
-def corpus_dirs(tmp_path, monkeypatch):
-    """Redirect the corpus router's on-disk dirs (data/cvs + tmp staging) into tmp."""
+def corpus_dirs(tmp_path, monkeypatch, unlocked):
+    """Redirect the corpus router's on-disk dirs (data/cvs + tmp staging) into tmp.
+
+    Depends on `unlocked` so the write-path tests carry the capability cookie the gate
+    (D-39/§12.8) now requires — otherwise every mutating endpoint would 403."""
     cv_dir = tmp_path / "cvs"
     tmp_corpus = tmp_path / "tmp_corpus"
     cv_dir.mkdir()
@@ -557,6 +569,51 @@ def test_edit_metadata_404_when_cv_absent(client, corpus_dirs, monkeypatch):
     monkeypatch.setattr(corpus_router, "update_cv_metadata", lambda *a, **k: 0)
     r = client.patch("/api/corpus/cvs/missing.docx/metadata", json={"metadata": VALID_META})
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Corpus write gate (D-39/§12.8) — same capability cookie as full mode          #
+# --------------------------------------------------------------------------- #
+
+def test_corpus_reads_stay_public(client, corpus_patched, monkeypatch):
+    """Read endpoints are public even with an owner key configured and no unlock."""
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    assert client.get("/api/corpus/stats").status_code == 200
+    assert client.get("/api/corpus/cvs").status_code == 200
+
+
+def test_corpus_writes_403_when_locked(client, monkeypatch):
+    """Configured server but no capability cookie → every mutating endpoint 403s, fail-closed.
+
+    The gate runs before the handler, so nothing is staged, parsed, embedded, or written."""
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    meta = json.dumps(VALID_META)
+    assert client.post("/api/corpus/upload", files={"file": ("CV.docx", b"PK")},
+                       data={"metadata": meta, "replace": "false"}).status_code == 403
+    assert client.post("/api/corpus/replace", files={"file": ("CV.docx", b"PK")},
+                       data={"metadata": meta}).status_code == 403
+    assert client.post("/api/corpus/confirm", json={
+        "token": "t", "filename": "CV.docx", "metadata": VALID_META, "replace": False}).status_code == 403
+    assert client.patch("/api/corpus/cvs/CV.docx/metadata",
+                        json={"metadata": VALID_META}).status_code == 403
+    assert client.delete("/api/corpus/cvs/CV.docx").status_code == 403
+
+
+def test_corpus_writes_403_when_unconfigured(client, monkeypatch):
+    """No owner key → read-only deployment: writes 403 even with no cookie present."""
+    monkeypatch.delenv("FULL_MODE_KEY", raising=False)
+    assert client.delete("/api/corpus/cvs/CV.docx").status_code == 403
+    assert client.post("/api/corpus/confirm", json={
+        "token": "t", "filename": "CV.docx", "metadata": VALID_META, "replace": False}).status_code == 403
+
+
+def test_corpus_write_proceeds_after_unlock(client, corpus_dirs, monkeypatch):
+    """With the capability cookie (via `corpus_dirs` → `unlocked`), a write is authorised."""
+    monkeypatch.setattr(corpus_router, "preview_upload", lambda *a, **k: _inventory(6))
+    r = client.post("/api/corpus/upload",
+                    files={"file": ("CV_ok.docx", b"PK")},
+                    data={"metadata": json.dumps(VALID_META), "replace": "false"})
+    assert r.status_code == 200 and r.json()["section_count"] == 6
 
 
 # --------------------------------------------------------------------------- #

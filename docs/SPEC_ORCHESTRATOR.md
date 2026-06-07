@@ -1476,7 +1476,10 @@ Ingest is **not** SSE — one CV is a single batched embed call and the human ga
 preview→confirm, not progress-watching (F-42). Error contract: **409** duplicate on
 Add, **422** invalid metadata, **410** expired staged upload, **404** edit/delete of
 an absent CV. `budgets.yaml` is re-derived from ChromaDB metadata after each confirm
-(F-42, refines D-14).
+(F-42, refines D-14). The three **read** endpoints (`GET /stats`, `/cvs`,
+`/cvs/{filename}/metadata`) are public; the five **mutating** ones (`POST /upload`,
+`/replace`, `/confirm`, `PATCH …/metadata`, `DELETE …`) require the owner capability
+cookie (**§12.8 / D-39**) — 403 fail-closed otherwise.
 
 **Why the YAML form rather than a sidecar file upload:**
 In the CLI workflow, metadata lives in a `.yaml` sidecar file alongside the
@@ -1753,3 +1756,75 @@ capabilities, an unlock dialog, mode state driven by capabilities, drop the raw-
 tests — unlock success/fail, 403 on a full run without a valid cookie, capabilities states,
 cookie expiry/signature. The CLI `--key` path and `resolve_run_config`'s key check are
 retained for non-Web use.
+
+---
+
+### 12.8 — Gate Corpus Write Operations (built, D-39 / F-45)
+
+> **Status: built.** The corpus stays **publicly browsable** (anyone can view the
+> inventory, metadata, and section breakdowns), but every operation that **changes
+> persisted corpus state** now requires the **same owner capability cookie** as full
+> mode (§12.7). One unlock authorises both expensive runs *and* corpus edits — there is
+> no second key, secret, or cookie. Implementation: a `require_unlocked` FastAPI
+> dependency in `api/security.py` (reuses `verify_token`), attached to the five mutating
+> `api/routers/corpus.py` endpoints; the frontend reuses the §12.7 unlock dialog via a
+> shared `UnlockProvider`.
+
+**Objective.** Keep the portfolio app a single public deployment that visitors can
+*inspect* without authentication, while preventing anyone but the owner from *modifying*
+the corpus. This is the §12.7 spend-guard model applied to write operations — **not** full
+authentication, accounts, or roles.
+
+**Access model.**
+- **Public (no unlock)** — view corpus inventory + metadata, see CV archetypes / source
+  assets, and use demo mode. All read-only `GET` corpus endpoints stay open.
+- **Unlocked (valid capability cookie)** — add / replace / delete CVs, trigger metadata
+  extraction / re-indexing, update sidecar metadata, *and* use full mode (the same
+  capability state, §12.7). One unlock, both powers.
+
+**Unlock behaviour (Web).** Identical flow to full mode:
+1. The user clicks Add / Replace / Delete (or any corpus-mutating action).
+2. If the session is not unlocked, the UI opens the **same unlock prompt** (owner key,
+   password field — never persisted in React state, `localStorage`, or a readable cookie).
+3. The backend validates the key and sets the signed HttpOnly capability cookie (§12.7).
+4. The original corpus action proceeds after a successful unlock; the raw key is not
+   stored client-side or re-sent per action.
+
+**Backend enforcement (the source of truth).** Each corpus-mutating endpoint is gated by a
+`require_unlocked` dependency and **rejected with 403** unless **both** hold: an owner key
+is configured server-side (`FULL_MODE_KEY` set) *and* the request carries a valid,
+unexpired, signature-verified capability cookie. **Fail closed:** no key configured ⇒ the
+deployment is **read-only** (every write 403s, even for the owner — set the key to enable
+writes); missing/invalid cookie ⇒ refused. Protected operations: add document, replace
+document, delete document, re-index, update metadata / sidecar, **and any future endpoint
+that mutates corpus state**. Read-only corpus endpoints remain public. The dependency runs
+before the handler, so a refused write never parses the CV, embeds, indexes, or writes a
+file (Starlette may buffer the multipart body to its own temp first, but that is request
+plumbing, not corpus state — no `tmp/corpus/` staging, no `data/cvs/` write, no ChromaDB
+call happens). UI hiding/disabling is convenience only and is never relied on for
+protection — a direct `curl` to a mutating endpoint without the cookie is refused.
+
+**UI behaviour.** The corpus page stays visible to everyone.
+- **Locked but unlock available** (key configured, no cookie): write controls remain
+  visible; clicking one opens the unlock prompt; a status line makes clear *viewing is
+  public, editing requires owner unlock*.
+- **Unlocked**: write actions are enabled, a small "owner unlocked" indicator (with a
+  *lock* affordance) is shown, and the valid session is not re-prompted.
+- **Read-only deployment** (no key configured server-side): write controls are hidden and
+  a note states the corpus is view-only here — mirroring how full mode is hidden when not
+  configured (§12.7), so there is no dead/always-failing button.
+
+**Failure behaviour.** A failed unlock keeps the user on the corpus page, performs no
+action, and shows a clear "editing requires owner access" message. A write request that
+reaches the backend without a valid unlock returns 403 and does **not** partially mutate
+corpus state (no parse, no index, no file write).
+
+**Success criteria.** Visitors inspect the corpus without authentication; visitors cannot
+modify it; Add / Replace / Delete (and re-index / metadata edits) require owner unlock;
+backend protection cannot be bypassed via direct API calls; the **same** unlock mechanism
+protects both expensive model runs and corpus writes; the app stays a single public
+deployment with no full authentication.
+
+**CLI is unaffected.** `corpus.ingest` writes the corpus directly (no browser, no cookie,
+no API) — the gate is purely the Web write path, exactly as `--key` remains the CLI gate
+for full mode (§12.7).

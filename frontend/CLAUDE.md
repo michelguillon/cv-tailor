@@ -16,13 +16,17 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   in prod (which serves the bundle and proxies `/api`).
 - **Pages under `src/pages/`**, one per mode (Corpus, Run, …); `App.tsx` is the shell
   + tab nav. Keep pages thin: fetch via `api`, render with `ui/` primitives.
-- **Full mode unlock (D-38/F-44):** `RunPage` renders the mode picker from
-  `api.capabilities()` — `full` appears only when configured server-side; selecting it while
-  locked opens an unlock dialog (`ui/dialog.tsx`) that POSTs the key once to
-  `api.unlockFullMode`, after which a signed HttpOnly cookie (sent automatically, same-origin)
-  authorises full runs. The raw key is **never** kept in component state after submit and
-  `startRun` no longer sends a key. Backend is the source of truth (403); the UI gating is
-  convenience only.
+- **Owner unlock (D-38/D-39, F-44/F-45):** the capability state + the one unlock dialog live
+  in `components/UnlockProvider.tsx` (wraps the app in `App.tsx`), which owns
+  `api.capabilities()` and exposes `useUnlock()` → `{caps, configured, unlocked, requestUnlock,
+  lock, refresh}`. `requestUnlock()` opens the dialog if needed and resolves `true` once
+  unlocked (immediately if already unlocked) / `false` on cancel — callers gate an action on
+  it. ONE signed HttpOnly cookie (sent automatically, same-origin) authorises **both** full
+  (Sonnet) runs (§12.7) **and** corpus writes (§12.8). `RunPage` uses it for the mode picker
+  (`full` shown only when `configured`; selecting it calls `requestUnlock`). `CorpusPage` uses
+  it to gate Add/Edit/Replace/Delete (controls hidden when `!configured` = read-only deploy;
+  shown + open the prompt when locked). The raw key is **never** kept in state after submit;
+  `startRun` sends no key. Backend is the source of truth (403); UI gating is convenience only.
 - **Output panel summary card (D-34/F-43):** `OutputPanel` renders a summary card —
   fit band + %, grounded coverage, unsupported claims (⚠ when >0), derived status — from
   the run's archive fields (`grounded_coverage`, `unsupported_claims`, `status`,
@@ -37,7 +41,9 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   (the 422 is a safety net, not the primary UX); keep them in sync. File upload
   uses `api.postForm` (multipart, no JSON Content-Type); `ApiError.status` lets the
   wizard branch on **409** (duplicate → "use Replace"). Ingest is synchronous (a
-  spinner, not SSE) — the human gate is the inventory step, not progress.
+  spinner, not SSE) — the human gate is the inventory step, not progress. Every write
+  action is gated on the owner unlock via `useUnlock().requestUnlock()` (D-39/§12.8);
+  the controls are hidden on a read-only deployment (`!configured`).
 - **SSE (UI Step 3+):** consume `/api/runs/{id}/stream` with `EventSource`; render the
   progress timeline + inline HITL panels as events arrive. `proxy_buffering off` in
   nginx (prod) is required or SSE buffers (SPEC §7.5).

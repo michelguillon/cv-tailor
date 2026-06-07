@@ -71,4 +71,7 @@ Feature-complete; preparing for deployment. The full pipeline (Phase 0→6) runs
 CLI and the Web UI, over a 7-CV / 83-section ChromaDB corpus. Dual-writer refinement
 (Claude + GPT-4o-mini, orchestrated), a source-grounded anti-fabrication trust layer
 (writer rules → orchestrator gate → honest metric → verifier), and the demo/full mode
-split are all in place. See the Findings Log in the learning notes for the build trail.
+split are all in place. A single owner unlock (signed HttpOnly capability cookie) gates
+both full (Sonnet) runs and corpus write operations, so a public deployment stays
+browsable but read-only until unlocked (SPEC §12.7/§12.8). See the Findings Log in the
+learning notes for the build trail.

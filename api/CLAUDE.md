@@ -36,7 +36,12 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
   single embed call — F-42). `PATCH /cvs/{filename}/metadata` edits in place: it
   patches the ChromaDB section metadata (not just the sidecar) because the list +
   retrieval filters read metadata from there. Ingest/metadata helpers live in
-  `corpus/ingest.py` (imported at module scope so tests monkeypatch them).
+  `corpus/ingest.py` (imported at module scope so tests monkeypatch them). The three
+  **read** endpoints are public; the five **mutating** ones (`/upload`, `/replace`,
+  `/confirm`, `PATCH …/metadata`, `DELETE …`) carry `dependencies=[Depends(require_unlocked)]`
+  — gated on the same owner capability cookie as full mode (**D-39/§12.8**, `api/security.py`),
+  **403 fail-closed** when no key is configured or the cookie is missing/invalid. Any future
+  corpus-mutating endpoint must add the same dependency.
 - `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`.
 - `hitl.py` (`/api/runs/{id}/hitl`) — resume a paused run with the human's decision
   (a single action dict → `Session.submit_hitl`). Shares the `/api/runs` prefix with
@@ -47,6 +52,8 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
   cookie; `runs.py:start_run` enforces it (**403 fail-closed** when unset/missing/invalid).
   Token sign/verify is `api/security.py` (stdlib HMAC, secret = `FULL_MODE_KEY`). The CLI
   is unchanged (`--key`). Never read the raw key from a run request — gate on the cookie.
+  The **same** capability also authorises corpus writes via the `require_unlocked` dependency
+  (`api/security.py`, D-39/§12.8) — one owner unlock, both powers; no second secret/cookie.
 
 ## HITL handler (UI Step 4, F-31)
 

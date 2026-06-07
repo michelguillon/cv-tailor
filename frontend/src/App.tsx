@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CorpusPage } from "@/pages/CorpusPage";
 import { RunPage } from "@/pages/RunPage";
 import { RunsPage } from "@/pages/RunsPage";
+import { UnlockProvider } from "@/components/UnlockProvider";
 import { cn } from "@/lib/utils";
 
 // Run is Mode 1 / the default landing tab (SPEC §12.1, D-35): the primary use case is
@@ -16,6 +17,7 @@ export default function App() {
   const [tab, setTab] = useState<string>("run");
 
   return (
+    <UnlockProvider>
     <div className="min-h-screen">
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-5xl items-center gap-8 px-6 py-4">
@@ -48,5 +50,6 @@ export default function App() {
         {tab === "runs" && <RunsPage />}
       </main>
     </div>
+    </UnlockProvider>
   );
 }

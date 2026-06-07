@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink, Lock, LockOpen } from "lucide-react";
-import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision, type Capabilities } from "@/lib/api";
+import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog } from "@/components/ui/dialog";
 import { HitlPanel } from "@/components/HitlPanel";
+import { useUnlock } from "@/components/UnlockProvider";
 import { cn } from "@/lib/utils";
 
 const PHASES: { id: string; label: string }[] = [
@@ -41,13 +41,9 @@ export function RunPage() {
   const [mode, setMode] = useState<"demo" | "full">("demo");
   const [auto, setAuto] = useState(false);
 
-  // Full Mode Unlock Gate (D-38): the picker is driven by server capabilities; full mode
-  // opens a one-time unlock dialog (the key is never kept in frontend state after submit).
-  const [caps, setCaps] = useState<Capabilities | null>(null);
-  const [unlockOpen, setUnlockOpen] = useState(false);
-  const [unlockKey, setUnlockKey] = useState("");
-  const [unlockErr, setUnlockErr] = useState<string | null>(null);
-  const [unlockBusy, setUnlockBusy] = useState(false);
+  // Full mode is gated on the shared owner unlock (D-38/D-39); the capability state +
+  // unlock dialog live in UnlockProvider so the Corpus page reuses the same one unlock.
+  const { configured, requestUnlock, lock } = useUnlock();
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -66,51 +62,20 @@ export function RunPage() {
 
   useEffect(() => () => esRef.current?.close(), []);
 
-  // Load capabilities once so the mode picker renders the right state (full hidden when
-  // not configured server-side; shown locked/unlocked otherwise).
-  useEffect(() => {
-    api.capabilities().then(setCaps).catch(() => setCaps(null));
-  }, []);
-
   function onPickMode(value: "demo" | "full") {
     if (value === "demo") {
       setMode("demo");
       return;
     }
-    if (caps?.full_unlocked) {
-      setMode("full");
-    } else {
-      setUnlockErr(null);
-      setUnlockKey("");
-      setUnlockOpen(true); // stay in demo until the unlock succeeds
-    }
-  }
-
-  async function submitUnlock() {
-    setUnlockBusy(true);
-    setUnlockErr(null);
-    try {
-      await api.unlockFullMode(unlockKey);
-      setUnlockKey(""); // never retain the raw key
-      const c = await api.capabilities();
-      setCaps(c);
-      setMode("full");
-      setUnlockOpen(false);
-    } catch (e) {
-      setUnlockErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setUnlockBusy(false);
-    }
+    // Selecting full opens the shared unlock dialog if needed; stay in demo if cancelled.
+    void (async () => {
+      if (await requestUnlock()) setMode("full");
+    })();
   }
 
   async function lockFull() {
-    try {
-      await api.lockFullMode();
-    } catch {
-      /* best-effort */
-    }
+    await lock();
     setMode("demo");
-    api.capabilities().then(setCaps).catch(() => {});
   }
 
   function reset() {
@@ -266,7 +231,7 @@ export function RunPage() {
               <option value="demo">demo (Haiku, ~$0.10)</option>
               {/* full is offered only when configured server-side (D-38); selecting it
                   opens the unlock dialog unless this session is already unlocked. */}
-              {caps?.full_configured && <option value="full">full (Sonnet · restricted)</option>}
+              {configured && <option value="full">full (Sonnet · restricted)</option>}
             </select>
             {mode === "full" ? (
               <span className="inline-flex items-center gap-1.5 text-xs text-success">
@@ -281,7 +246,7 @@ export function RunPage() {
                 </button>
               </span>
             ) : (
-              caps?.full_configured && (
+              configured && (
                 <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Lock className="h-3.5 w-3.5" /> full mode locked
                 </span>
@@ -339,41 +304,6 @@ export function RunPage() {
           ))}
         </div>
       )}
-
-      <Dialog
-        open={unlockOpen}
-        onClose={() => setUnlockOpen(false)}
-        title="Unlock full mode"
-        description="Full mode runs Sonnet (higher cost). Enter the full-mode key once — it's exchanged for a session cookie and never stored in the browser."
-        className="max-w-md"
-      >
-        <div className="space-y-4">
-          {unlockErr && (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {unlockErr}
-            </div>
-          )}
-          <input
-            type="password"
-            value={unlockKey}
-            autoFocus
-            placeholder="FULL_MODE_KEY"
-            onChange={(e) => setUnlockKey(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && unlockKey) void submitUnlock();
-            }}
-            className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setUnlockOpen(false)}>
-              Cancel
-            </Button>
-            <Button disabled={unlockBusy || !unlockKey} onClick={() => void submitUnlock()}>
-              {unlockBusy && <Loader2 className="h-4 w-4 animate-spin" />} Unlock
-            </Button>
-          </div>
-        </div>
-      </Dialog>
 
       {hitl && <HitlPanel checkpoint={hitl.checkpoint} payload={hitl.payload} busy={hitlBusy} onDecide={(d) => void decide(d)} />}
 

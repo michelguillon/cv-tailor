@@ -23,9 +23,10 @@ from collections import defaultdict
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from api.security import require_unlocked
 from corpus.ingest import (
     CV_DIR,
     commit_upload,
@@ -161,6 +162,11 @@ def get_cv_metadata(filename: str) -> dict:
 
 # --------------------------------------------------------------------------- #
 # Add / Replace — two-step (upload → confirm) behind the R-01 inventory gate   #
+#                                                                              #
+# Every state-mutating endpoint below is gated on the owner capability cookie  #
+# (`require_unlocked`, D-39/§12.8) — the same unlock as full mode. Reads above  #
+# stay public; the dependency runs before the handler, so a refused write never #
+# stages, parses, embeds, or indexes anything (403 fail-closed).               #
 # --------------------------------------------------------------------------- #
 
 def _stage_upload(file: UploadFile, fields: dict, *, replace: bool) -> dict:
@@ -183,7 +189,7 @@ def _stage_upload(file: UploadFile, fields: dict, *, replace: bool) -> dict:
     return {"token": token, "filename": filename, "replace": replace, **preview}
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_unlocked)])
 def upload_cv(file: UploadFile = File(...), metadata: str = Form(...),
               replace: bool = Form(False)) -> dict:
     """Stage a new CV and return its parsed section inventory (Add flow, no writes)."""
@@ -191,7 +197,7 @@ def upload_cv(file: UploadFile = File(...), metadata: str = Form(...),
     return _stage_upload(file, fields, replace=replace)
 
 
-@router.post("/replace")
+@router.post("/replace", dependencies=[Depends(require_unlocked)])
 def replace_cv(file: UploadFile = File(...), metadata: str = Form(...)) -> dict:
     """Stage a replacement .docx (Replace flow) — same as upload, no duplicate check."""
     fields = _parse_metadata(metadata, file.filename or "")
@@ -205,7 +211,7 @@ class ConfirmRequest(BaseModel):
     replace: bool = False
 
 
-@router.post("/confirm")
+@router.post("/confirm", dependencies=[Depends(require_unlocked)])
 def confirm_cv(body: ConfirmRequest) -> dict:
     """Commit a staged CV to ChromaDB after the human confirmed the inventory (D-36).
 
@@ -243,7 +249,7 @@ class MetadataPatch(BaseModel):
     metadata: dict
 
 
-@router.patch("/cvs/{filename}/metadata")
+@router.patch("/cvs/{filename}/metadata", dependencies=[Depends(require_unlocked)])
 def patch_cv_metadata(filename: str, body: MetadataPatch) -> dict:
     """Update a CV's editorial metadata in place — no re-embedding, no inventory gate.
 
@@ -265,7 +271,7 @@ def patch_cv_metadata(filename: str, body: MetadataPatch) -> dict:
 # Delete                                                                      #
 # --------------------------------------------------------------------------- #
 
-@router.delete("/cvs/{filename}")
+@router.delete("/cvs/{filename}", dependencies=[Depends(require_unlocked)])
 def delete_cv(filename: str) -> dict:
     """Remove all of a CV's sections from ChromaDB (SPEC §12.1 delete)."""
     config = load_config()

@@ -12,6 +12,10 @@ missing/tampered/expired token, means "not unlocked". The backend is the source 
 (`api/routers/runs.py` enforces it); UI hiding is convenience only.
 
 The CLI is unaffected: it has no browser/cookie and keeps `--key` (config.resolve_run_config).
+
+The same capability also authorises **corpus writes** (SPEC §12.8, D-39): `require_unlocked`
+is a FastAPI dependency that gates any state-mutating endpoint on the very same cookie — one
+owner unlock, both powers, no second secret.
 """
 
 from __future__ import annotations
@@ -22,9 +26,11 @@ import hmac
 import os
 import time
 
+from fastapi import HTTPException, Request
+
 __all__ = [
     "FULL_COOKIE", "FULL_MODE_TTL", "cookie_secure", "full_mode_configured",
-    "key_matches", "issue_token", "verify_token",
+    "key_matches", "issue_token", "verify_token", "require_unlocked",
 ]
 
 FULL_COOKIE = "cv_full_mode"
@@ -85,3 +91,19 @@ def verify_token(token: str | None, *, now: int | None = None) -> bool:
     if exp < (int(time.time()) if now is None else now):
         return False
     return hmac.compare_digest(sig, _sign(exp, secret))
+
+
+def require_unlocked(request: Request) -> None:
+    """FastAPI dependency gating state-mutating endpoints on the capability cookie (D-39, §12.8).
+
+    The same signed cookie that unlocks full mode (§12.7) also authorises corpus writes —
+    one owner unlock, both powers. Fails closed: 403 when no key is configured on the server
+    (the deployment is read-only) or the request carries no valid capability cookie. Use as
+    `dependencies=[Depends(require_unlocked)]` so it runs before the handler — a refused write
+    never parses, embeds, indexes, or writes a corpus file."""
+    if not full_mode_configured():
+        raise HTTPException(status_code=403,
+                            detail="this deployment is read-only (owner unlock not configured)")
+    if not verify_token(request.cookies.get(FULL_COOKIE)):
+        raise HTTPException(status_code=403,
+                            detail="locked — unlock owner access to modify the corpus")
