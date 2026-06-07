@@ -4,14 +4,16 @@ import { RunPage } from "@/pages/RunPage";
 import { RunsPage } from "@/pages/RunsPage";
 import { cn } from "@/lib/utils";
 
+// Run is Mode 1 / the default landing tab (SPEC §12.1, D-35): the primary use case is
+// starting a tailoring run. Runs (history) follows; Corpus management is secondary.
 const TABS = [
-  { id: "corpus", label: "Corpus" },
   { id: "run", label: "Tailor a CV" },
   { id: "runs", label: "Runs" },
+  { id: "corpus", label: "Corpus" },
 ] as const;
 
 export default function App() {
-  const [tab, setTab] = useState<string>("corpus");
+  const [tab, setTab] = useState<string>("run");
 
   return (
     <div className="min-h-screen">

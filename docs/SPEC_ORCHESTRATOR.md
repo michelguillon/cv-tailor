@@ -1267,7 +1267,7 @@ Deterministic; unit-tested against a fixture .docx.
 
 ### cv_final.html
 
-Four-tab interface:
+Seven-tab interface (Fit · CV · Grounding · Changes · Scores · Reasoning · JD):
 
 **Sticky summary card (all tabs)**
 
