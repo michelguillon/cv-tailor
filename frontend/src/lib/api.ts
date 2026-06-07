@@ -15,22 +15,51 @@ async function del<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Raised when an HTTP call fails; carries the status so callers can branch (e.g. 409).
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
+}
+
+async function errorFrom(res: Response): Promise<ApiError> {
+  let detail = `${res.status} ${res.statusText}`;
+  try {
+    const j = (await res.json()) as { detail?: string };
+    if (j.detail) detail = j.detail;
+  } catch {
+    /* non-JSON error body */
+  }
+  return new ApiError(res.status, detail);
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
-    try {
-      const j = (await res.json()) as { detail?: string };
-      if (j.detail) detail = j.detail;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(detail);
-  }
+  if (!res.ok) throw await errorFrom(res);
+  return res.json() as Promise<T>;
+}
+
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await errorFrom(res);
+  return res.json() as Promise<T>;
+}
+
+// Multipart POST (file upload) — no JSON Content-Type; the browser sets the boundary.
+async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: "POST", body: form });
+  if (!res.ok) throw await errorFrom(res);
   return res.json() as Promise<T>;
 }
 
@@ -54,10 +83,52 @@ export interface CVItem {
   display_name: string;    // company-name-free label shown in the UI (F-41)
   cv_type: string;
   target_role: string;
+  target_company: string | null;
   seniority: string;
   version_date: string;
   section_count: number;
   sections: CVSection[];
+}
+
+// The editorial metadata the YAML form collects (D-36). Mirrors the sidecar fields;
+// the backend validates the same way load_sidecar does.
+export interface CvMetadataFields {
+  filename: string;
+  cv_type: "generic" | "job_specific";
+  target_role: string;
+  target_company: string | null;
+  skills_emphasis: string[];
+  seniority: "senior" | "principal" | "director" | "vp";
+  version_date: string;
+}
+
+// One row of the parse preview — the R-01 section-inventory gate (D-36).
+export interface SectionPreview {
+  section_id: string;
+  section_type: string;
+  word_count: number;
+  static: boolean;
+  title: string;
+}
+
+export interface UploadPreview {
+  token: string;             // staged-upload handle, passed back to /confirm
+  filename: string;
+  replace: boolean;
+  sections: SectionPreview[];
+  section_count: number;
+  below_minimum: boolean;    // < MIN_SECTIONS → likely a silent parse failure (warn, R-01)
+  min_sections: number;
+  warnings: string[];
+  empty_headers: string[];
+}
+
+export interface ConfirmResult {
+  status: string;
+  filename: string;
+  sections_committed: number;
+  removed: number;           // sections of the prior version dropped (Replace)
+  replaced: boolean;
 }
 
 export interface StartRunResponse {
@@ -118,6 +189,22 @@ export const api = {
   deleteCV: (filename: string) =>
     del<{ deleted: string; sections_removed: number }>(
       `/corpus/cvs/${encodeURIComponent(filename)}`,
+    ),
+  cvMetadata: (filename: string) =>
+    get<CvMetadataFields>(`/corpus/cvs/${encodeURIComponent(filename)}/metadata`),
+  uploadCV: (file: File, metadata: CvMetadataFields, replace = false) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("metadata", JSON.stringify(metadata));
+    form.append("replace", String(replace));
+    return postForm<UploadPreview>(replace ? "/corpus/replace" : "/corpus/upload", form);
+  },
+  confirmCV: (body: { token: string; filename: string; metadata: CvMetadataFields; replace: boolean }) =>
+    post<ConfirmResult>("/corpus/confirm", body),
+  editMetadata: (filename: string, metadata: CvMetadataFields) =>
+    patch<{ status: string; filename: string; sections_updated: number }>(
+      `/corpus/cvs/${encodeURIComponent(filename)}/metadata`,
+      { metadata },
     ),
   startRun: (jd_text: string, mode: string, key?: string, auto = false) =>
     post<StartRunResponse>("/runs", { jd_text, mode, key: key || null, auto }),

@@ -26,7 +26,17 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
 
 ## Routers (all under /api)
 
-- `corpus.py` (`/api/corpus`) — Mode 1: stats, CV inventory, ingest (SSE), delete.
+- `corpus.py` (`/api/corpus`) — Mode 1: stats, CV inventory, and the full CV
+  write path (add / edit-metadata / replace / delete), all **synchronous JSON**
+  (D-36/F-42). Add + Replace are two steps — `POST /upload`|`/replace` stage the
+  `.docx` to `tmp/corpus/<token>/` and return the parsed section inventory (no
+  writes), then `POST /confirm` embeds + stores and moves the file into
+  `data/cvs/` + writes the sidecar (CLI/UI on-disk parity). The R-01 inventory
+  gate sits between the two steps; ingest is deliberately **not** SSE (one CV is a
+  single embed call — F-42). `PATCH /cvs/{filename}/metadata` edits in place: it
+  patches the ChromaDB section metadata (not just the sidecar) because the list +
+  retrieval filters read metadata from there. Ingest/metadata helpers live in
+  `corpus/ingest.py` (imported at module scope so tests monkeypatch them).
 - `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`.
 - `hitl.py` (`/api/runs/{id}/hitl`) — resume a paused run with the human's decision
   (a single action dict → `Session.submit_hitl`). Shares the `/api/runs` prefix with

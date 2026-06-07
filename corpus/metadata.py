@@ -25,6 +25,7 @@ __all__ = [
     "load_sidecar",
     "validate_sidecar",
     "build_metadata",
+    "build_metadata_from_fields",
     "sidecar_template",
     "SIDECAR_FIELDS",
     "CV_TYPES",
@@ -110,19 +111,32 @@ def load_sidecar(docx_path: str | Path) -> dict:
     return data
 
 
-def build_metadata(docx_path: str | Path, sections: list[CVSection]) -> CVMetadata:
-    """Fuse sidecar fields + discovered sections into a CVMetadata."""
-    data = load_sidecar(docx_path)
+def build_metadata_from_fields(fields: dict, sections: list[CVSection]) -> CVMetadata:
+    """Fuse a metadata *dict* (the UI form path) + discovered sections into a CVMetadata.
+
+    The sidecar-free sibling of `build_metadata`: the Corpus UI collects the same
+    fields interactively instead of from a `.yaml` file (D-36), so both code paths
+    converge on identical `CVMetadata`. Validates exactly as `load_sidecar` does —
+    raises `ValueError` on any field error — so a bad form can't reach ChromaDB (R-09).
+    """
+    errors, _warnings = validate_sidecar(fields)
+    if errors:
+        raise ValueError("invalid metadata:\n  - " + "\n  - ".join(errors))
     return CVMetadata(
-        filename=data["filename"],
-        cv_type=data["cv_type"],
-        target_role=data["target_role"],
-        target_company=data.get("target_company"),
-        skills_emphasis=list(data.get("skills_emphasis") or []),
-        seniority=data["seniority"],
-        version_date=str(data["version_date"]),
+        filename=fields["filename"],
+        cv_type=fields["cv_type"],
+        target_role=fields["target_role"],
+        target_company=fields.get("target_company") or None,
+        skills_emphasis=list(fields.get("skills_emphasis") or []),
+        seniority=fields["seniority"],
+        version_date=str(fields["version_date"]),
         sections=sections,
     )
+
+
+def build_metadata(docx_path: str | Path, sections: list[CVSection]) -> CVMetadata:
+    """Fuse sidecar fields + discovered sections into a CVMetadata."""
+    return build_metadata_from_fields(load_sidecar(docx_path), sections)
 
 
 def _guess_from_filename(filename: str) -> dict:

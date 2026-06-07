@@ -26,11 +26,18 @@ from tailor.helpers import embed_texts
 from tailor.models import CVMetadata
 
 from .docx_loader import load_docx
-from .metadata import build_metadata, sidecar_path, validate_sidecar, load_sidecar
+from .metadata import (
+    build_metadata,
+    build_metadata_from_fields,
+    load_sidecar,
+    sidecar_path,
+    validate_sidecar,
+)
 from .sectioniser import MIN_SECTIONS, ExtractedSection, detect_headers, sectionise
 
 CONFIG_PATH = Path("config.yaml")
 BUDGETS_PATH = Path("budgets.yaml")
+CV_DIR = Path("data/cvs")
 
 
 # --------------------------------------------------------------------------- #
@@ -98,18 +105,182 @@ class ParsedCV:
         self.warnings = warnings
 
 
-def parse_cv(path: Path, config: dict) -> ParsedCV:
+def parse_sections(path: Path, config: dict) -> tuple[list[ExtractedSection], list[str]]:
+    """Discover a CV's sections + any matched-but-empty headers (no metadata, no sidecar).
+
+    The structure half of parse — shared by the CLI (`parse_cv`, which also loads the
+    sidecar) and the UI ingest path (which supplies metadata from the form instead).
+    """
     paras = load_docx(path)
     sections = sectionise(paras, config["section_aliases"], config["static_sections"])
     # Reconcile matched headers vs emitted sections → report empty-but-matched (R-01).
     matched = set(detect_headers(paras, config["section_aliases"]))
     emitted = {es.section.section_type for es in sections}
     empty_headers = sorted(matched - emitted)
+    return sections, empty_headers
+
+
+def parse_cv(path: Path, config: dict) -> ParsedCV:
+    sections, empty_headers = parse_sections(path, config)
     # Sidecar metadata (raises if missing/invalid) + soft warnings surfaced here.
     raw = load_sidecar(path)
     _errors, warnings = validate_sidecar(raw)
     meta = build_metadata(path, [es.section for es in sections])
     return ParsedCV(path, sections, meta, empty_headers, warnings)
+
+
+def _inventory_rows(sections: list[ExtractedSection]) -> list[dict]:
+    """Section inventory for the UI confirmation gate (R-01/D-36) — no API, no writes."""
+    return [
+        {"section_id": es.section.section_id, "section_type": es.section.section_type,
+         "word_count": es.section.word_count, "static": es.section.static,
+         "title": es.title}
+        for es in sections
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# UI ingest path (corpus management, SPEC §12.1 / D-36)                        #
+#                                                                              #
+# The CLI's `main()` parses a whole directory behind one confirmation gate;    #
+# the UI works per-CV in two HTTP steps — preview (parse only) then commit     #
+# (embed + store). These helpers are the per-CV primitives the API composes;   #
+# they never read stdin and never print (the UI renders the gate, F-xx).       #
+# --------------------------------------------------------------------------- #
+
+def preview_upload(docx_path: Path, fields: dict, config: dict) -> dict:
+    """Parse a staged .docx and return its section inventory for the human gate.
+
+    No embedding, no ChromaDB writes — the load-bearing R-01 gate happens before
+    anything is committed. `below_minimum` flags the silent-parse-failure case
+    (fewer than MIN_SECTIONS) so the UI can warn (D-36)."""
+    sections, empty_headers = parse_sections(docx_path, config)
+    _errors, warnings = validate_sidecar(fields)
+    return {
+        "sections": _inventory_rows(sections),
+        "section_count": len(sections),
+        "below_minimum": len(sections) < MIN_SECTIONS,
+        "min_sections": MIN_SECTIONS,
+        "warnings": warnings,
+        "empty_headers": empty_headers,
+    }
+
+
+def delete_cv(filename: str, *, config: dict | None = None, collection=None) -> int:
+    """Remove every section of a CV from ChromaDB (de-dup key = filename, D-10/§12.1).
+
+    Returns the number of sections removed. Shared by the delete endpoint and the
+    Replace flow (which deletes the old version before storing the new one)."""
+    config = config or load_config()
+    collection = collection if collection is not None else get_collection(config)
+    existing = collection.get(where={"filename": filename})
+    ids = existing.get("ids", [])
+    if ids:
+        collection.delete(where={"filename": filename})
+    return len(ids)
+
+
+def commit_upload(docx_path: Path, fields: dict, config: dict, *, replace: bool,
+                  collection=None) -> dict:
+    """Embed + store one CV's sections from a (re)uploaded .docx + form metadata.
+
+    Embedding (the network step, retry-wrapped R-05) runs BEFORE the destructive
+    delete-by-filename, so a transient embed failure never leaves the corpus
+    half-replaced. Delete-then-add is idempotent on the filename de-dup key, so an
+    Add whose file lingered in ChromaDB is repaired rather than duplicated."""
+    config = config or load_config()
+    collection = collection if collection is not None else get_collection(config)
+    sections, _empty = parse_sections(docx_path, config)
+    meta = build_metadata_from_fields(fields, [es.section for es in sections])
+
+    texts = [_embedding_text(meta, es) for es in sections]
+    vectors, tokens = embed_texts(texts, model=config["models"]["embeddings"])  # R-05
+
+    removed = delete_cv(meta.filename, config=config, collection=collection)
+    collection.add(
+        ids=[_doc_id(meta.filename, es.section.section_id) for es in sections],
+        embeddings=vectors,
+        documents=[es.text for es in sections],
+        metadatas=[_section_metadatas(meta, es) for es in sections],
+    )
+    return {"sections_committed": len(sections), "removed": removed,
+            "replaced": replace, "embed_tokens": tokens}
+
+
+def update_cv_metadata(filename: str, fields: dict, *, config: dict | None = None,
+                       collection=None) -> int:
+    """Patch the CV-level editorial metadata on a CV's stored sections — no re-embed.
+
+    The Edit-Metadata flow (D-36): the corpus list and retrieval filters read
+    metadata off the ChromaDB section documents, so a sidecar-only edit would be
+    invisible (F-xx). This rewrites only the editorial fields via `collection.update`
+    (metadata, not embeddings); structure/word counts are untouched. `skills_emphasis`
+    is not a stored ChromaDB field — it lives in the sidecar only — so it is not
+    patched here. Returns the number of sections updated."""
+    config = config or load_config()
+    collection = collection if collection is not None else get_collection(config)
+    errors, _warnings = validate_sidecar(fields)
+    if errors:
+        raise ValueError("invalid metadata:\n  - " + "\n  - ".join(errors))
+    got = collection.get(where={"filename": filename}, include=["metadatas"])
+    ids = got.get("ids", [])
+    if not ids:
+        return 0
+    editable = {
+        "cv_type": fields["cv_type"],
+        "target_role": fields["target_role"],
+        "target_company": fields.get("target_company") or None,
+        "seniority": fields["seniority"],
+        "version_date": str(fields["version_date"]),
+        "dedup_key": f"{filename}::{fields['version_date']}",
+    }
+    new_metas = [sanitise_metadata({**meta, **editable}) for meta in got["metadatas"]]
+    collection.update(ids=ids, metadatas=new_metas)
+    return len(ids)
+
+
+def derive_budgets_from_collection(collection) -> dict:
+    """Re-derive per-section_type budgets from the stored corpus (D-14, refines R-10).
+
+    Word counts are persisted on every section at ingestion, so budgets are derived
+    from ChromaDB metadata rather than re-parsing every .docx — identical numbers,
+    no re-load. Same shape as `derive_budgets`."""
+    got = collection.get(include=["metadatas"])
+    by_type: dict[str, list[int]] = {}
+    for meta in got["metadatas"]:
+        st, wc = meta.get("section_type"), meta.get("word_count")
+        if st is None or wc is None:
+            continue
+        by_type.setdefault(st, []).append(int(wc))
+    budgets = {}
+    for section_type, counts in sorted(by_type.items()):
+        budgets[section_type] = {
+            "min_words": min(counts), "max_words": max(counts),
+            "target_words": int(statistics.median(counts)),
+        }
+    return budgets
+
+
+def write_sidecar(filename: str, fields: dict, *, cv_dir: Path = CV_DIR) -> Path:
+    """Write the `.yaml` sidecar for a CV (CLI/UI on-disk parity, D-36).
+
+    The UI form replaces hand-editing this file; persisting it keeps the CLI able to
+    re-ingest the same CV. Field order mirrors `sidecar_template`."""
+    path = sidecar_path(cv_dir / filename)
+    payload = {
+        "filename": filename,
+        "cv_type": fields["cv_type"],
+        "target_role": fields["target_role"],
+        "target_company": fields.get("target_company") or None,
+        "skills_emphasis": list(fields.get("skills_emphasis") or []),
+        "seniority": fields["seniority"],
+        "version_date": str(fields["version_date"]),
+    }
+    header = ("# Sidecar metadata — written by the Corpus UI (D-36). The UI form is the\n"
+              "# primary editor; `python -m corpus.ingest` re-reads this for CLI parity.\n")
+    path.write_text(header + yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+                    encoding="utf-8")
+    return path
 
 
 def print_inventory(parsed: list[ParsedCV]) -> bool:

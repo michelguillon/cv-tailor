@@ -3,9 +3,28 @@
 Embeds CV sections into ChromaDB with metadata and serves metadata-filtered
 semantic retrieval. Week 1 RAG reuse. Read the root `CLAUDE.md` first.
 
-- `ingest.py` — CLI: parse `.docx`, derive budgets, embed, store.
+- `ingest.py` — CLI: parse `.docx`, derive budgets, embed, store. Also the
+  per-CV, API-facing primitives the corpus UI composes (D-36/F-42):
+  `parse_sections`, `preview_upload` (inventory, no writes), `commit_upload`
+  (embed before the destructive delete-by-filename so a failed embed never
+  half-replaces), `delete_cv`, `update_cv_metadata`, `write_sidecar`,
+  `derive_budgets_from_collection`. The CLI `main()` and the UI share these — do
+  not fork a parallel ingest path.
 - `retrieval.py` — metadata pre-filter → semantic scoring.
-- `metadata.py` — `CVMetadata` + YAML front-matter parser.
+- `metadata.py` — `CVMetadata` + YAML front-matter parser. `build_metadata`
+  (sidecar) and `build_metadata_from_fields` (UI form dict) converge on identical
+  `CVMetadata` via the same `validate_sidecar` (R-09).
+
+## UI write path (D-36/F-42)
+
+- **Edit Metadata patches ChromaDB, never re-embeds.** CV-level metadata is
+  replicated onto every section document; the list + retrieval filters read it
+  from there, so `update_cv_metadata` rewrites those fields via
+  `collection.update` (metadata only). `skills_emphasis` is sidecar-only (not a
+  stored ChromaDB field) — it is not patched there.
+- **Budgets re-derive from ChromaDB metadata** (`derive_budgets_from_collection`),
+  not by re-parsing every `.docx` — word counts are persisted at ingestion
+  (R-10), so the numbers are identical with no re-load.
 
 ## Hard rules (each maps to a learned failure mode)
 

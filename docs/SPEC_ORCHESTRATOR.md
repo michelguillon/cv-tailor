@@ -1426,25 +1426,44 @@ View, add, update, and delete CVs in the corpus.
 ```
 Corpus page
   ├── Corpus stats (N CVs, M sections, last ingested date)
+  ├── [+ Add CV] (header) ; empty corpus → prominent [+ Add CV]
   ├── CV list — one row per CV, showing:
-  │     filename | target_role | seniority | version_date | N sections
-  │     [Update] [Delete] buttons per row
+  │     display_name | target_role | seniority | N sections
+  │     [Sections] [Edit] [Replace] [Delete] buttons per row
   │
-  ├── [Add CV] flow:
-  │     Step 1 — Upload .docx file
-  │     Step 2 — YAML metadata form (pre-filled from filename where possible):
-  │               filename (read-only), cv_type, target_role, target_company,
-  │               skills_emphasis (tag input), seniority, version_date
-  │     Step 3 — [Confirm & Ingest] → SSE progress → section inventory display
-  │               Human confirms section list before committing to ChromaDB
-  │               (load-bearing gate: silent parse failures caught here, R-01)
+  ├── [Add CV] flow (wizard):
+  │     Step 1 — Upload .docx file (client-side duplicate check → "use Replace")
+  │     Step 2 — YAML metadata form (filename read-only from the upload):
+  │               cv_type, target_role, target_company,
+  │               skills_emphasis (chip input), seniority, version_date
+  │     Step 3 — Section inventory display (POST /upload, no writes yet) →
+  │               human confirms the section list before committing to ChromaDB
+  │               (load-bearing gate: silent parse failures caught here, R-01;
+  │               ⚠ warning when section count < MIN_SECTIONS)
+  │     Step 4 — [Confirm & Add] (POST /confirm) → embed + store; done
   │
-  └── [Update CV] flow (per-row button):
-        Same as Add CV but pre-fills the form from existing metadata.
-        On confirm: deletes all existing ChromaDB entries for this filename,
-        re-ingests with new .docx + updated metadata.
-        De-duplication key: filename (D-10).
+  ├── [Edit Metadata] flow (per-row, one step):
+  │     Form pre-filled from GET /cvs/{filename}/metadata → Save
+  │     (PATCH /cvs/{filename}/metadata). Updates the sidecar AND patches the
+  │     ChromaDB section metadata (the list + retrieval filters read it there,
+  │     so a sidecar-only edit would be inert). No re-embedding, no inventory gate.
+  │
+  └── [Replace .docx] flow (per-row): same 4-step wizard as Add, pre-filled from
+        existing metadata, new .docx stored under the existing filename. On confirm
+        (POST /confirm, replace=true) deletes all existing ChromaDB entries for the
+        filename, then re-ingests. De-duplication key: filename (D-10).
 ```
+
+**Endpoints (all synchronous JSON — F-42).** `GET /stats`, `GET /cvs`,
+`GET /cvs/{filename}/metadata`, `POST /upload`, `POST /replace`, `POST /confirm`,
+`PATCH /cvs/{filename}/metadata`, `DELETE /cvs/{filename}`. Add/Replace are two HTTP
+steps so the R-01 section-inventory gate sits before any ChromaDB write; the staged
+`.docx` lives in `tmp/corpus/<token>/` and moves to `data/cvs/` only on confirm.
+Ingest is **not** SSE — one CV is a single batched embed call and the human gate is
+preview→confirm, not progress-watching (F-42). Error contract: **409** duplicate on
+Add, **422** invalid metadata, **410** expired staged upload, **404** edit/delete of
+an absent CV. `budgets.yaml` is re-derived from ChromaDB metadata after each confirm
+(F-42, refines D-14).
 
 **Why the YAML form rather than a sidecar file upload:**
 In the CLI workflow, metadata lives in a `.yaml` sidecar file alongside the

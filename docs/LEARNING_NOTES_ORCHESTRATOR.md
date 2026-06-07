@@ -412,6 +412,73 @@ what changed (if anything).*
 
 ---
 
+### F-42 — Corpus UI write path (Add / Edit Metadata / Replace): synchronous two-step ingest, budgets from ChromaDB, and an Edit that must touch ChromaDB to be visible
+
+**What was built (D-36 §12.1):** the corpus page gains the full CV lifecycle from the
+browser — **Add CV**, **Edit Metadata**, **Replace .docx** — alongside the existing
+Delete. Backend: `POST /api/corpus/upload` + `/replace` (stage + parse, return the
+section inventory), `POST /confirm` (embed + store), `PATCH /cvs/{filename}/metadata`
+(edit in place), `GET /cvs/{filename}/metadata` (pre-fill). The UI form replaces the
+`.yaml` sidecar; `confirm` writes the equivalent sidecar so CLI and UI produce
+identical on-disk state. New API-facing primitives live in `corpus/ingest.py`
+(`preview_upload`, `commit_upload`, `update_cv_metadata`, `delete_cv`,
+`derive_budgets_from_collection`, `write_sidecar`, `parse_sections`) + a sidecar-free
+`build_metadata_from_fields` in `corpus/metadata.py` — reused, not duplicated, by both
+the CLI and the API.
+
+**Three decisions where the prompt's literal wording was wrong for this codebase, resolved with the user and recorded:**
+
+1. **Synchronous JSON, not SSE, for ingestion (affects the §12.1 working rule / D-36).**
+   The prompt asked for an SSE progress stream. But ingesting one CV is a single
+   batched Mistral embed call (~1–2s), and the load-bearing human checkpoint is the
+   **preview→confirm** gate (R-01), not progress-watching. Full SSE would need a
+   session + background thread for a sub-second op. `confirm` is a plain synchronous
+   endpoint; the preview step enforces the gate. *Why it matters:* SSE machinery is
+   justified by the long, multi-phase **run** pipeline (UI Step 3/4), not by a
+   one-shot embed — matching transport to operation duration keeps the corpus path
+   simple and the gate just as strong.
+
+2. **`budgets.yaml` re-derived from ChromaDB metadata, not by re-parsing `data/cvs/*.docx`
+   (refines D-14 / R-10).** Word counts are persisted on every section at ingestion, so
+   `derive_budgets_from_collection(collection)` computes min/max/median per section_type
+   straight from stored metadata — identical numbers, no re-load of every .docx, no
+   dependency on every sidecar being present at confirm time. Consistent with
+   "discover once, persist, treat as ground truth."
+
+3. **Edit Metadata MUST write ChromaDB, not just the sidecar (clarifies D-36).** The
+   prompt said "updates the sidecar `.yaml` only… no ChromaDB writes," with a gate
+   "verify chroma unchanged." But the corpus list **and the retrieval filters** read
+   CV-level metadata (`target_role`, `seniority`, `cv_type`, `target_company`,
+   `version_date`) off the **ChromaDB section documents** — every section carries a
+   replicated copy. A sidecar-only edit would be **inert**: invisible in the list,
+   ignored by retrieval, until a full re-ingest. So `update_cv_metadata` patches the
+   stored section metadatas via `collection.update` (metadata only — **no
+   re-embedding, no re-parse, no inventory gate**) AND writes the sidecar.
+   `skills_emphasis` is the exception: it is *not* a stored ChromaDB field (it lives in
+   the sidecar only), so it is not patched there — `GET …/metadata` reads the sidecar
+   for full form pre-fill.
+
+**Other load-bearing choices.** Pre-confirm uploads stage in `tmp/corpus/<token>/`
+(uuid token) with a best-effort TTL sweep, and only move to `data/cvs/` on confirm —
+abandon after upload and nothing is written. In `commit_upload`, the network embed
+runs **before** the destructive delete-by-filename, so a transient embed failure never
+leaves the corpus half-replaced; delete-then-add is idempotent on the filename de-dup
+key (D-10). Replace stores the new `.docx` under the **existing** filename (client
+re-wraps the `File`) so it de-dups rather than forking a new entry. Error contract:
+**409** duplicate filename on Add, **422** invalid metadata (same `validate_sidecar`
+rules as the CLI, R-09), **410** expired/already-committed staged upload, **404** edit
+of an absent CV. Frontend mirrors `validate_sidecar` inline (field-level errors on
+blur) so the 422 is a safety net, not the primary UX.
+
+**Verified:** 265 tests green (12 new corpus-flow tests: upload inventory, 409, <4
+warning, 422, confirm writes sidecar + re-derives budgets + cleans tmp, replace
+deletes-then-commits, 410, edit patches chroma + writes sidecar, edit 404); frontend
+`tsc + vite build` clean. **Affects** D-36 / §12.1 (write path now built), D-14/R-10
+(budget re-derivation source), `corpus/ingest.py` + `corpus/metadata.py` (new shared
+primitives), `api/routers/corpus.py`, and the frontend corpus components.
+
+---
+
 ### F-41 — CV variant labels: a config-driven DISPLAY mapping hides target-company names in the UI (the filename stays the real key)
 
 **Why:** the corpus CV variant filenames embed the company each was tailored for

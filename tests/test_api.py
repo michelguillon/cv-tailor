@@ -394,6 +394,158 @@ def test_corpus_delete_removes_sections(client, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# corpus add / replace / edit (UI Step 2.1, D-36) — parse, embed, chroma faked #
+# --------------------------------------------------------------------------- #
+
+VALID_META = {
+    "cv_type": "job_specific", "target_role": "Solutions Engineer",
+    "target_company": "Acme", "skills_emphasis": ["AI", "pre-sales"],
+    "seniority": "director", "version_date": "2026-01-01",
+}
+
+
+def _inventory(n=6, below=False):
+    return {
+        "sections": [{"section_id": f"s{i}", "section_type": "experience",
+                      "word_count": 50, "static": False, "title": f"S{i}"} for i in range(n)],
+        "section_count": n, "below_minimum": below, "min_sections": 4,
+        "warnings": [], "empty_headers": [],
+    }
+
+
+@pytest.fixture
+def corpus_dirs(tmp_path, monkeypatch):
+    """Redirect the corpus router's on-disk dirs (data/cvs + tmp staging) into tmp."""
+    cv_dir = tmp_path / "cvs"
+    tmp_corpus = tmp_path / "tmp_corpus"
+    cv_dir.mkdir()
+    monkeypatch.setattr(corpus_router, "CV_DIR", cv_dir)
+    monkeypatch.setattr(corpus_router, "TMP_CORPUS", tmp_corpus)
+    return cv_dir, tmp_corpus
+
+
+def test_upload_returns_inventory(client, corpus_dirs, monkeypatch):
+    monkeypatch.setattr(corpus_router, "preview_upload", lambda *a, **k: _inventory(6))
+    r = client.post("/api/corpus/upload",
+                    files={"file": ("CV_new.docx", b"PK\x03\x04")},
+                    data={"metadata": json.dumps(VALID_META), "replace": "false"})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["filename"] == "CV_new.docx" and b["section_count"] == 6
+    assert b["below_minimum"] is False and b["token"] and b["replace"] is False
+    # The .docx is staged (not yet in the corpus) and no sidecar exists.
+    cv_dir, tmp_corpus = corpus_dirs
+    assert (tmp_corpus / b["token"] / "CV_new.docx").exists()
+    assert not (cv_dir / "CV_new.docx").exists()
+
+
+def test_upload_409_on_duplicate_without_replace(client, corpus_dirs, monkeypatch):
+    cv_dir, _ = corpus_dirs
+    (cv_dir / "CV_dupe.docx").write_bytes(b"x")
+    monkeypatch.setattr(corpus_router, "preview_upload", lambda *a, **k: _inventory(6))
+    r = client.post("/api/corpus/upload",
+                    files={"file": ("CV_dupe.docx", b"PK")},
+                    data={"metadata": json.dumps(VALID_META), "replace": "false"})
+    assert r.status_code == 409 and "already in the corpus" in r.json()["detail"].lower()
+
+
+def test_upload_flags_below_minimum(client, corpus_dirs, monkeypatch):
+    monkeypatch.setattr(corpus_router, "preview_upload", lambda *a, **k: _inventory(2, below=True))
+    r = client.post("/api/corpus/upload",
+                    files={"file": ("CV_thin.docx", b"PK")},
+                    data={"metadata": json.dumps(VALID_META), "replace": "false"})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["below_minimum"] is True and b["section_count"] == 2
+
+
+def test_upload_422_on_invalid_metadata(client, corpus_dirs, monkeypatch):
+    monkeypatch.setattr(corpus_router, "preview_upload", lambda *a, **k: _inventory(6))
+    bad = {**VALID_META, "seniority": "wizard"}      # out of the controlled vocabulary
+    r = client.post("/api/corpus/upload",
+                    files={"file": ("CV_bad.docx", b"PK")},
+                    data={"metadata": json.dumps(bad), "replace": "false"})
+    assert r.status_code == 422 and "seniority" in r.json()["detail"].lower()
+
+
+def _stub_commit(monkeypatch, *, recorder):
+    """Stub the embed/store seam + chroma + budgets so confirm runs without ChromaDB."""
+    def fake_commit(docx_path, fields, config, *, replace, collection=None):
+        recorder["commit"] = {"replace": replace, "filename": fields["filename"]}
+        return {"sections_committed": 6, "removed": 4 if replace else 0, "replaced": replace,
+                "embed_tokens": 10}
+    monkeypatch.setattr(corpus_router, "commit_upload", fake_commit)
+    monkeypatch.setattr(corpus_router, "get_collection", lambda *a, **k: object())
+    monkeypatch.setattr(corpus_router, "derive_budgets_from_collection", lambda *a, **k: {})
+    monkeypatch.setattr(corpus_router, "write_budgets",
+                        lambda *a, **k: recorder.__setitem__("budgets", True))
+
+
+def test_confirm_commits_writes_sidecar_and_cleans_tmp(client, corpus_dirs, monkeypatch):
+    cv_dir, tmp_corpus = corpus_dirs
+    rec: dict = {}
+    _stub_commit(monkeypatch, recorder=rec)
+    # Stage a docx as if /upload had run.
+    token = "tok123"
+    (tmp_corpus / token).mkdir(parents=True)
+    (tmp_corpus / token / "CV_new.docx").write_bytes(b"PK")
+
+    r = client.post("/api/corpus/confirm", json={
+        "token": token, "filename": "CV_new.docx", "metadata": VALID_META, "replace": False})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["status"] == "ok" and b["sections_committed"] == 6 and b["replaced"] is False
+    # Sidecar written, .docx moved into the corpus, budgets re-derived, tmp cleaned.
+    assert (cv_dir / "CV_new.yaml").exists()
+    assert (cv_dir / "CV_new.docx").exists()
+    assert rec.get("budgets") is True
+    assert not (tmp_corpus / token).exists()
+
+
+def test_confirm_replace_deletes_then_commits(client, corpus_dirs, monkeypatch):
+    _, tmp_corpus = corpus_dirs
+    rec: dict = {}
+    _stub_commit(monkeypatch, recorder=rec)
+    token = "tok456"
+    (tmp_corpus / token).mkdir(parents=True)
+    (tmp_corpus / token / "CV_old.docx").write_bytes(b"PK")
+
+    r = client.post("/api/corpus/confirm", json={
+        "token": token, "filename": "CV_old.docx", "metadata": VALID_META, "replace": True})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["replaced"] is True and b["removed"] == 4
+    assert rec["commit"]["replace"] is True
+
+
+def test_confirm_410_when_upload_expired(client, corpus_dirs):
+    r = client.post("/api/corpus/confirm", json={
+        "token": "gone", "filename": "CV_x.docx", "metadata": VALID_META, "replace": False})
+    assert r.status_code == 410
+
+
+def test_edit_metadata_patches_chroma_and_writes_sidecar(client, corpus_dirs, monkeypatch):
+    cv_dir, _ = corpus_dirs
+    calls: dict = {}
+    monkeypatch.setattr(corpus_router, "get_collection", lambda *a, **k: object())
+    monkeypatch.setattr(corpus_router, "update_cv_metadata",
+                        lambda fn, fields, **k: (calls.__setitem__("fn", fn), 3)[1])
+
+    r = client.patch("/api/corpus/cvs/CV_edit.docx/metadata", json={"metadata": VALID_META})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["sections_updated"] == 3 and calls["fn"] == "CV_edit.docx"
+    assert (cv_dir / "CV_edit.yaml").exists()      # sidecar overwritten on save
+
+
+def test_edit_metadata_404_when_cv_absent(client, corpus_dirs, monkeypatch):
+    monkeypatch.setattr(corpus_router, "get_collection", lambda *a, **k: object())
+    monkeypatch.setattr(corpus_router, "update_cv_metadata", lambda *a, **k: 0)
+    r = client.patch("/api/corpus/cvs/missing.docx/metadata", json={"metadata": VALID_META})
+    assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
 # Session: event buffer + seq                                                 #
 # --------------------------------------------------------------------------- #
 

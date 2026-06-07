@@ -16,6 +16,15 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   in prod (which serves the bundle and proxies `/api`).
 - **Pages under `src/pages/`**, one per mode (Corpus, Run, …); `App.tsx` is the shell
   + tab nav. Keep pages thin: fetch via `api`, render with `ui/` primitives.
+- **Corpus write path (D-36/F-42):** `CorpusPage` opens `CvWizard` (Add + Replace,
+  4 steps: upload → metadata form → section-inventory gate → confirm) and
+  `EditMetadataDialog` (one step, no inventory) over the `ui/dialog.tsx` modal.
+  Both render `CvMetadataForm`, which owns the chip input and exports
+  `validateMetadata` — the field rules **mirror the backend `validate_sidecar`**
+  (the 422 is a safety net, not the primary UX); keep them in sync. File upload
+  uses `api.postForm` (multipart, no JSON Content-Type); `ApiError.status` lets the
+  wizard branch on **409** (duplicate → "use Replace"). Ingest is synchronous (a
+  spinner, not SSE) — the human gate is the inventory step, not progress.
 - **SSE (UI Step 3+):** consume `/api/runs/{id}/stream` with `EventSource`; render the
   progress timeline + inline HITL panels as events arrive. `proxy_buffering off` in
   nginx (prod) is required or SSE buffers (SPEC §7.5).
