@@ -38,6 +38,7 @@ interface Summary {
 
 export function RunPage() {
   const [jd, setJd] = useState("");
+  const [company, setCompany] = useState(""); // optional run label (§12.9) → run metadata
   const [mode, setMode] = useState<"demo" | "full">("demo");
   const [auto, setAuto] = useState(false);
 
@@ -183,7 +184,7 @@ export function RunPage() {
     reset();
     setRunning(true);
     try {
-      const { run_id } = await api.startRun(jd, mode, auto);
+      const { run_id } = await api.startRun(jd, mode, auto, company.trim() || null);
       setRunId(run_id);
       runIdRef.current = run_id;
       const es = new EventSource(api.runStreamUrl(run_id));
@@ -222,6 +223,14 @@ export function RunPage() {
             className="h-44 w-full resize-y rounded-md border border-border bg-background p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           />
           <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="text"
+              value={company}
+              onChange={(e) => setCompany(e.target.value)}
+              placeholder="Company (optional)"
+              disabled={running}
+              className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+            />
             <select
               value={mode}
               onChange={(e) => onPickMode(e.target.value as "demo" | "full")}

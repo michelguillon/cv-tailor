@@ -72,6 +72,7 @@ CLI and the Web UI, over a 7-CV / 83-section ChromaDB corpus. Dual-writer refine
 (Claude + GPT-4o-mini, orchestrated), a source-grounded anti-fabrication trust layer
 (writer rules → orchestrator gate → honest metric → verifier), and the demo/full mode
 split are all in place. A single owner unlock (signed HttpOnly capability cookie) gates
-both full (Sonnet) runs and corpus write operations, so a public deployment stays
-browsable but read-only until unlocked (SPEC §12.7/§12.8). See the Findings Log in the
-learning notes for the build trail.
+full (Sonnet) runs, corpus write operations, and run management (delete / keep / publish),
+so a public deployment stays browsable — showing only curated public-demo runs — but
+read-only until unlocked (SPEC §12.7/§12.8/§12.9). Stale private runs are auto-cleaned by
+an optional retention window. See the Findings Log in the learning notes for the build trail.

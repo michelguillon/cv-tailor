@@ -412,6 +412,46 @@ what changed (if anything).*
 
 ---
 
+### F-46 — Run visibility & retention built (D-40): capability-aware archive + mutable sidecar + env-gated cleanup
+
+**What shipped.** `api/run_meta.py` — a mutable per-run sidecar `outputs/<run_id>/run_meta.json`
+(`company_name`, `keep`, `public_demo`, `created_at`) read with safe defaults (absent ⇒
+`keep=false, public_demo=false`, so every legacy run is private with no migration). `api/archive.py`:
+`_summary` now folds in the sidecar + a `created_at` parsed from the run id; `list_runs(include_private=
+…, redact=…)` filters/redacts; new `delete_run` (path-safe rmtree) and `cleanup_runs(max_age_days)`
+(age from the `run_YYYYMMDD_HHMMSS` id). `api/routers/runs.py`: `/archive` and `detail`/`report`/`files`
+are **capability-aware** (locked ⇒ only `public_demo`, redacted; private ⇒ 404 when locked); new
+`PATCH /{id}/meta`, `DELETE /{id}`, `POST /cleanup` all `require_unlocked`; `start_run` takes an
+optional `company_name` and writes the sidecar at creation. `api/main.py`: a `lifespan` startup
+cleanup that only fires when `RUN_RETENTION_DAYS` is set. Frontend `RunsPage` consumes `useUnlock()`
+— a curated public list vs an owner management list (Keep / Public Demo / Delete / edit company /
+Clean up); company shows "Unknown company" when unset; ⚠ unsupported-claim warning on owner rows.
+
+**Decisions worth keeping:**
+- **Read-filtering, not a binary gate**, for "view all runs" — private runs 404 when locked (not
+  403) so ids aren't leaked; public demo runs open for anyone.
+- **Three orthogonal flags** (`mode` / `public_demo` / `keep`) — never conflated.
+- **Cleanup age from the run id**, not a file mtime (a sidecar toggle would otherwise reset the age).
+- **Env-gated startup cleanup** ⇒ `TestClient` + dev never delete real outputs (the safety lesson).
+
+**Gotchas during build:**
+- **`TestClient(app)` fires the lifespan startup.** A startup cleanup that read the default
+  `outputs/` would delete real runs during the test run. The env gate (`RUN_RETENTION_DAYS` unset
+  ⇒ no-op) makes startup cleanup safe by default — this is *why* it's env-gated, not just config.
+- **Existing archive read-tests had no unlock** → under the capability-aware archive a locked
+  client gets only public runs (and redacted). Fixed once by making the `archive_dir` fixture
+  depend on `unlocked` (so all four read-tests see the full owner view); the new public/redaction
+  tests deliberately stay locked.
+- **Cleanup age is wall-clock-dependent**, so the *endpoint* test only asserts status + that the
+  public run survives (not which ids were removed); the deterministic age logic is unit-tested via
+  `cleanup_runs(..., now=<fixed datetime>)`. 296 tests green; frontend build clean.
+
+**Affects** D-40 (now built), §12.9, `api/{run_meta,archive,routers/runs,main}.py`,
+`frontend/{lib/api,pages/RunsPage}`, `api/CLAUDE.md`, `frontend/CLAUDE.md`, `.env.example`,
+`tests/test_api.py`.
+
+---
+
 ### F-45 — Corpus write gate built (D-39): mutating endpoints reuse the full-mode capability cookie; reads stay public
 
 **What shipped.** Corpus *reads* (`GET /stats`, `/cvs`, `/cvs/{filename}/metadata`) stay
@@ -2861,3 +2901,45 @@ require an unlock, and on a server with no `FULL_MODE_KEY` the UI corpus becomes
 **Reuse over new surface (R-05 spirit):** rather than a bespoke gate, the dependency is a
 thin wrapper over the D-38 token primitives — sign/verify, `full_mode_configured`, the
 cookie name — all already in `api/security.py`.
+
+---
+
+### D-40 — Run visibility & retention: capability-aware archive, mutable sidecar, env-gated cleanup (built, F-46)
+
+**What was decided (built — see F-46):**
+The Runs archive is **capability-aware**, not all-or-nothing public: public visitors see only
+runs explicitly flagged `public_demo` (redacted — no cost/created_at/grounding internals); the
+owner (same capability cookie as D-38/D-39) sees all runs with full metadata + management
+controls. Two new **mutable** per-run flags — `public_demo` (visible publicly) and `keep`
+(protected from cleanup) — plus an editable `company_name` live in a sidecar
+`outputs/<run_id>/run_meta.json`, **orthogonal to `mode`** (model/cost). Stale private runs are
+auto-deleted (older than `RUN_RETENTION_DAYS`, default 7, unless `keep`/`public_demo`) on
+startup (only when the env var is set) or via an owner-only `POST /api/runs/cleanup`. Mutations
+(`PATCH /{id}/meta`, `DELETE /{id}`, cleanup) use `require_unlocked`. Full SPEC in **§12.9**.
+
+**Load-bearing reasons:**
+- **Visibility is read-filtering, not a 403.** Unlike corpus writes (binary gate), "view all
+  runs" is enforced by *filtering the list/detail by capability*: a locked client literally
+  cannot retrieve a private run from the API (list omits it; detail/report/files 404 it — 404
+  not 403, so private run ids aren't revealed). Public demo runs open for anyone.
+- **Sidecar, not the audit log.** `keep`/`public_demo`/`company_name` are *mutable* state, so
+  they go in `run_meta.json`, never in the append-only `run_log.jsonl` (audit ≠ context, D-06).
+  The sidecar is absent on every pre-existing run → defaults (`keep=false, public_demo=false`)
+  make old runs private by default with zero migration.
+- **Three orthogonal axes.** `mode` (demo/full) ≠ `public_demo` (who can see it) ≠ `keep`
+  (cleanup protection). A demo run isn't auto-public; a full run defaults private but can be
+  curated public. Conflating any two was the trap the spec explicitly calls out.
+- **Cleanup age from the run id, not mtime.** `run_YYYYMMDD_HHMMSS` is the truth for age;
+  using a file mtime would let a `keep`/`public_demo` toggle (which rewrites the sidecar)
+  reset the clock. Parsing the id is immune to that.
+- **Env-gated auto-cleanup = safe by default.** Startup cleanup only runs when
+  `RUN_RETENTION_DAYS` is set, so `TestClient(app)` (which fires startup) and local dev never
+  delete real `outputs/`. The manual endpoint is always available to the owner.
+- **company_name without a schema change (D-07 blast radius).** Rather than add a Phase-0
+  extracted field (large blast radius across `models.py` + all phases), company is an optional
+  free-text field at run creation, editable later, default "Unknown company". Inference can be
+  layered on later without touching the pipeline.
+
+**Reuse:** capability detection reuses `verify_token` + `full_mode_configured` + `FULL_COOKIE`;
+mutations reuse the `require_unlocked` dependency (D-39); the summary fields reuse `archive.
+_summary` + `summary_card` (F-43). Only the sidecar + filter/cleanup logic are new.

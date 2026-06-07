@@ -9,13 +9,32 @@ Run (compose): uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api import archive
 from api.routers import corpus, full_mode, hitl, runs
 from api.session import SessionStore
 
-app = FastAPI(title="cv-tailor", version="0.1.0",
+logger = logging.getLogger("cv-tailor")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup retention sweep (§12.9 / D-40): delete stale private runs once at boot — but
+    ONLY when RUN_RETENTION_DAYS is set, so dev and the test client never delete real runs."""
+    days = archive.retention_days_env()
+    if days:
+        removed = archive.cleanup_runs(runs.OUTPUT_DIR, days)
+        if removed:
+            logger.info("startup retention sweep removed %d run(s): %s", len(removed), removed)
+    yield
+
+
+app = FastAPI(title="cv-tailor", version="0.1.0", lifespan=lifespan,
               summary="Multi-model CV tailoring orchestrator — Web UI backend (SPEC §12)")
 
 # Dev CORS: the Vite dev server (localhost:3000) calls the backend (localhost:8000).

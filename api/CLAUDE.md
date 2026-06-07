@@ -42,7 +42,16 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
   — gated on the same owner capability cookie as full mode (**D-39/§12.8**, `api/security.py`),
   **403 fail-closed** when no key is configured or the cookie is missing/invalid. Any future
   corpus-mutating endpoint must add the same dependency.
-- `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`.
+- `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`. **Run
+  visibility & retention (D-40/§12.9):** the archive is **capability-aware** — `GET /archive`
+  and `/{id}/detail|report|files` return only `public_demo` runs (list redacted) unless the
+  request is unlocked (`verify_token` on `cv_full_mode`); a private run **404s** when locked
+  (don't leak ids). Mutations `PATCH /{id}/meta` (company_name/keep/public_demo), `DELETE /{id}`,
+  `POST /cleanup` are `require_unlocked` (403). Visibility/retention flags live in a **mutable
+  sidecar** `outputs/<run_id>/run_meta.json` (`api/run_meta.py`) — never in the append-only
+  `run_log.jsonl` (audit ≠ context). Retention helpers in `api/archive.py` (`cleanup_runs` ages
+  by the run-id timestamp, not mtime); auto-cleanup runs on startup (`main.py` lifespan) **only
+  when `RUN_RETENTION_DAYS` is set** — unset ⇒ off, so the test client never deletes real runs.
 - `hitl.py` (`/api/runs/{id}/hitl`) — resume a paused run with the human's decision
   (a single action dict → `Session.submit_hitl`). Shares the `/api/runs` prefix with
   `runs.py`; FastAPI merges them. Action shapes per checkpoint: SPEC §12.3 / F-31.

@@ -1828,3 +1828,83 @@ deployment with no full authentication.
 **CLI is unaffected.** `corpus.ingest` writes the corpus directly (no browser, no cookie,
 no API) — the gate is purely the Web write path, exactly as `--key` remains the CLI gate
 for full mode (§12.7).
+
+---
+
+### 12.9 — Run Visibility and Retention Controls (built, D-40 / F-46)
+
+> **Status: built.** A public deployment must not expose every working run. The Runs
+> archive is now **capability-aware**: public visitors see only runs explicitly marked
+> **public demo**; the owner (valid capability cookie, same as §12.7/§12.8) sees all runs
+> with management controls. Visibility (`public_demo`) and retention (`keep`) are mutable
+> per-run flags stored in a sidecar (`outputs/<run_id>/run_meta.json`), **separate from
+> the model/cost `mode`**. Stale private runs are auto-cleaned (env-gated) or cleaned on
+> demand. Implementation: `api/run_meta.py` (sidecar), `api/archive.py` (filter + delete +
+> cleanup), `api/routers/runs.py` (capability-aware list/view + `PATCH /{id}/meta`,
+> `DELETE /{id}`, `POST /cleanup` — all `require_unlocked`), startup cleanup in `api/main.py`.
+
+**Objective.** Keep a small curated public demo surface (a few showcase runs a recruiter can
+open) while keeping ordinary working runs private to the owner — without full authentication.
+Same spend-guard philosophy as §12.7/§12.8, applied to *run exposure*.
+
+**Access model.**
+- **Public (no unlock)** — list only `public_demo` runs; open only those runs' reports;
+  use demo mode. Public visitors may **not** list all runs, see private/unreviewed runs,
+  delete runs, change `keep`/`public_demo`, or open a full-mode run unless it is marked
+  public demo. The public list is **redacted** (no cost, created_at, or unsupported-claim
+  internals — "full metadata" is owner-only).
+- **Unlocked (valid capability cookie)** — list all runs with full metadata; open any run;
+  delete; mark/unmark `keep`; mark/unmark `public_demo`; edit run metadata (e.g. company).
+
+**Run metadata.** Each run carries enough to be understandable without opening the report:
+`run_id`, `created_at`, `company_name`, `role_title`, `fit_label`, `fit_score`, `mode`,
+`iteration_count`, `estimated_cost`, `unsupported_claim_count`, `keep`, `public_demo`.
+`role_title`/fit/cost/grounding come from the existing run record (Phase-0/1 checkpoints +
+the `run_complete` footer + `summary_card`, §12.4/F-43). `company_name`, `keep`, and
+`public_demo` live in a **mutable sidecar** `run_meta.json` (the append-only `run_log.jsonl`
+audit is never mutated, D-06). `company_name` may be supplied at run creation (an optional
+field on the run form) or edited later; when absent the UI shows **"Unknown company"** rather
+than omitting it. `created_at` is the run id's timestamp (`run_YYYYMMDD_HHMMSS`, UTC).
+
+**Visibility ≠ mode ≠ retention (three orthogonal concepts).**
+- `mode` — model/cost config: `demo` or `full` (§3.7).
+- `public_demo` — whether the run is visible to public visitors.
+- `keep` — whether the run is protected from automatic cleanup.
+A demo run is **not** automatically public; a full run defaults **private** but *can* be
+marked public demo explicitly. **Defaults for every new run:** `public_demo = false`,
+`keep = false`.
+
+**Retention.** Automatic cleanup of stale private runs, rule:
+*delete runs older than `RUN_RETENTION_DAYS` (default 7) unless `keep` or `public_demo`*.
+Runs are deleted by **age from the run id timestamp** (immune to later sidecar writes).
+Cleanup runs (a) on backend **startup** — only when `RUN_RETENTION_DAYS` is set (unset ⇒
+no automatic deletion, so dev/test are never destructive), and (b) on demand via
+`POST /api/runs/cleanup` (owner-only). A startup or manual action is sufficient for the
+initial deployment; a cron is not required.
+
+**Backend enforcement (the source of truth).**
+- `GET /api/runs/archive` is **capability-aware**: returns only `public_demo` runs (redacted)
+  unless the request carries a valid capability cookie, in which case it returns all runs
+  with full metadata.
+- `GET /api/runs/{id}/detail|report|files/*` **404** a run that is not `public_demo` when the
+  request is not unlocked (don't reveal private run ids); public demo runs open for anyone.
+- `PATCH /api/runs/{id}/meta` (set `company_name`/`keep`/`public_demo`), `DELETE /api/runs/{id}`,
+  and `POST /api/runs/cleanup` require `require_unlocked` — **403 fail-closed**. UI hiding is
+  convenience only; a direct `curl` without the cookie is refused / sees only public runs.
+
+**UI behaviour.**
+- **Public run list** — curated demo runs only: `Company — Role Title` / `Fit label · score ·
+  mode · iterations` / **Open**.
+- **Unlocked run list** — all runs + controls: `Company — Role` / `Fit label · score · mode ·
+  iters · cost · created_at` / `[Open] [Keep] [Public Demo] [Delete]` + edit company; runs
+  with grounding issues show **⚠ N unsupported claims**; a header lock indicator and a
+  *Clean up old runs* action. On a deployment with no owner key, no management controls show
+  (mirrors §12.7/§12.8).
+
+**Success criteria.** Recruiters/visitors see only curated demo runs; working runs stay
+private by default; the owner manages runs from the UI (no terminal); old unimportant runs
+are cleaned automatically; important runs (`keep`) persist indefinitely; demo/full mode is
+never conflated with public/private visibility; the list reads by company + role, not run ids.
+
+**CLI is unaffected.** Runs still write to `outputs/<run_id>/` exactly as before; visibility
+and retention are a Web-surface concern. A CLI/owner can still inspect every run on disk.

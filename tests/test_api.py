@@ -12,8 +12,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+import api.archive as archive
 import api.routers.corpus as corpus_router
 import api.routers.runs as runs_router
+import api.run_meta as run_meta
 from api.main import app
 from api.session import Session, SessionError, SessionStore
 
@@ -332,7 +334,9 @@ def test_sse_hitl_formatting_approve_and_reject():
 # --------------------------------------------------------------------------- #
 
 @pytest.fixture
-def archive_dir(tmp_path, monkeypatch):
+def archive_dir(tmp_path, monkeypatch, unlocked):
+    # Depends on `unlocked` so these read tests see the full owner view (the archive is
+    # capability-aware now, D-40: a locked client would get only public-demo runs, redacted).
     out = tmp_path / "outputs"
     rd = out / "run_demo"
     rd.mkdir(parents=True)
@@ -393,6 +397,152 @@ def test_archive_exposes_summary_card_fields(client, archive_dir):
 def test_archive_unknown_run_404(client, archive_dir):
     assert client.get("/api/runs/nope/detail").status_code == 404
     assert client.get("/api/runs/nope/report").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Run visibility & retention (D-40/§12.9) — sidecar, capability-aware archive   #
+# --------------------------------------------------------------------------- #
+
+def _make_run(out, run_id, *, meta=None):
+    """A minimal on-disk run (run_log footer + phase0/1 + report), optional meta sidecar."""
+    from pathlib import Path
+    rd = Path(out) / run_id
+    rd.mkdir(parents=True)
+    (rd / "run_log.jsonl").write_text(
+        "\n".join([
+            json.dumps({"phase": "phase0", "event": "x"}),
+            json.dumps({"type": "run_complete", "mode": "demo", "iterations_run": 1,
+                        "total_estimated_usd": 0.1, "grounded_coverage": 0.5,
+                        "fabrication_flags": 0, "cost_breakdown_estimated_usd": {}}),
+        ]) + "\n", encoding="utf-8")
+    (rd / "phase0_jd_analysis.json").write_text(json.dumps({"role_title": "Eng"}), encoding="utf-8")
+    (rd / "phase1_fit_assessment.json").write_text(
+        json.dumps({"outcome": "partial", "overall_fit_score": 0.6}), encoding="utf-8")
+    (rd / "cv_final.html").write_text("<html>report</html>", encoding="utf-8")
+    if meta:
+        run_meta.write_meta(rd, **meta)
+    return rd
+
+
+# --- sidecar + archive units (no HTTP) --- #
+
+def test_run_meta_defaults_and_roundtrip(tmp_path):
+    rd = tmp_path / "run_x"
+    rd.mkdir()
+    assert run_meta.read_meta(rd) == {"company_name": None, "keep": False, "public_demo": False}
+    run_meta.write_meta(rd, company_name="Acme", public_demo=True)
+    m = run_meta.read_meta(rd)
+    assert m["company_name"] == "Acme" and m["public_demo"] is True and m["keep"] is False
+    # None leaves a field unchanged; an explicit False is applied.
+    run_meta.write_meta(rd, company_name=None, public_demo=False)
+    m = run_meta.read_meta(rd)
+    assert m["company_name"] == "Acme" and m["public_demo"] is False
+
+
+def test_created_at_from_id():
+    assert run_meta.created_at_from_id("run_20260601_120000").startswith("2026-06-01T12:00:00")
+    assert run_meta.created_at_from_id("run_demo") is None
+
+
+def test_archive_filter_and_redact(tmp_path):
+    out = tmp_path / "outputs"
+    _make_run(out, "run_20260101_000000")                                # private
+    _make_run(out, "run_20260102_000000", meta={"public_demo": True, "company_name": "Acme"})
+    assert len(archive.list_runs(out)) == 2                              # owner view: all
+    pub = archive.list_runs(out, include_private=False, redact=True)     # public view
+    assert [r["run_id"] for r in pub] == ["run_20260102_000000"]
+    assert pub[0]["company_name"] == "Acme" and pub[0]["public_demo"] is True
+    assert pub[0]["cost_estimated_usd"] is None and pub[0]["created_at"] is None  # redacted
+
+
+def test_cleanup_respects_keep_public_and_age(tmp_path):
+    from datetime import datetime, timezone
+    out = tmp_path / "outputs"
+    _make_run(out, "run_20260101_000000")                               # old + private → delete
+    _make_run(out, "run_20260101_000001", meta={"keep": True})          # old but kept
+    _make_run(out, "run_20260101_000002", meta={"public_demo": True})   # old but public
+    _make_run(out, "run_20260610_000000")                               # recent
+    removed = archive.cleanup_runs(out, 7, now=datetime(2026, 6, 8, tzinfo=timezone.utc))
+    assert removed == ["run_20260101_000000"]
+    assert (out / "run_20260101_000001").exists() and (out / "run_20260101_000002").exists()
+    assert (out / "run_20260610_000000").exists()
+
+
+def test_delete_run_unit(tmp_path):
+    out = tmp_path / "outputs"
+    _make_run(out, "run_20260101_000000")
+    assert archive.delete_run(out, "run_20260101_000000") is True
+    assert not (out / "run_20260101_000000").exists()
+    assert archive.delete_run(out, "missing") is False
+    assert archive.delete_run(out, "") is False                          # never the base dir
+
+
+# --- endpoints (capability-aware) --- #
+
+@pytest.fixture
+def runs_disk(tmp_path, monkeypatch):
+    """One private + one public-demo run on disk, with the runs router pointed at it."""
+    out = tmp_path / "outputs"
+    _make_run(out, "run_20260101_000000")
+    _make_run(out, "run_20260102_000000", meta={"public_demo": True, "company_name": "Acme"})
+    monkeypatch.setattr(runs_router, "OUTPUT_DIR", str(out))
+    return out
+
+
+def test_archive_public_vs_owner(client, runs_disk, monkeypatch):
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    locked = client.get("/api/runs/archive").json()                     # public only, redacted
+    assert [r["run_id"] for r in locked] == ["run_20260102_000000"]
+    assert locked[0]["company_name"] == "Acme" and locked[0]["cost_estimated_usd"] is None
+    client.post("/api/full-mode/unlock", json={"key": "pw"})            # owner: all + full
+    owner = client.get("/api/runs/archive").json()
+    assert len(owner) == 2 and owner[0]["cost_estimated_usd"] is not None
+
+
+def test_private_run_view_404_until_unlock(client, runs_disk, monkeypatch):
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    assert client.get("/api/runs/run_20260101_000000/detail").status_code == 404
+    assert client.get("/api/runs/run_20260101_000000/report").status_code == 404
+    assert client.get("/api/runs/run_20260102_000000/report").status_code == 200  # public opens
+    client.post("/api/full-mode/unlock", json={"key": "pw"})
+    assert client.get("/api/runs/run_20260101_000000/detail").status_code == 200
+
+
+def test_run_meta_mutations_require_unlock(client, runs_disk, monkeypatch):
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    assert client.patch("/api/runs/run_20260101_000000/meta", json={"keep": True}).status_code == 403
+    assert client.delete("/api/runs/run_20260101_000000").status_code == 403
+    assert client.post("/api/runs/cleanup").status_code == 403
+    client.post("/api/full-mode/unlock", json={"key": "pw"})
+    r = client.patch("/api/runs/run_20260101_000000/meta", json={"keep": True, "public_demo": True})
+    assert r.status_code == 200 and r.json()["keep"] is True and r.json()["public_demo"] is True
+    client.post("/api/full-mode/lock")                                  # now publicly visible
+    assert "run_20260101_000000" in [x["run_id"] for x in client.get("/api/runs/archive").json()]
+
+
+def test_delete_run_endpoint(client, runs_disk, monkeypatch):
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    client.post("/api/full-mode/unlock", json={"key": "pw"})
+    assert client.delete("/api/runs/run_20260101_000000").status_code == 200
+    assert client.delete("/api/runs/run_20260101_000000").status_code == 404
+
+
+def test_cleanup_endpoint_owner_only(client, runs_disk, monkeypatch):
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    monkeypatch.setenv("RUN_RETENTION_DAYS", "1")
+    client.post("/api/full-mode/unlock", json={"key": "pw"})
+    r = client.post("/api/runs/cleanup")
+    assert r.status_code == 200 and r.json()["max_age_days"] == 1.0
+    assert (runs_disk / "run_20260102_000000").exists()                 # public never cleaned
+
+
+def test_start_run_persists_company(client, run_store, runs_disk, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(runs_router, "new_run_id", lambda: "run_20260601_090000")
+    r = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "company_name": "Globex"})
+    assert r.status_code == 201
+    assert run_meta.read_meta(runs_disk / "run_20260601_090000")["company_name"] == "Globex"
 
 
 def test_corpus_delete_removes_sections(client, monkeypatch, unlocked):

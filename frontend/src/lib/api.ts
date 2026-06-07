@@ -148,6 +148,8 @@ export interface Capabilities {
 
 export interface ArchiveRun {
   run_id: string;
+  created_at: string | null;        // run-id timestamp (null in the redacted public view)
+  company_name: string | null;      // editable label; UI shows "Unknown company" when null
   mode: string | null;
   role_title: string | null;
   outcome: string | null;
@@ -160,6 +162,9 @@ export interface ArchiveRun {
   unsupported_claims: number | null;
   status: string | null;
   fit_band: string | null;
+  // Run visibility & retention (D-40/§12.9): orthogonal to `mode`.
+  keep: boolean;
+  public_demo: boolean;
   has_md: boolean;
   has_html: boolean;
 }
@@ -220,8 +225,8 @@ export const api = {
       `/corpus/cvs/${encodeURIComponent(filename)}/metadata`,
       { metadata },
     ),
-  startRun: (jd_text: string, mode: string, auto = false) =>
-    post<StartRunResponse>("/runs", { jd_text, mode, auto }),
+  startRun: (jd_text: string, mode: string, auto = false, company_name: string | null = null) =>
+    post<StartRunResponse>("/runs", { jd_text, mode, auto, company_name }),
   capabilities: () => get<Capabilities>("/capabilities"),
   unlockFullMode: (key: string) => post<{ unlocked: boolean }>("/full-mode/unlock", { key }),
   lockFullMode: () => post<{ unlocked: boolean }>("/full-mode/lock", {}),
@@ -229,6 +234,15 @@ export const api = {
     post<{ ok: boolean; status: string }>(`/runs/${encodeURIComponent(runId)}/hitl`, body),
   runStreamUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/stream`,
   archiveRuns: () => get<ArchiveRun[]>("/runs/archive"),
+  // Run visibility & retention (D-40/§12.9) — all owner-only (require the capability cookie).
+  setRunMeta: (runId: string, meta: { company_name?: string | null; keep?: boolean; public_demo?: boolean }) =>
+    patch<{ run_id: string; company_name: string | null; keep: boolean; public_demo: boolean }>(
+      `/runs/${encodeURIComponent(runId)}/meta`,
+      meta,
+    ),
+  deleteRun: (runId: string) =>
+    del<{ deleted: string }>(`/runs/${encodeURIComponent(runId)}`),
+  cleanupRuns: () => post<{ removed: string[]; count: number; max_age_days: number }>("/runs/cleanup", {}),
   runDetail: (runId: string) => get<RunDetail>(`/runs/${encodeURIComponent(runId)}/detail`),
   reportUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/report`,
   fileUrl: (runId: string, name: string) =>

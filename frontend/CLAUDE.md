@@ -27,6 +27,14 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   it to gate Add/Edit/Replace/Delete (controls hidden when `!configured` = read-only deploy;
   shown + open the prompt when locked). The raw key is **never** kept in state after submit;
   `startRun` sends no key. Backend is the source of truth (403); UI gating is convenience only.
+- **Run visibility & retention (D-40/§12.9):** `RunsPage` is capability-aware via `useUnlock()`.
+  Locked → the curated **public** list (`Company — Role · fit · mode · iters · Open`); unlocked →
+  **all** runs with management controls (`Keep` / `Public` toggles via `api.setRunMeta`, `Delete`
+  via `api.deleteRun`, edit company via a small dialog, and `Clean up old runs` via
+  `api.cleanupRuns`) + owner-only columns (cost, created_at, ⚠ unsupported claims). It re-`load()`s
+  on `unlocked` change so the list widens/narrows. `RunPage` has an optional **Company** field
+  passed to `api.startRun` (stored in the run metadata). Company shows "Unknown company" when
+  unset. Backend is the source of truth (private runs 404 when locked); UI gating is convenience.
 - **Output panel summary card (D-34/F-43):** `OutputPanel` renders a summary card —
   fit band + %, grounded coverage, unsupported claims (⚠ when >0), derived status — from
   the run's archive fields (`grounded_coverage`, `unsupported_claims`, `status`,
