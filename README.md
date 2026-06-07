@@ -43,32 +43,32 @@ docker compose run --rm cli python -m tailor run --jd data/jd.txt --demo
 Outputs land in `outputs/<run_id>/`: `cv_final.html` (CV + changes + scores +
 reasoning tabs), `cv_final.md` (clean CV), and `run_log.jsonl` (audit trail).
 
+## Web UI
+
+A browser surface over the same pipeline (`docker compose up backend frontend` →
+http://localhost:3000): **Tailor a CV** (paste a JD, watch the phases stream, handle
+the human-in-the-loop checkpoints conversationally, read the tabbed report behind a
+sticky fit/grounding summary card), **Runs** (browse/replay past runs), and **Corpus**
+(add / edit-metadata / replace / delete CV versions, behind the section-inventory gate).
+
 ## Docs
 
-- `docs/SPEC_ORCHESTRATOR.md` — architecture, schemas, phases, Docker setup.
-- `docs/LEARNING_NOTES_ORCHESTRATOR.md` — decision log and build findings.
+- `docs/SPEC_ORCHESTRATOR.md` — architecture, schemas, phases, Docker + deploy (§7.5).
+- `docs/LEARNING_NOTES_ORCHESTRATOR.md` — decision log (`D-xx`) and build findings (`F-xx`).
 - `ADAPTING.md` — using it with your own CV corpus.
+
+## Deployment
+
+Runs on a homeserver behind Caddy + a Cloudflare Tunnel via the prod overlay
+(`docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend
+frontend`). The frontend nginx is the entry point and proxies `/api` to the backend; the
+CV corpus is seeded out-of-band (scp the `.docx`/`.yaml`, then re-embed on the server).
+SPEC §7.5 has the topology; the full runbook lives in `DEPLOY-cv-tailor.md`.
 
 ## Status
 
-Under active build.
-- **Step 0** — schemas + audit logger. Done.
-- **Step 1** — corpus ingestion + retrieval. Done: 7 CVs → 83 sections in
-  ChromaDB, length budgets derived, metadata-filtered semantic search. 86 tests.
-- **Step 2** — JD analysis (Mistral, forced JSON) + section-level keyword
-  scorer. Done: model chosen on evidence (4-JD eval), token-subset coverage
-  matching. 103 tests.
-- **Step 3** — fit assessment. Done: deterministic section-level mix (best CV
-  variant per section, experience mixed per company) + Claude (Haiku/dev,
-  Sonnet/full) for typed gaps + outcome via forced tool-use; soft seniority
-  (D-23); HITL preview. 113 tests.
-- **Step 4** — initial draft. Done: per-section drafting (Claude) from the
-  recommended source, target anchored to source length (no padding), static
-  copied verbatim; run-context + checkpoint pattern (versioned section files +
-  audit log). Verified end-to-end: coverage lifts source→draft. 123 tests.
-- **Step 5** — critique tool (GPT-4o-mini). Done: strict-JSON section critique
-  with explicit severity definitions (D-11) and score anchors (R-08), plus
-  deterministic length-budget items. Verified live: weak draft 3.0 vs strong
-  8.0, no over-scoring. 131 tests.
-
-Next: Step 6 — refinement loop (Claude orchestrates critique→revise→converge).
+Feature-complete; preparing for deployment. The full pipeline (Phase 0→6) runs from the
+CLI and the Web UI, over a 7-CV / 83-section ChromaDB corpus. Dual-writer refinement
+(Claude + GPT-4o-mini, orchestrated), a source-grounded anti-fabrication trust layer
+(writer rules → orchestrator gate → honest metric → verifier), and the demo/full mode
+split are all in place. See the Findings Log in the learning notes for the build trail.
