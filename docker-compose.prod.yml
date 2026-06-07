@@ -7,22 +7,45 @@
 # backend keeps the repo bind-mount so host data/, outputs/, .env persist (the
 # homeserver runs from the cloned repo).
 #
-# NB: Compose CONCATENATES the `volumes:` list across overlay files (it can't subtract),
-# so the dev frontend's ./frontend:/app + /app/node_modules mounts survive into the
-# merged prod config. They're inert here — nginx serves /usr/share/nginx/html (the
-# baked bundle), never /app — so the production bundle is what ships (F-32).
+# Caddy-fronted topology (PLAYBOOK.md): the frontend nginx is the single entry point
+# Caddy proxies to, by container_name over the shared external `caddy` network; the
+# backend stays on the per-app `default` network only (never published to the host).
+# Host ports are dropped with `!override []` — Compose CONCATENATES `ports:` across
+# overlays, so a bare `[]` would NOT remove the dev port bindings (playbook gotcha #3).
+#
+# Prereq on the server (one-time): `docker network create caddy`.
+#
+# NB: Compose also concatenates the `volumes:` list, so the dev frontend's
+# ./frontend:/app + /app/node_modules mounts survive into the merged prod config.
+# They're inert here — nginx serves /usr/share/nginx/html (the baked bundle), never
+# /app — so the production bundle is what ships (F-32).
 services:
   backend:
+    container_name: cv-tailor-backend          # nginx targets this by name (gotcha #6)
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000   # no --reload
     restart: unless-stopped
+    ports: !override []                        # internal-only; reached via the default net
 
   # Multi-stage build (Node → nginx-alpine). nginx serves the static bundle on :3000
-  # and proxies /api/* → backend:8000. nginx.conf sets `proxy_buffering off` on /api/
-  # so SSE streams (run progress + HITL) aren't buffered (RFI entry 26; SPEC §12.3).
+  # and proxies /api/* → cv-tailor-backend:8000. nginx.conf sets `proxy_buffering off`
+  # on /api/ so SSE streams (run progress + HITL) aren't buffered (SPEC §12.3).
   frontend:
-    image: cv-tailor-frontend-prod    # distinct from the dev image so a prod build
-                                       # doesn't clobber the Vite-dev-server image
+    container_name: cv-tailor-frontend         # Caddy: reverse_proxy cv-tailor-frontend:3000
+    image: cv-tailor-frontend-prod             # distinct from the dev image so a prod build
+                                               # doesn't clobber the Vite-dev-server image
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    ports: !override []                        # Caddy reaches :3000 over the caddy network
+    networks:
+      - default                                # reach cv-tailor-backend (intra-stack)
+      - caddy                                  # be reachable by the Caddy container
+
+networks:
+  # Shared, created once on the server with `docker network create caddy`. Only the
+  # entry-point container (frontend) joins it; the backend stays off it (gotcha #6 —
+  # service aliases collide across apps on the shared network, container_names don't).
+  caddy:
+    external: true
+  default: {}

@@ -1023,45 +1023,54 @@ services:
 ```
 
 ```yaml
-# docker-compose.prod.yml — homeserver overlay
+# docker-compose.prod.yml — homeserver overlay (Caddy-fronted; PLAYBOOK.md)
 services:
   backend:
+    container_name: cv-tailor-backend          # nginx targets this by name (gotcha #6)
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000  # no --reload
     restart: unless-stopped
+    ports: !override []                        # internal-only (reached via default net)
 
   frontend:
+    container_name: cv-tailor-frontend         # Caddy: reverse_proxy cv-tailor-frontend:3000
     image: cv-tailor-frontend-prod  # distinct name so a prod build doesn't clobber
                                      # the dev Vite image (same default name) — F-32
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod   # multi-stage: Node build → nginx-alpine (~50 MB)
     restart: unless-stopped
-    # nginx serves static bundle on :3000, proxies /api/* to backend:8000
-    # nginx.conf: proxy_buffering off for SSE streams.
-    # NB: Compose concatenates volumes across -f files, so the dev frontend mounts
-    # survive into the merged prod config — inert under nginx (serves the baked
-    # bundle at /usr/share/nginx/html, not /app), so the production bundle ships (F-32).
+    ports: !override []             # Caddy reaches :3000 over the shared caddy network
+    networks: [default, caddy]      # default = reach the backend; caddy = ingress
+networks:
+  caddy: { external: true }         # one-time: `docker network create caddy`
+  default: {}
 ```
+
+The entry point is the **frontend nginx** (`cv-tailor-frontend:3000`), which proxies
+`/api/*` → `cv-tailor-backend:8000` over the per-app `default` network; only the frontend
+joins the shared `caddy` network (addressing siblings by container_name, never bare
+service alias — PLAYBOOK gotcha #6). Caddy (port 80, behind a Cloudflare Tunnel) does the
+TLS-less reverse proxy. Full step-by-step in **`DEPLOY-cv-tailor.md`** (caddy-stack).
 
 **Deployment to homeserver (M720q):**
 
 ```bash
-# 1. Clone repo on server
-git clone <repo> /srv/cv-tailor && cd /srv/cv-tailor
+# 1. Clone repo on server (network `caddy` already exists: docker network create caddy)
+git clone <repo> /opt/apps/cv-tailor && cd /opt/apps/cv-tailor
 
-# 2. Set API keys
+# 2. Set API keys (MISTRAL = embeddings/ingest; ANTHROPIC + OPENAI = runs; FULL_MODE_KEY optional)
 cp .env.example .env && $EDITOR .env
 
-# 3. Seed corpus from dev machine (optional)
-rsync -avz data/chroma/ server:/srv/cv-tailor/data/chroma/
-rsync -avz data/cvs/    server:/srv/cv-tailor/data/cvs/
-rsync -avz budgets.yaml server:/srv/cv-tailor/
+# 3. Seed the corpus WITHOUT git: scp the source CVs (+ .yaml sidecars) from the dev box,
+#    then re-embed on the server (data/chroma + budgets.yaml are written there, persisted
+#    by the backend bind-mount). The .docx/.yaml are gitignored, so they travel out-of-band.
+mkdir -p data/cvs
+scp -P <ssh-port> -r "<dev>/data/cvs/." user@server:/opt/apps/cv-tailor/data/cvs/
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+    run --rm cli python -m corpus.ingest --cv-dir data/cvs/      # confirm the inventory gate
 
-# 4. Build + start
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-
-# Frontend: http://server:3000
-# Backend:  http://server:8000
+# 4. Build + start (Caddy + Cloudflare ingress per DEPLOY-cv-tailor.md)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend frontend
 ```
 
 **Updates:**
