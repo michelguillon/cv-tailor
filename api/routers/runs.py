@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -20,6 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from api import archive
 from api.runner import launch_run
+from api.security import FULL_COOKIE, full_mode_configured, verify_token
 from api.session import TERMINAL, SessionError
 from tailor.config import ConfigError, load_config, resolve_run_config
 from tailor.run_context import new_run_id
@@ -32,9 +34,9 @@ OUTPUT_DIR = "outputs"
 class StartRunRequest(BaseModel):
     jd_text: str
     mode: str = "demo"
-    key: str | None = None
     max_iterations: int | None = None
     auto: bool = False          # True = AutoHITL (no pauses); False = conversational HITL (UI Step 4)
+    # No `key` field: full mode is gated on the capability cookie (D-38), not a per-run key.
 
 
 @router.get("")
@@ -89,9 +91,18 @@ def run_download(run_id: str, name: str):
 def start_run(body: StartRunRequest, request: Request) -> dict:
     if not body.jd_text.strip():
         raise HTTPException(status_code=400, detail="jd_text is empty")
-    # Validate mode/key synchronously so a bad key fails the POST, not the run thread.
+    # Full mode is gated on the capability cookie (D-38, §12.7), never a per-run key.
+    # Fail closed: no server key configured, or no valid cookie → forbidden (403).
+    key = None
+    if body.mode == "full":
+        if not full_mode_configured():
+            raise HTTPException(status_code=403, detail="full mode is not available on this server")
+        if not verify_token(request.cookies.get(FULL_COOKIE)):
+            raise HTTPException(status_code=403, detail="full mode is locked — unlock it first")
+        key = os.environ["FULL_MODE_KEY"]      # cookie proven → resolve with the env key
+    # Validate mode synchronously so a bad config fails the POST, not the run thread.
     try:
-        resolve_run_config(load_config(), mode=body.mode, key=body.key,
+        resolve_run_config(load_config(), mode=body.mode, key=key,
                            max_iterations=body.max_iterations)
     except ConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -107,7 +118,7 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
     else:
         raise HTTPException(status_code=500, detail="could not allocate a run id")
 
-    launch_run(store, session, body.jd_text, mode=body.mode, key=body.key,
+    launch_run(store, session, body.jd_text, mode=body.mode, key=key,
                max_iterations=body.max_iterations, auto=body.auto)
     return {"run_id": run_id, "mode": body.mode, "status": session.status}
 

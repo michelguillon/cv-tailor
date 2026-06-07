@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink } from "lucide-react";
-import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision } from "@/lib/api";
+import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink, Lock, LockOpen } from "lucide-react";
+import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision, type Capabilities } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog } from "@/components/ui/dialog";
 import { HitlPanel } from "@/components/HitlPanel";
 import { cn } from "@/lib/utils";
 
@@ -38,8 +39,15 @@ interface Summary {
 export function RunPage() {
   const [jd, setJd] = useState("");
   const [mode, setMode] = useState<"demo" | "full">("demo");
-  const [key, setKey] = useState("");
   const [auto, setAuto] = useState(false);
+
+  // Full Mode Unlock Gate (D-38): the picker is driven by server capabilities; full mode
+  // opens a one-time unlock dialog (the key is never kept in frontend state after submit).
+  const [caps, setCaps] = useState<Capabilities | null>(null);
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [unlockKey, setUnlockKey] = useState("");
+  const [unlockErr, setUnlockErr] = useState<string | null>(null);
+  const [unlockBusy, setUnlockBusy] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -57,6 +65,53 @@ export function RunPage() {
   const doneRef = useRef(false);
 
   useEffect(() => () => esRef.current?.close(), []);
+
+  // Load capabilities once so the mode picker renders the right state (full hidden when
+  // not configured server-side; shown locked/unlocked otherwise).
+  useEffect(() => {
+    api.capabilities().then(setCaps).catch(() => setCaps(null));
+  }, []);
+
+  function onPickMode(value: "demo" | "full") {
+    if (value === "demo") {
+      setMode("demo");
+      return;
+    }
+    if (caps?.full_unlocked) {
+      setMode("full");
+    } else {
+      setUnlockErr(null);
+      setUnlockKey("");
+      setUnlockOpen(true); // stay in demo until the unlock succeeds
+    }
+  }
+
+  async function submitUnlock() {
+    setUnlockBusy(true);
+    setUnlockErr(null);
+    try {
+      await api.unlockFullMode(unlockKey);
+      setUnlockKey(""); // never retain the raw key
+      const c = await api.capabilities();
+      setCaps(c);
+      setMode("full");
+      setUnlockOpen(false);
+    } catch (e) {
+      setUnlockErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUnlockBusy(false);
+    }
+  }
+
+  async function lockFull() {
+    try {
+      await api.lockFullMode();
+    } catch {
+      /* best-effort */
+    }
+    setMode("demo");
+    api.capabilities().then(setCaps).catch(() => {});
+  }
 
   function reset() {
     setError(null);
@@ -163,7 +218,7 @@ export function RunPage() {
     reset();
     setRunning(true);
     try {
-      const { run_id } = await api.startRun(jd, mode, mode === "full" ? key : undefined, auto);
+      const { run_id } = await api.startRun(jd, mode, auto);
       setRunId(run_id);
       runIdRef.current = run_id;
       const es = new EventSource(api.runStreamUrl(run_id));
@@ -204,22 +259,33 @@ export function RunPage() {
           <div className="flex flex-wrap items-center gap-3">
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as "demo" | "full")}
+              onChange={(e) => onPickMode(e.target.value as "demo" | "full")}
               disabled={running}
               className="h-9 rounded-md border border-border bg-background px-3 text-sm"
             >
               <option value="demo">demo (Haiku, ~$0.10)</option>
-              <option value="full">full (Sonnet, key-gated)</option>
+              {/* full is offered only when configured server-side (D-38); selecting it
+                  opens the unlock dialog unless this session is already unlocked. */}
+              {caps?.full_configured && <option value="full">full (Sonnet · restricted)</option>}
             </select>
-            {mode === "full" && (
-              <input
-                type="password"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder="FULL_MODE_KEY"
-                disabled={running}
-                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-              />
+            {mode === "full" ? (
+              <span className="inline-flex items-center gap-1.5 text-xs text-success">
+                <LockOpen className="h-3.5 w-3.5" /> full unlocked
+                <button
+                  type="button"
+                  onClick={() => void lockFull()}
+                  disabled={running}
+                  className="ml-1 text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  lock
+                </button>
+              </span>
+            ) : (
+              caps?.full_configured && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Lock className="h-3.5 w-3.5" /> full mode locked
+                </span>
+              )
             )}
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               <input
@@ -273,6 +339,41 @@ export function RunPage() {
           ))}
         </div>
       )}
+
+      <Dialog
+        open={unlockOpen}
+        onClose={() => setUnlockOpen(false)}
+        title="Unlock full mode"
+        description="Full mode runs Sonnet (higher cost). Enter the full-mode key once — it's exchanged for a session cookie and never stored in the browser."
+        className="max-w-md"
+      >
+        <div className="space-y-4">
+          {unlockErr && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {unlockErr}
+            </div>
+          )}
+          <input
+            type="password"
+            value={unlockKey}
+            autoFocus
+            placeholder="FULL_MODE_KEY"
+            onChange={(e) => setUnlockKey(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && unlockKey) void submitUnlock();
+            }}
+            className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setUnlockOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={unlockBusy || !unlockKey} onClick={() => void submitUnlock()}>
+              {unlockBusy && <Loader2 className="h-4 w-4 animate-spin" />} Unlock
+            </Button>
+          </div>
+        </div>
+      </Dialog>
 
       {hitl && <HitlPanel checkpoint={hitl.checkpoint} payload={hitl.payload} busy={hitlBusy} onDecide={(d) => void decide(d)} />}
 

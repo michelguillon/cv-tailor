@@ -154,9 +154,11 @@ def test_stream_replays_progress_events(client, run_store, monkeypatch):
     assert "phase_start" in body and "run_complete" in body and "Director, SE" in body
 
 
-def test_start_run_full_mode_requires_key(client, run_store, monkeypatch):
+def test_start_run_full_mode_fails_closed_when_unconfigured(client, run_store, monkeypatch):
+    # D-38: full mode is gated on the capability cookie now; with no FULL_MODE_KEY on the
+    # server it fails closed with 403 (was 400 key-in-body before the unlock gate).
     monkeypatch.delenv("FULL_MODE_KEY", raising=False)
-    assert client.post("/api/runs", json={"jd_text": "x", "mode": "full"}).status_code == 400
+    assert client.post("/api/runs", json={"jd_text": "x", "mode": "full"}).status_code == 403
 
 
 def test_start_run_empty_jd_rejected(client, run_store):
@@ -687,3 +689,70 @@ def test_cleanup_drops_only_expired_terminal_sessions(tmp_path):
     assert removed == ["done"]
     assert store.get("done") is None and not (tmp_path / "done").exists()
     assert store.get("running") is not None
+
+
+# --------------------------------------------------------------------------- #
+# Full Mode Unlock Gate (D-38) — capability token + unlock/lock + run gate      #
+# --------------------------------------------------------------------------- #
+
+import api.security as security  # noqa: E402
+
+
+def test_capability_token_roundtrip_tamper_and_expiry(monkeypatch):
+    monkeypatch.setenv("FULL_MODE_KEY", "s3cret")
+    tok = security.issue_token()
+    assert security.verify_token(tok)
+    assert not security.verify_token(tok + "x")          # tampered signature
+    assert not security.verify_token("9999999999.deadbeef")
+    assert not security.verify_token(None) and not security.verify_token("")
+    expired = security.issue_token(now=-security.FULL_MODE_TTL - 10)
+    assert not security.verify_token(expired)            # exp in the past
+    monkeypatch.setenv("FULL_MODE_KEY", "rotated")        # rotating the key invalidates it
+    assert not security.verify_token(tok)
+
+
+def test_key_matches_and_configured(monkeypatch):
+    monkeypatch.delenv("FULL_MODE_KEY", raising=False)
+    assert not security.full_mode_configured() and not security.key_matches("x")
+    monkeypatch.setenv("FULL_MODE_KEY", "abc")
+    assert security.full_mode_configured()
+    assert security.key_matches("abc") and not security.key_matches("abd")
+
+
+def test_capabilities_reflects_config_and_cookie(client, monkeypatch):
+    monkeypatch.delenv("FULL_MODE_KEY", raising=False)
+    c = client.get("/api/capabilities").json()
+    assert c["demo_available"] and not c["full_configured"] and not c["full_unlocked"]
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    c = client.get("/api/capabilities").json()
+    assert c["full_configured"] and not c["full_unlocked"]
+
+
+def test_unlock_wrong_key_401_and_unconfigured_403(client, monkeypatch):
+    monkeypatch.delenv("FULL_MODE_KEY", raising=False)
+    assert client.post("/api/full-mode/unlock", json={"key": "x"}).status_code == 403
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    r = client.post("/api/full-mode/unlock", json={"key": "nope"})
+    assert r.status_code == 401
+    assert client.get("/api/capabilities").json()["full_unlocked"] is False
+
+
+def test_unlock_then_lock_cycle(client, monkeypatch):
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    assert client.post("/api/full-mode/unlock", json={"key": "pw"}).json()["unlocked"] is True
+    assert client.get("/api/capabilities").json()["full_unlocked"] is True   # cookie carried
+    assert client.post("/api/full-mode/lock").json()["unlocked"] is False
+    assert client.get("/api/capabilities").json()["full_unlocked"] is False
+
+
+def test_full_run_blocked_until_unlocked(client, run_store, monkeypatch):
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    # no capability cookie yet → fail closed
+    assert client.post("/api/runs", json={"jd_text": "x", "mode": "full"}).status_code == 403
+    client.post("/api/full-mode/unlock", json={"key": "pw"})                 # sets the cookie
+    r = client.post("/api/runs", json={"jd_text": "x", "mode": "full"})
+    assert r.status_code == 201 and r.json()["mode"] == "full"
+    # demo never needs a cookie
+    assert client.post("/api/runs", json={"jd_text": "x", "mode": "demo"}).status_code == 201

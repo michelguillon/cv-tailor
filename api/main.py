@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import corpus, hitl, runs
+from api.routers import corpus, full_mode, hitl, runs
 from api.session import SessionStore
 
 app = FastAPI(title="cv-tailor", version="0.1.0",
@@ -39,3 +39,4 @@ def health() -> dict:
 app.include_router(corpus.router)
 app.include_router(runs.router)
 app.include_router(hitl.router)
+app.include_router(full_mode.router)

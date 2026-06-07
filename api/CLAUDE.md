@@ -41,6 +41,12 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
 - `hitl.py` (`/api/runs/{id}/hitl`) — resume a paused run with the human's decision
   (a single action dict → `Session.submit_hitl`). Shares the `/api/runs` prefix with
   `runs.py`; FastAPI merges them. Action shapes per checkpoint: SPEC §12.3 / F-31.
+- `full_mode.py` (`/api/capabilities`, `/api/full-mode/unlock` + `/lock`) — the Full
+  Mode Unlock Gate (D-38/F-44). Full (Sonnet) runs are gated on a **signed HttpOnly
+  capability cookie**, not a per-run key: `unlock` validates `FULL_MODE_KEY` and sets the
+  cookie; `runs.py:start_run` enforces it (**403 fail-closed** when unset/missing/invalid).
+  Token sign/verify is `api/security.py` (stdlib HMAC, secret = `FULL_MODE_KEY`). The CLI
+  is unchanged (`--key`). Never read the raw key from a run request — gate on the cookie.
 
 ## HITL handler (UI Step 4, F-31)
 

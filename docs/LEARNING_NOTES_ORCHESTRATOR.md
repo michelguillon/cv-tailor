@@ -412,6 +412,40 @@ what changed (if anything).*
 
 ---
 
+### F-44 — Full Mode Unlock Gate built (D-38): one-time unlock → signed HttpOnly capability cookie; the raw key never lives in the browser
+
+**What shipped.** Full (Sonnet) mode is gated on a **capability cookie**, not a per-run
+key. Backend: `api/security.py` mints a token `"<exp>.<hmac-sha256(exp)>"` signed with
+`FULL_MODE_KEY` itself; `api/routers/full_mode.py` exposes `GET /api/capabilities`
+(`{demo_available, full_configured, full_unlocked}`), `POST /api/full-mode/unlock`
+(validate key → `Set-Cookie cv_full_mode`, HttpOnly/SameSite=Lax/Secure-in-prod/Path=/api),
+and `POST /api/full-mode/lock`. `runs.py`'s `start_run` gates a `mode:"full"` run on a valid
+cookie — **403 fail-closed** when `FULL_MODE_KEY` is unset or the cookie is missing/invalid —
+then resolves the config with the env key (so `resolve_run_config` is unchanged). Frontend:
+`RunPage` reads `/api/capabilities`, shows `full` only when configured, opens an unlock
+dialog (reusing `ui/dialog.tsx`) when locked, and drops the inline raw-key field; `startRun`
+no longer sends a key.
+
+**Decisions worth keeping:**
+- **stdlib HMAC, no dependency.** A signed timestamp is all the cookie needs; no JWT/itsdangerous.
+- **Signing secret = `FULL_MODE_KEY`.** No second env var, and rotating the key invalidates
+  every outstanding cookie. The cookie carries only a signature — never the key.
+- **Backend is the source of truth.** UI hiding is convenience; the 403 holds even if the UI
+  is bypassed (a `curl` to `POST /api/runs {mode:"full"}` without the cookie is refused).
+  Verified by `test_full_run_blocked_until_unlocked`.
+- **Gate moved 400 → 403.** The old "full mode requires FULL_MODE_KEY" was a 400 (bad request
+  / ConfigError on the body key); it's now a 403 (forbidden — fail closed). Updated the
+  existing test accordingly.
+- **CLI untouched.** No browser → no cookie; `--key` + `resolve_run_config` stay as-is.
+
+**Gotcha during build:** removing `key` from `StartRunRequest` missed the `launch_run(...,
+key=body.key)` call site (only the `resolve_run_config` call was updated) → `AttributeError`
+on every run. Both call sites must use the locally-derived `key`. 281 tests green; frontend
+build clean. **Affects** D-38 (now built), §12.7, `.env.example` (`COOKIE_SECURE`),
+`api/{security,routers/full_mode,routers/runs,main}.py`, `frontend/{lib/api,pages/RunPage}`.
+
+---
+
 ### F-43 — Sticky summary card (D-34) + JD tab (D-37): the card reuses existing trust signals instead of a new Phase-5 grounding pass
 
 **What was built:** a fixed **summary card** on every tab of `cv_final.html` (and the web
@@ -2717,9 +2751,9 @@ the tailoring quality immediately legible to an observer.
 
 ---
 
-### D-38 — Full Mode Unlock Gate: a signed capability cookie, not full auth (planned)
+### D-38 — Full Mode Unlock Gate: a signed capability cookie, not full auth (built, F-44)
 
-**What was decided (spec'd; not yet built):**
+**What was decided (built — see F-44):**
 For a single public deployment, demo mode stays open to all; **full** (Sonnet) mode is
 restricted behind a **one-time unlock** that issues a **signed, HttpOnly capability
 cookie**. The user enters the full-mode key once; the backend validates it against

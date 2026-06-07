@@ -137,6 +137,15 @@ export interface StartRunResponse {
   status: string;
 }
 
+// Full Mode Unlock Gate (D-38). The UI renders the mode picker from this; full mode is
+// reachable only when configured server-side and unlocked (a signed HttpOnly cookie the
+// browser sends automatically — the raw key never lives in the frontend).
+export interface Capabilities {
+  demo_available: boolean;
+  full_configured: boolean;
+  full_unlocked: boolean;
+}
+
 export interface ArchiveRun {
   run_id: string;
   mode: string | null;
@@ -211,8 +220,11 @@ export const api = {
       `/corpus/cvs/${encodeURIComponent(filename)}/metadata`,
       { metadata },
     ),
-  startRun: (jd_text: string, mode: string, key?: string, auto = false) =>
-    post<StartRunResponse>("/runs", { jd_text, mode, key: key || null, auto }),
+  startRun: (jd_text: string, mode: string, auto = false) =>
+    post<StartRunResponse>("/runs", { jd_text, mode, auto }),
+  capabilities: () => get<Capabilities>("/capabilities"),
+  unlockFullMode: (key: string) => post<{ unlocked: boolean }>("/full-mode/unlock", { key }),
+  lockFullMode: () => post<{ unlocked: boolean }>("/full-mode/lock", {}),
   submitHitl: (runId: string, body: HitlDecision) =>
     post<{ ok: boolean; status: string }>(`/runs/${encodeURIComponent(runId)}/hitl`, body),
   runStreamUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/stream`,

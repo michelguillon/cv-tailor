@@ -1664,16 +1664,16 @@ Demo hardening: error states, loading indicators, empty corpus state.
 
 ---
 
-### 12.7 — Full Mode Unlock Gate (planned enhancement, D-38)
+### 12.7 — Full Mode Unlock Gate (built, D-38 / F-44)
 
-> **Status: planned — not yet built.** This supersedes the current full-mode UI
-> flow for the Web path. Today the backend already key-gates full mode
-> (`resolve_run_config`, §3.7: 400 if `FULL_MODE_KEY` unset or the submitted key
-> mismatches) and the Run page sends the **raw key in the body of every full run**.
-> This enhancement replaces per-run raw-key submission with a **one-time unlock that
-> issues a signed, HttpOnly capability cookie**, so the key is entered once and never
-> stored in the browser. The **CLI is unchanged** — `--key` stays the CLI gate (no
-> browser, no cookie); the cookie mechanism is Web-only.
+> **Status: built.** The Web path now gates full mode on a **one-time unlock that
+> issues a signed, HttpOnly capability cookie** instead of sending the raw key in
+> every full run's body. The key is entered once (the unlock dialog), exchanged for
+> the cookie, and never stored in the browser. The **CLI is unchanged** — `--key`
+> stays the CLI gate (no browser, no cookie). Implementation: `api/security.py`
+> (stdlib-HMAC token signed with `FULL_MODE_KEY`), `api/routers/full_mode.py`
+> (`GET /api/capabilities`, `POST /api/full-mode/unlock` + `/lock`), and the full-run
+> gate in `api/routers/runs.py` (403, fail-closed).
 
 **Objective.** A single publicly-deployed instance exposes low-cost **demo** mode to
 visitors while restricting high-cost **full** (Sonnet) mode to authorised use. This is

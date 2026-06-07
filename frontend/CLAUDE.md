@@ -16,6 +16,13 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   in prod (which serves the bundle and proxies `/api`).
 - **Pages under `src/pages/`**, one per mode (Corpus, Run, …); `App.tsx` is the shell
   + tab nav. Keep pages thin: fetch via `api`, render with `ui/` primitives.
+- **Full mode unlock (D-38/F-44):** `RunPage` renders the mode picker from
+  `api.capabilities()` — `full` appears only when configured server-side; selecting it while
+  locked opens an unlock dialog (`ui/dialog.tsx`) that POSTs the key once to
+  `api.unlockFullMode`, after which a signed HttpOnly cookie (sent automatically, same-origin)
+  authorises full runs. The raw key is **never** kept in component state after submit and
+  `startRun` no longer sends a key. Backend is the source of truth (403); the UI gating is
+  convenience only.
 - **Output panel summary card (D-34/F-43):** `OutputPanel` renders a summary card —
   fit band + %, grounded coverage, unsupported claims (⚠ when >0), derived status — from
   the run's archive fields (`grounded_coverage`, `unsupported_claims`, `status`,
