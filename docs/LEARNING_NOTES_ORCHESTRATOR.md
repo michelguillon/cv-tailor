@@ -2499,3 +2499,102 @@ convergence signals use the run-specific inputs. The CVCM shifts the framing
 of what gets written — from keyword optimisation to articulation of authentic
 value. It's optional, but when present it's the difference between a CV that
 scores well and a CV that feels like you."
+
+---
+
+### D-34 — Sticky summary card: persistent fit/grounding status across all output tabs
+
+**What was decided:**
+A fixed header card visible on every tab of `cv_final.html` and the web UI output
+panel. Does not scroll away. Shows fit outcome, grounded coverage %, unsupported
+claims count, status label, and run ID. Populated at Phase 6 render time.
+
+The card requires Phase 5 (Haiku) to run a grounding check pass in addition to
+the existing formatting check — a second prompt that reviews the final assembled
+CV against the JD and rubric, counting: (a) claims directly traceable to a
+requirement (grounded coverage), and (b) positive claims the CV makes that the
+JD doesn't support (unsupported claims). Two outputs from one phase, same model.
+
+**Load-bearing reason:**
+Without a persistent summary, the human must navigate to the Fit tab to understand
+the run outcome before reading the CV. In a demo context especially, the summary
+card communicates the result immediately without requiring any interaction.
+
+**Fit indicator thresholds:**
+🟢 Strong (≥75%) · 🟡 Partial (40–74%) · 🔴 No Fit / Review (<40%)
+
+**What "Unsupported Claims" means:**
+Distinct from keyword gaps (things the JD asks for that the CV doesn't mention).
+Unsupported claims are the inverse — positive statements the CV makes that can't
+be grounded in the JD or rubric. One unsupported claim is a review signal; several
+is a red flag.
+
+**Interview framing:**
+"The summary card answers 'should I submit this CV?' without the human needing
+to dig through tabs. Grounded coverage and unsupported claims are the two numbers
+that matter — one measures completeness, the other measures authenticity."
+
+---
+
+### D-35 — Run is the default tab; Corpus is secondary navigation
+
+**What was decided:**
+The app loads on the Run page, not the Corpus page. Corpus management is accessed
+via a nav tab. Primary use case is starting a tailoring run; corpus management is
+a setup/maintenance task done infrequently.
+
+**Load-bearing reason:**
+Every user session starts with "I have a JD, I want a tailored CV." Corpus
+management is done once per new CV version, then rarely. Landing on the Corpus
+page makes the common case require an extra click.
+
+---
+
+### D-36 — Corpus UI: interactive YAML form replaces sidecar file; Update flow per CV row
+
+**What was decided:**
+Two flows, both per-CV:
+
+**Add CV:** Upload .docx → YAML metadata form (pre-filled where possible) →
+Confirm & Ingest → SSE progress → section inventory confirmation gate (R-01
+load-bearing: silent parse failures caught here before ChromaDB writes).
+
+**Update CV:** Per-row [Update] button → same form pre-filled from existing
+metadata → on confirm: delete all ChromaDB entries for that filename, re-ingest.
+De-duplication key: filename (D-10).
+
+The YAML form replaces the sidecar file upload for UI users. The backend writes
+the equivalent `.yaml` sidecar to `data/cvs/` on confirm — keeping CLI and UI
+workflows compatible. Both result in the same on-disk state.
+
+**Fields in the form:** filename (read-only), cv_type, target_role,
+target_company, skills_emphasis (tag input), seniority, version_date.
+
+**Load-bearing reason for the confirmation gate:**
+The section inventory display after ingestion is not cosmetic — it's the catch
+for silent parse failures (F-04, R-01). A CV that parsed to 2 sections where 8
+are expected must be visible to the human before committing. The UI makes this
+gate natural (the user sees the inventory before the [Confirm] button activates).
+
+**Interview framing:**
+"The UI form generates the same sidecar YAML the CLI expects — both code paths
+result in identical on-disk state. That compatibility is deliberate: the CLI
+stays the primary interface for power users; the UI is a wrapper that removes
+the need to hand-edit YAML."
+
+---
+
+### D-37 — JD tab in output panel: raw job description for traceability
+
+**What was decided:**
+A JD tab in the output panel (both `cv_final.html` and the web UI) renders the
+raw job description exactly as submitted — no analysis, no highlighting, no
+annotations. Stored as `PipelineOutput.jd_raw: str`.
+
+**Load-bearing reason:**
+A run produces a tailored CV. Weeks later, the question "which role was this
+run for?" should be answerable from the output file alone, without cross-referencing
+external records. The JD tab makes the output fully self-contained.
+
+Also useful during a demo: showing the raw JD alongside the tailored CV makes
+the tailoring quality immediately legible to an observer.

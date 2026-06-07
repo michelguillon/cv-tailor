@@ -562,6 +562,8 @@ class PipelineOutput:
                                         # "openai_gpt4o_mini", "mistral_small"
     converged: bool
     convergence_reason: str
+    jd_raw: str                  # raw JD text as submitted; stored for traceability
+                                 # rendered verbatim in the JD tab of cv_final.html
 ```
 
 ---
@@ -1267,6 +1269,44 @@ Deterministic; unit-tested against a fixture .docx.
 
 Four-tab interface:
 
+**Sticky summary card (all tabs)**
+
+A fixed header card visible on every tab of `cv_final.html` — does not scroll
+away, always readable without switching tabs. Populated from `PipelineOutput`
+at Phase 6 render time.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  🟡 Fit: Partial (58%)                                  │
+│                                                         │
+│  ✓  Grounded Coverage:   36%                            │
+│  ⚠  Unsupported Claims:  1                              │
+│  Status: Review Required                                │
+│                                                         │
+│  Run: run_20260606_114928                               │
+└─────────────────────────────────────────────────────────┘
+```
+
+Fit indicator colours: 🟢 Strong (≥75%) · 🟡 Partial (40–74%) · 🔴 No Fit / Review (<40%)
+
+Fields:
+- `Fit` — outcome label + `overall_fit_score` as percentage
+- `Grounded Coverage` — proportion of CV claims directly traceable to a rubric
+  keyword or JD requirement (computed by Phase 5 Haiku validation pass)
+- `Unsupported Claims` — count of statements in the final CV that the validator
+  could not ground in the JD or rubric (distinct from keyword gaps; these are
+  positive claims the CV makes that the JD doesn't support)
+- `Status` — derived: "Strong" if fit strong + 0 unsupported claims; "Review
+  Required" if partial or any unsupported claims; "Do Not Submit" if no_fit
+- `Run` — `run_id` for traceability
+
+Note: `Grounded Coverage` and `Unsupported Claims` require Phase 5 (Haiku
+formatting validation) to also run a grounding check pass — a lightweight
+second prompt that reviews the final assembled CV against the JD and rubric.
+This is additive to the existing formatting check; same model, same phase,
+separate prompt. The two outputs (formatting corrections + grounding report)
+are both written to `run_log.jsonl`.
+
 **Fit tab** (F-39, default-active) — role-fit summary: the CVCM value-alignment narrative ("why am I a fit", D-33), transferable strengths, and gaps. Visible after any run including `--yes`/auto (which never pauses at the Phase-1 checkpoint). Falls back to the no-fit reason when there's no CVCM.
 
 **CV tab** — clean, printable. No reasoning, no annotations. This is the submittable artefact.
@@ -1276,6 +1316,8 @@ Four-tab interface:
 **Scores tab** — keyword coverage and critique score per iteration, rendered as a simple progression table. Unresolved critique items listed at the bottom.
 
 **Reasoning tab** — collapsible audit trail, one entry per `ReasoningEntry` log item. Grouped by phase. "Why did the orchestrator reject this suggestion?" is answerable from here.
+
+**JD tab** — the raw job description exactly as pasted. No analysis, no annotations, no highlighting. Purpose: traceability — knowing which role a run was for without needing to open an external file. Stored as `run_log` header field `jd_raw: str` and rendered verbatim.
 
 ### cv_final.md
 
@@ -1358,19 +1400,13 @@ understand what the system is doing without reading the code.
 
 ### 12.1 — Two modes, same pattern as RFI
 
-**Mode 1 — Corpus Management**
-Ingest CVs, view what's in the corpus (section inventory per CV), delete/replace.
-Direct reuse of the RFI ingestion UI pattern.
+**Default tab on app load: Run** (not Corpus). The primary use case is starting
+a tailoring run. Corpus management is secondary — accessed via a nav tab, not
+the landing screen.
 
-```
-Landing page
-  ├── Corpus stats (N CVs, M sections, last ingested date)
-  ├── CV list with section breakdown per CV
-  ├── [Add CV] → upload .docx → ingestion progress via SSE → section inventory confirmation
-  └── [Delete CV] → removes all sections for that CV from ChromaDB
-```
+---
 
-**Mode 2 — Tailoring Run**
+**Mode 1 — Run (default)**
 Paste a JD, watch the pipeline run, handle HITL checkpoints conversationally,
 download the final CV.
 
@@ -1379,8 +1415,43 @@ Run page
   ├── JD input (textarea + [Start] button)
   ├── Progress feed (SSE stream — one event per phase)
   ├── HITL checkpoint panels (appear inline as pipeline pauses)
-  └── Output panel (final CV + scores + reasoning trace tabs)
+  └── Output panel (sticky summary card + tabs: Fit · CV · Changes · Scores · Reasoning · JD)
 ```
+
+---
+
+**Mode 2 — Corpus Management**
+View, add, update, and delete CVs in the corpus.
+
+```
+Corpus page
+  ├── Corpus stats (N CVs, M sections, last ingested date)
+  ├── CV list — one row per CV, showing:
+  │     filename | target_role | seniority | version_date | N sections
+  │     [Update] [Delete] buttons per row
+  │
+  ├── [Add CV] flow:
+  │     Step 1 — Upload .docx file
+  │     Step 2 — YAML metadata form (pre-filled from filename where possible):
+  │               filename (read-only), cv_type, target_role, target_company,
+  │               skills_emphasis (tag input), seniority, version_date
+  │     Step 3 — [Confirm & Ingest] → SSE progress → section inventory display
+  │               Human confirms section list before committing to ChromaDB
+  │               (load-bearing gate: silent parse failures caught here, R-01)
+  │
+  └── [Update CV] flow (per-row button):
+        Same as Add CV but pre-fills the form from existing metadata.
+        On confirm: deletes all existing ChromaDB entries for this filename,
+        re-ingests with new .docx + updated metadata.
+        De-duplication key: filename (D-10).
+```
+
+**Why the YAML form rather than a sidecar file upload:**
+In the CLI workflow, metadata lives in a `.yaml` sidecar file alongside the
+`.docx`. In the UI, the form replaces the sidecar — the user fills it in
+interactively rather than editing a YAML file. The backend writes the equivalent
+sidecar to `data/cvs/<filename>.yaml` on confirm, keeping the CLI and UI
+workflows compatible (both result in the same on-disk state).
 
 ---
 
@@ -1482,13 +1553,22 @@ pipeline thread — the same handler interface as the CLI's `TerminalHITL`:
 
 ### 12.4 — Output panel
 
-Four tabs (same as the HTML output file, rendered inline):
+Sticky summary card at the top (always visible regardless of active tab):
+```
+🟡 Fit: Partial (58%)  ·  ✓ Grounded Coverage: 36%  ·  ⚠ Unsupported Claims: 1
+Status: Review Required  ·  Run: run_20260606_114928
+```
+
+Six tabs rendered inline (matching `cv_final.html`):
 
 ```
+[Fit]        Default-active. CVCM value-alignment narrative, transferable
+             strengths, gaps. Falls back to no-fit reason if no CVCM.
 [CV]         Clean assembled CV — copy-to-clipboard button
-[Changes]    Per-section version diffs
-[Scores]     Keyword coverage + critique score per iteration per section
+[Changes]    Per-section version diffs across all iterations
+[Scores]     Keyword coverage + quality score per iteration per section
 [Reasoning]  Collapsible audit trail by phase
+[JD]         Raw job description as pasted — no analysis, no annotations
 ```
 
 Download buttons: `cv_final.md` (clean text) and `cv_final.html` (full report).
