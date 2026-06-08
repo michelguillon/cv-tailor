@@ -274,6 +274,15 @@ def test_extra_keys_ignored():
     assert restored == make_jd_analysis()
 
 
+def test_jd_analysis_company_name_optional_roundtrip():
+    """company_name (F-47) defaults None for old runs and round-trips when set."""
+    jd = make_jd_analysis()
+    assert jd.company_name is None                                   # default (back-compat)
+    named = JDAnalysis.from_dict({**jd.to_dict(), "company_name": "Airwallex"})
+    assert named.company_name == "Airwallex"
+    assert JDAnalysis.from_dict(named.to_dict()).company_name == "Airwallex"  # full round-trip
+
+
 # --------------------------------------------------------------------------- #
 # Required-field tests                                                        #
 # --------------------------------------------------------------------------- #

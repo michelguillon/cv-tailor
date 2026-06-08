@@ -34,6 +34,8 @@ exactly these keys:
 
 {
   "role_title": string,                // the role as titled, e.g. "Director, Solutions Engineering"
+  "company_name": string or null,      // the hiring company's NAME only, e.g. "Airwallex" (NOT a
+                                       //   description); null if the JD does not name the employer
   "seniority_level": string,           // one of: senior | principal | director | vp | executive
   "key_requirements": [string],        // the JD's stated requirements, as short phrases (5-12 items)
   "nice_to_haves": [string],           // preferred/advantageous, not mandatory (0-8 items)
@@ -62,8 +64,14 @@ any CV would match (e.g. "product", "engineering", "software", "technical", \
 - structural_requirements must be SPECIFIC to this JD (reference its concrete \
 asks, e.g. team size, named metrics, domains), not generic CV advice.
 - Infer seniority_level from scope and stated years, mapping to the closest label.
+- company_name is the employer's name ONLY (not a tagline or description); use null when \
+the JD doesn't state it — do NOT guess from the product, recruiter, or a generic phrase.
 - Do not invent requirements not supported by the JD text.
 """
+
+# Junk values an LLM sometimes emits for an unknown company — treated as "no name".
+_COMPANY_BLANKS = {"null", "none", "n/a", "na", "unknown", "not stated", "not specified",
+                   "the company", "company", "confidential"}
 
 
 class JDAnalysisError(RuntimeError):
@@ -89,7 +97,18 @@ def _validate(data: dict) -> list[str]:
     sl = str(data.get("seniority_level", "")).lower()
     if sl not in KNOWN_SENIORITY:
         problems.append(f"seniority_level {data.get('seniority_level')!r} not in {sorted(KNOWN_SENIORITY)}")
+    cn = data.get("company_name")           # optional: a string or null/absent
+    if cn is not None and not isinstance(cn, str):
+        problems.append("company_name must be a string or null")
     return problems
+
+
+def _clean_company(value) -> str | None:
+    """Normalise the extracted company name; junk/blank/placeholder → None."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip()
+    return None if (not v or v.lower() in _COMPANY_BLANKS) else v
 
 
 def _call(client, model, jd_text, seed):
@@ -152,6 +171,7 @@ def analyse_jd(jd_text: str, *, model: str, client=None, seed: int = 7):
         nice_to_haves=[s.strip() for s in data["nice_to_haves"]],
         company_context=data["company_context"].strip(),
         tone_signals=[s.strip() for s in data["tone_signals"]],
+        company_name=_clean_company(data.get("company_name")),
     )
     rubric = ScoringRubric(
         version=1,

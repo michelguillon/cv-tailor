@@ -412,6 +412,34 @@ what changed (if anything).*
 
 ---
 
+### F-47 — company_name auto-filled from the JD (D-40 follow-up): inferred in Phase 0, manual still wins
+
+**What shipped.** The run-list company label is no longer manual-only. `JDAnalysis` gained an
+optional `company_name: str | None = None` (default keeps old persisted runs deserialising
+cleanly); Phase 0's existing Mistral extraction now also returns the hiring company's name
+(one new prompt key — **no extra LLM call**), cleaned via `_clean_company` (placeholders like
+"N/A"/"confidential"/"the company" → None). `archive._summary` resolves company by precedence
+**manual sidecar → Phase-0 inferred → null**, so the run list reads by company even when the
+owner typed nothing, while a manual/edited value still overrides.
+
+**Why precedence, manual-first.** An LLM occasionally extracts a stray subsidiary, brand, or
+the recruiting agency instead of the employer — so inference *fills the gap* but never beats an
+explicit owner value. Null still renders "Unknown company" in the UI (unchanged).
+
+**Cost of the late schema change (vs the D-40 first cut that avoided it):** one optional field
+on `JDAnalysis` + its prompt key + a fallback in `archive._summary` — nothing in the refinement
+loop or other phases, because the field is read straight off the persisted `phase0_jd_analysis.
+json` (not threaded through manifests). Back-compat is automatic: the field defaults to None and
+`_from_dict` tolerates its absence. Tests: schema round-trip, Phase-0 optional/cleaned cases,
+and archive precedence. 299 green.
+
+**Affects** D-40 (the "deferred inference" note now built), §12.9 + ARCHITECTURE (company
+precedence), `tailor/{models,phases/phase0_jd_analysis}.py`, `api/archive.py`,
+`tests/{test_schemas,test_phase0,test_api}.py`. No frontend change (RunsPage already renders
+`company_name`); the optional Company field on the run form is now the *override*, not the only source.
+
+---
+
 ### F-46 — Run visibility & retention built (D-40): capability-aware archive + mutable sidecar + env-gated cleanup
 
 **What shipped.** `api/run_meta.py` — a mutable per-run sidecar `outputs/<run_id>/run_meta.json`
@@ -2935,10 +2963,13 @@ startup (only when the env var is set) or via an owner-only `POST /api/runs/clea
 - **Env-gated auto-cleanup = safe by default.** Startup cleanup only runs when
   `RUN_RETENTION_DAYS` is set, so `TestClient(app)` (which fires startup) and local dev never
   delete real `outputs/`. The manual endpoint is always available to the owner.
-- **company_name without a schema change (D-07 blast radius).** Rather than add a Phase-0
-  extracted field (large blast radius across `models.py` + all phases), company is an optional
-  free-text field at run creation, editable later, default "Unknown company". Inference can be
-  layered on later without touching the pipeline.
+- **company_name — manual first, inference added later (F-47).** The first cut deliberately
+  kept company a manual free-text field (no Phase-0 schema change) to avoid the D-07 blast
+  radius. It was **since extended (F-47)** to auto-fill from the JD: a `company_name` field
+  added to `JDAnalysis` (extracted in the existing Phase-0 call — no extra LLM pass), resolved
+  by precedence **manual → inferred → null**. The default stays None/"Unknown company"; manual
+  always overrides (an LLM occasionally grabs a stray subsidiary/brand), so the late addition
+  cost one optional schema field + a fallback in `archive._summary`, nothing in the loop.
 
 **Reuse:** capability detection reuses `verify_token` + `full_mode_configured` + `FULL_COOKIE`;
 mutations reuse the `require_unlocked` dependency (D-39); the summary fields reuse `archive.

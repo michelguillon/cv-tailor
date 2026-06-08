@@ -135,8 +135,12 @@ class JDAnalysis(Serializable):
     seniority_level: str          # inferred
     key_requirements: list[str]
     nice_to_haves: list[str]
-    company_context: str
+    company_context: str          # 1-2 sentences describing the company
     tone_signals: list[str]       # e.g. "technical", "startup", "formal"
+    # The hiring company's NAME (e.g. "Airwallex"), extracted from the JD, or None when the
+    # JD doesn't name it. Distinct from `company_context` (prose). Defaulted so older
+    # persisted runs (no field) deserialise cleanly. Feeds the run list label (§12.9/D-40).
+    company_name: str | None = None
 
 
 @dataclass

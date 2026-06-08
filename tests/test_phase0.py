@@ -13,6 +13,7 @@ from tailor.phases.phase0_jd_analysis import JDAnalysisError, analyse_jd
 
 VALID = {
     "role_title": "Director, Solutions Engineering",
+    "company_name": "Airwallex",
     "seniority_level": "director",
     "key_requirements": ["lead EMEA SE teams", "10+ years client-facing"],
     "nice_to_haves": ["payments ecosystem"],
@@ -49,6 +50,7 @@ def test_valid_response_builds_schemas():
     jd, rubric, usage = analyse_jd("raw jd text", model="m", client=client)
     assert isinstance(jd, JDAnalysis) and isinstance(rubric, ScoringRubric)
     assert jd.role_title == "Director, Solutions Engineering"
+    assert jd.company_name == "Airwallex"
     assert jd.seniority_level == "director"
     assert jd.raw_text == "raw jd text"
     assert rubric.version == 1
@@ -60,6 +62,17 @@ def test_valid_response_builds_schemas():
 def test_required_keywords_lowercased_and_deduped():
     jd, rubric, _ = analyse_jd("x", model="m", client=fake_client(json.dumps(VALID)))
     assert rubric.required_keywords == ["pre-sales", "emea", "payments"]  # dedup, order kept
+
+
+def test_company_name_optional_and_cleaned():
+    """Inferred company is optional (F-47): missing/placeholder → None; a real name is trimmed."""
+    no_co = {k: v for k, v in VALID.items() if k != "company_name"}
+    jd, *_ = analyse_jd("x", model="m", client=fake_client(json.dumps(no_co)))
+    assert jd.company_name is None                       # absent → None (no validation failure)
+    junk = json.dumps({**VALID, "company_name": "N/A"})
+    assert analyse_jd("x", model="m", client=fake_client(junk))[0].company_name is None
+    real = json.dumps({**VALID, "company_name": "  Globex  "})
+    assert analyse_jd("x", model="m", client=fake_client(real))[0].company_name == "Globex"
 
 
 def test_retries_once_on_invalid_then_succeeds():

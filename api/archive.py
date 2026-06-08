@@ -54,9 +54,12 @@ def _footer(run_dir: Path) -> dict:
 def _summary(run_dir: Path) -> dict:
     footer = _footer(run_dir)
     role_title = outcome = fit_score = None
+    p0_company = None
     p0 = run_dir / "phase0_jd_analysis.json"
     if p0.exists():
-        role_title = json.loads(p0.read_text(encoding="utf-8")).get("role_title")
+        p0_data = json.loads(p0.read_text(encoding="utf-8"))
+        role_title = p0_data.get("role_title")
+        p0_company = p0_data.get("company_name")     # Phase-0 inferred name (D-40 / F-47)
     p1 = run_dir / "phase1_fit_assessment.json"
     if p1.exists():
         fit = json.loads(p1.read_text(encoding="utf-8"))
@@ -69,10 +72,13 @@ def _summary(run_dir: Path) -> dict:
     unsupported = footer.get("fabrication_flags")
     card = summary_card(outcome or "", fit_score, grounded, unsupported or 0)
     meta = read_meta(run_dir)                       # visibility/retention sidecar (D-40)
+    # Company precedence (F-47): the owner's manual/edited value wins; else the Phase-0
+    # inferred name from the JD; else None → the UI shows "Unknown company".
+    company = meta["company_name"] or p0_company
     return {
         "run_id": run_dir.name,
         "created_at": created_at_from_id(run_dir.name),
-        "company_name": meta["company_name"],
+        "company_name": company,
         "mode": footer.get("mode"),
         "role_title": role_title,
         "outcome": outcome,

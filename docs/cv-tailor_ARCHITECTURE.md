@@ -423,6 +423,8 @@ owner from running expensive operations or mutating state.
 - Owner (same capability cookie) sees all runs with full metadata + controls
 - Per-run mutable flags in `run_meta.json` sidecar: `public_demo`, `keep`,
   `company_name` (orthogonal to `mode`)
+- `company_name` precedence (F-47): manual (run form / edit) → Phase-0 name
+  inferred from the JD (`JDAnalysis.company_name`, no extra LLM call) → "Unknown company"
 - Private runs: filtered from list/detail (404, not 403 — run IDs not revealed)
 - Cleanup: startup-triggered only when `RUN_RETENTION_DAYS` env var set;
   `keep` and `public_demo` runs are protected; age from run_id, not mtime

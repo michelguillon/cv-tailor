@@ -1875,9 +1875,12 @@ Same spend-guard philosophy as §12.7/§12.8, applied to *run exposure*.
 `role_title`/fit/cost/grounding come from the existing run record (Phase-0/1 checkpoints +
 the `run_complete` footer + `summary_card`, §12.4/F-43). `company_name`, `keep`, and
 `public_demo` live in a **mutable sidecar** `run_meta.json` (the append-only `run_log.jsonl`
-audit is never mutated, D-06). `company_name` may be supplied at run creation (an optional
-field on the run form) or edited later; when absent the UI shows **"Unknown company"** rather
-than omitting it. `created_at` is the run id's timestamp (`run_YYYYMMDD_HHMMSS`, UTC).
+audit is never mutated, D-06). `company_name` resolves by precedence (**F-47**): the owner's
+**manual** value (an optional field on the run form, editable later) wins; else the name
+**inferred from the JD** by Phase 0 (`JDAnalysis.company_name`, extracted in the existing
+analysis call — no extra LLM pass); else **null**, where the UI shows **"Unknown company"**.
+The manual value always overrides inference (an LLM can grab a stray subsidiary/brand).
+`created_at` is the run id's timestamp (`run_YYYYMMDD_HHMMSS`, UTC).
 
 **Visibility ≠ mode ≠ retention (three orthogonal concepts).**
 - `mode` — model/cost config: `demo` or `full` (§3.7).

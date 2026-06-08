@@ -403,7 +403,7 @@ def test_archive_unknown_run_404(client, archive_dir):
 # Run visibility & retention (D-40/§12.9) — sidecar, capability-aware archive   #
 # --------------------------------------------------------------------------- #
 
-def _make_run(out, run_id, *, meta=None):
+def _make_run(out, run_id, *, meta=None, phase0_company=None):
     """A minimal on-disk run (run_log footer + phase0/1 + report), optional meta sidecar."""
     from pathlib import Path
     rd = Path(out) / run_id
@@ -415,7 +415,10 @@ def _make_run(out, run_id, *, meta=None):
                         "total_estimated_usd": 0.1, "grounded_coverage": 0.5,
                         "fabrication_flags": 0, "cost_breakdown_estimated_usd": {}}),
         ]) + "\n", encoding="utf-8")
-    (rd / "phase0_jd_analysis.json").write_text(json.dumps({"role_title": "Eng"}), encoding="utf-8")
+    p0 = {"role_title": "Eng"}
+    if phase0_company is not None:
+        p0["company_name"] = phase0_company
+    (rd / "phase0_jd_analysis.json").write_text(json.dumps(p0), encoding="utf-8")
     (rd / "phase1_fit_assessment.json").write_text(
         json.dumps({"outcome": "partial", "overall_fit_score": 0.6}), encoding="utf-8")
     (rd / "cv_final.html").write_text("<html>report</html>", encoding="utf-8")
@@ -466,6 +469,19 @@ def test_cleanup_respects_keep_public_and_age(tmp_path):
     assert removed == ["run_20260101_000000"]
     assert (out / "run_20260101_000001").exists() and (out / "run_20260101_000002").exists()
     assert (out / "run_20260610_000000").exists()
+
+
+def test_company_precedence_manual_over_inferred(tmp_path):
+    """F-47: manual sidecar company wins; else the Phase-0 inferred name; else None."""
+    out = tmp_path / "outputs"
+    _make_run(out, "run_20260101_000000", phase0_company="Airwallex")            # inferred only
+    _make_run(out, "run_20260102_000000", phase0_company="Airwallex",
+              meta={"company_name": "Manual Co"})                                # manual override
+    _make_run(out, "run_20260103_000000")                                       # neither → None
+    by_id = {r["run_id"]: r for r in archive.list_runs(out)}
+    assert by_id["run_20260101_000000"]["company_name"] == "Airwallex"          # Phase-0 fallback
+    assert by_id["run_20260102_000000"]["company_name"] == "Manual Co"          # sidecar wins
+    assert by_id["run_20260103_000000"]["company_name"] is None
 
 
 def test_delete_run_unit(tmp_path):
