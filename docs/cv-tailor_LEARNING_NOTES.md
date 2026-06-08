@@ -3,8 +3,8 @@
 
 **Project:** Week 3 Portfolio — Multi-Model Orchestration  
 **Repository:** cv-tailor
-**Status:** Build complete (Steps 0–9 done; UI in progress)  
-**Last updated:** post-Step-9 / Sonnet validation (F-28)
+**Status:** Complete — pipeline + UI + security gates + grounding check + CVCM deployed  
+**Last updated:** June 2026 — project closed
 
 ---
 
