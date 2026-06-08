@@ -8,18 +8,34 @@ It's the Week 3 piece of a learning track: **LLMs as tools.** A Claude Sonnet
 orchestrator calls other models the same way a tool-using agent calls a database —
 GPT-4o-mini for section critique, Mistral for keyword extraction + embeddings,
 Claude Haiku for the formatting gate. The provider is an implementation detail
-*inside* each tool; the orchestrator only sees typed results.
+_inside_ each tool; the orchestrator only sees typed results.
+
+## Why I Built This
+
+Most CV tailoring tools optimise for keyword matching. In practice this often creates two problems: generic applications that lose what makes a candidate distinctive, and AI-generated content that drifts beyond the candidate's actual experience.
+
+cv-tailor was built as both a practical job-search tool and a learning project exploring how orchestration, retrieval, grounding, evaluation, and human review can be combined to produce more useful and trustworthy outputs.
+
+The project evolved into an exploration of AI system design, including fabrication detection, grounded scoring, human-in-the-loop workflows, and the trade-offs between optimisation and factual integrity.
+
+## Key Findings
+
+- More refinement iterations increased fabrication pressure.
+- Narrative quality and factual grounding must be evaluated independently.
+- Grounded keyword coverage proved a better optimisation target than raw keyword coverage.
+- Human review remained the most reliable final approval gate.
+- Multi-model orchestration was most effective when models were treated as specialised tools rather than interchangeable writers.
 
 ## Architecture in one paragraph
 
 Deterministic phases (JD analysis → fit assessment → initial draft → … →
 validation → output) frame a single **agentic refinement loop**. The loop works
 at **section granularity**: each section is drafted, critiqued, revised, scored,
-and frozen independently. Termination is **dual-signal** — keyword coverage *and*
+and frozen independently. Termination is **dual-signal** — keyword coverage _and_
 critique score must both plateau — with a soft-stop allowed only when the last
 critique returns zero major issues. A **dynamic scoring rubric** can grow during
 the loop (capped, validated, versioned) so the CV is measured against what the JD
-*means*, not just what it says. All reasoning is logged to `run_log.jsonl`,
+_means_, not just what it says. All reasoning is logged to `run_log.jsonl`,
 separate from model context.
 
 ## Stack
