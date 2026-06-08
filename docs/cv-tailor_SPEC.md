@@ -6,7 +6,7 @@
 > The product evolved significantly during implementation — a web UI, security gates,  
 > run management, and several architectural refinements (dual-writer loop, section-granular  
 > ingestion, CVCM) were added after this spec was written.  
-> For the deployed implementation, see **cv_tailor_ARCHITECTURE.md**.  
+> For the deployed implementation, see **cv-tailor_ARCHITECTURE.md**.  
 > For the full decision trail including build findings, see **cv-tailor_LEARNING_NOTES.md**.
 
 **Project:** Week 3 Portfolio — Multi-Model Orchestration  

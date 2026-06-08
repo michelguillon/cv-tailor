@@ -13,7 +13,7 @@
 Each entry records one architectural decision: what was decided, what was
 rejected, the load-bearing reason, what the pattern generalises to, and how
 to frame it in an interview. This is the "why" complement to cv-tailor_SPEC.md
-(the "what"), alongside cv_tailor_ARCHITECTURE.md (the deployed system).
+(the "what"), alongside cv-tailor_ARCHITECTURE.md (the deployed system).
 
 Entries are added throughout the build — when a decision is made, when a
 finding changes the design, when a test reveals something unexpected.

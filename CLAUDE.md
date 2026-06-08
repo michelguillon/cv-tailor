@@ -6,7 +6,7 @@ full audit trail and an HTML reasoning trace.
 
 ## Sources of truth — read before changing anything
 
-- **`docs/cv_tailor_ARCHITECTURE.md`** — *what the deployed system does*. The current
+- **`docs/cv-tailor_ARCHITECTURE.md`** — *what the deployed system does*. The current
   implementation reference (web UI, security gates, run management, dual-writer loop,
   section-granular ingestion, CVCM, and later refinements).
 - **`docs/cv-tailor_SPEC.md`** — the *original* design intent, agreed before the build.
