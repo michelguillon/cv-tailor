@@ -1,4 +1,4 @@
-# cv-tailor configuration (SPEC_ORCHESTRATOR.md §3.7, §3.8)
+# cv-tailor configuration (cv-tailor_SPEC.md §3.7, §3.8)
 # Runtime behaviour is governed by a RunConfig loaded from this file. Any mode
 # difference expressed as a config value is readable, testable, and adjustable
 # without touching code (the Week 2 RunConfig pattern).

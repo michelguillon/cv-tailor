@@ -6,16 +6,20 @@ full audit trail and an HTML reasoning trace.
 
 ## Sources of truth — read before changing anything
 
-- **`docs/SPEC_ORCHESTRATOR.md`** — *what* the system does. Architecture,
-  schemas (§4), phases (§5), CLI (§6), structure (§7), Docker (§7.5).
-- **`docs/LEARNING_NOTES_ORCHESTRATOR.md`** — *why*. Decision log (`D-xx`),
-  reuse analysis (`R-xx`), and the Findings Log (`F-xx`, added during build).
+- **`docs/cv_tailor_ARCHITECTURE.md`** — *what the deployed system does*. The current
+  implementation reference (web UI, security gates, run management, dual-writer loop,
+  section-granular ingestion, CVCM, and later refinements).
+- **`docs/cv-tailor_SPEC.md`** — the *original* design intent, agreed before the build.
+  **Historical** (the product evolved past it) but still the reference for schemas (§4),
+  phases (§5), CLI (§6), structure (§7), Docker (§7.5); code docstrings cite its section
+  numbers.
+- **`docs/cv-tailor_LEARNING_NOTES.md`** — *why*. Decision log (`D-xx`), reuse analysis
+  (`R-xx`), and the Findings Log (`F-xx`, added during build).
 
-These are maintained **throughout** the build, not retrospectively. When a build
-finding changes or confirms a decision, add an `F-xx` entry to the Findings Log:
-what was found, which `D-xx`/`R-xx` it affects, what changed. Do not silently
-diverge from the spec — if a step reveals an ambiguity the spec doesn't resolve,
-resolve it, record it, *then* write code.
+The learning notes are maintained **throughout** the build, not retrospectively. When a
+build finding changes or confirms a decision, add an `F-xx` entry to the Findings Log:
+what was found, which `D-xx`/`R-xx` it affects, what changed. Do not silently diverge — if
+a step reveals an ambiguity the docs don't resolve, resolve it, record it, *then* write code.
 
 ## How this project runs — Docker, always (SPEC §6, §7.5)
 

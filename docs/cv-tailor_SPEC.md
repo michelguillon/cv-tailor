@@ -1,11 +1,19 @@
-# SPEC_ORCHESTRATOR.md — cv-tailor
+# cv-tailor_SPEC.md — cv-tailor
 ## Architecture Specification
+
+> **Historical design document.**  
+> This file reflects the original design intent, agreed before the build began.  
+> The product evolved significantly during implementation — a web UI, security gates,  
+> run management, and several architectural refinements (dual-writer loop, section-granular  
+> ingestion, CVCM) were added after this spec was written.  
+> For the deployed implementation, see **cv_tailor_ARCHITECTURE.md**.  
+> For the full decision trail including build findings, see **cv-tailor_LEARNING_NOTES.md**.
 
 **Project:** Week 3 Portfolio — Multi-Model Orchestration  
 **Repository:** cv-tailor
-**Status:** Pre-implementation (architecture agreed, no code written)  
-**Last updated:** pre-build  
-**Deployment target:** CLI tool, M720q home server + local use
+**Status:** Complete — pipeline + UI built and deployed  
+**Last updated:** post-UI (D-38/D-39/D-40, full mode gate + run management)  
+**Deployment target:** CLI tool + web UI, M720q home server
 
 ---
 
@@ -90,9 +98,11 @@ critique_result = critique_cv(draft=current_draft, jd=jd_analysis)
 | Provider | Model | Role | Justification |
 |----------|-------|------|---------------|
 | Mistral | mistral-small | Keyword extraction + embeddings + scoring | Already integrated (Week 1). Structured extraction tasks. Cheaper per call than Sonnet. Consistent with "Mistral = analysis/retrieval layer." |
-| Anthropic | claude-sonnet-4-6 | Orchestrator + drafter + revision decisions | Complex multi-step reasoning. Cross-turn consistency. Established from Week 2. |
-| OpenAI | gpt-4o-mini | Section-by-section critique | Empirically observed: gives harsher, more direct feedback than Claude for CV review. Less likely to flatter. Different training distribution from orchestrator = genuinely independent second opinion. |
-| Anthropic | claude-haiku-4-5 | Formatting validation gate | Fast, cheap, sufficient for deterministic quality checks. Model routing principle from Week 2. |
+| Anthropic | claude-sonnet-4-6 | Orchestrator + primary writer + revision decisions | Complex multi-step reasoning. Cross-turn consistency. Established from Week 2. |
+| OpenAI | gpt-4o-mini | Independent challenger writer | Empirically observed: produces harsher, more direct drafts than Claude. Less likely to flatter. Different training prior = genuinely independent second perspective. (D-28) |
+| Anthropic | claude-haiku-4-5 | Formatting validation + HITL interpretation + demo orchestrator | Fast, cheap, sufficient for deterministic checks. ~20× cheaper than Sonnet. Demo mode orchestrator. |
+
+*Updated post-D-28: GPT-4o-mini is a writer (not just a critic). Both models draft independently per section; Claude Sonnet orchestrates adjudication.*
 
 **Demo mode substitution:** Claude Haiku replaces Claude Sonnet as orchestrator in demo mode. Same interface, ~20× cheaper, adequate for a single-iteration pass.
 
@@ -293,9 +303,12 @@ fit reasoning (e.g. "best experience section for a solution architect role").
 
 ---
 
-### 3.9 — CLI-first, HTML output IS the review interface
+### 3.10 — CLI-first, HTML output IS the review interface
 
-**Decision:** No web UI. The HTML output file serves as the review interface. One-time ingestion runs as a CLI command. The tailoring run is a CLI command with HITL prompts in the terminal.
+> **Superseded.** A full React/FastAPI web UI was built and deployed (§12).  
+> This section reflects the original design intent only.
+
+**Decision (original):** No web UI. The HTML output file serves as the review interface. One-time ingestion runs as a CLI command. The tailoring run is a CLI command with HITL prompts in the terminal.
 
 **Why no web UI:** The output IS a document, not a conversation. The HITL is two or three decisions per run, not an ongoing session. Adding a web UI would add FastAPI + React scope without adding learning value not already covered in Week 2 (C4). The HTML output provides the visual richness that the web UI would otherwise provide.
 

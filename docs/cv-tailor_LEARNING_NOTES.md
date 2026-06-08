@@ -1,4 +1,4 @@
-# LEARNING_NOTES_ORCHESTRATOR.md — cv-tailor
+# cv-tailor_LEARNING_NOTES.md — cv-tailor
 ## Architectural Decisions, Findings, and Portfolio Notes
 
 **Project:** Week 3 Portfolio — Multi-Model Orchestration  
@@ -12,8 +12,8 @@
 
 Each entry records one architectural decision: what was decided, what was
 rejected, the load-bearing reason, what the pattern generalises to, and how
-to frame it in an interview. This is the "why" complement to SPEC_ORCHESTRATOR.md
-(the "what").
+to frame it in an interview. This is the "why" complement to cv-tailor_SPEC.md
+(the "what"), alongside cv_tailor_ARCHITECTURE.md (the deployed system).
 
 Entries are added throughout the build — when a decision is made, when a
 finding changes the design, when a test reveals something unexpected.

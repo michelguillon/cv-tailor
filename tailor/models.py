@@ -1,4 +1,4 @@
-"""All inter-stage schemas for cv-tailor (SPEC_ORCHESTRATOR.md §4).
+"""All inter-stage schemas for cv-tailor (cv-tailor_SPEC.md §4).
 
 Every dataclass is JSON-serialisable and checkpointed to outputs/<run_id>/ at
 the end of its producing stage (the Week 2 checkpoint pattern). Because these

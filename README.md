@@ -69,8 +69,10 @@ sticky fit/grounding summary card), **Runs** (browse/replay past runs), and **Co
 
 ## Docs
 
-- `docs/SPEC_ORCHESTRATOR.md` — architecture, schemas, phases, Docker + deploy (§7.5).
-- `docs/LEARNING_NOTES_ORCHESTRATOR.md` — decision log (`D-xx`) and build findings (`F-xx`).
+- `docs/cv_tailor_ARCHITECTURE.md` — what the deployed system does (the implementation reference).
+- `docs/cv-tailor_SPEC.md` — the original design intent (historical): architecture, schemas, phases, Docker + deploy (§7.5).
+- `docs/cv-tailor_LEARNING_NOTES.md` — decision log (`D-xx`) and build findings (`F-xx`).
+- `docs/cv_tailor_RETROSPECTIVE.md` · `docs/cv_tailor_TOP15_LEARNINGS.md` — portfolio write-ups.
 - `ADAPTING.md` — using it with your own CV corpus.
 
 ## Deployment

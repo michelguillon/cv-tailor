@@ -1,4 +1,4 @@
-"""Audit trail logger → run_log.jsonl (SPEC_ORCHESTRATOR.md §3.6, D-06).
+"""Audit trail logger → run_log.jsonl (cv-tailor_SPEC.md §3.6, D-06).
 
 A pure, typed, append-only logger. No API calls — needed from Phase 2 onward.
 Orchestrator reasoning is written here but never injected back into the messages

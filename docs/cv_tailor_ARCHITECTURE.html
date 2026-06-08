@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cv-tailor — Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #1a1917;
+  --ink2: #4a4844;
+  --ink3: #8a8784;
+  --paper: #f7f5f0;
+  --paper2: #edeae3;
+  --paper3: #e2ded5;
+  --rule: rgba(26,25,23,0.12);
+  --rule2: rgba(26,25,23,0.06);
+  --accent: #c84b2f;
+  --accent2: #e8956a;
+  --blue: #2d5f8a;
+  --blue2: #d0e4f4;
+  --teal: #2a7a5e;
+  --teal2: #c8ebe0;
+  --amber: #8a5e1a;
+  --amber2: #f4e4c0;
+  --purple: #5c3d8a;
+  --purple2: #e4d8f4;
+  --green: #3a6e2a;
+  --green2: #d8ead0;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e8e4db; --ink2: #a8a49c; --ink3: #68655f;
+    --paper: #181714; --paper2: #221f1b; --paper3: #2a2720;
+    --rule: rgba(232,228,219,0.1); --rule2: rgba(232,228,219,0.05);
+    --accent: #e8764a; --accent2: #c84b2f;
+    --blue: #6aaad4; --blue2: #1a3050;
+    --teal: #5abf96; --teal2: #0e3028;
+    --amber: #d4a454; --amber2: #3a2800;
+    --purple: #a888e4; --purple2: #2a1a40;
+    --green: #7abf5a; --green2: #142808;
+  }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'DM Sans', sans-serif; font-size: 14px; line-height: 1.6; min-height: 100vh; }
+
+/* ── Header ── */
+.site-header { padding: 28px 40px 0; border-bottom: 1px solid var(--rule); display: flex; align-items: baseline; gap: 16px; }
+.site-title { font-family: 'Instrument Serif', serif; font-size: 22px; color: var(--ink); letter-spacing: -0.02em; }
+.site-title span { color: var(--accent); font-style: italic; }
+.site-meta { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--ink3); }
+
+/* ── Tab nav ── */
+.tab-nav { display: flex; gap: 0; padding: 0 40px; border-bottom: 1px solid var(--rule); margin-top: 0; }
+.tab-btn { font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3); background: none; border: none; border-bottom: 2px solid transparent; padding: 14px 20px 12px; cursor: pointer; transition: color .15s, border-color .15s; }
+.tab-btn:hover { color: var(--ink2); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Tab panels ── */
+.tab-panel { display: none; padding: 40px; max-width: 1100px; }
+.tab-panel.active { display: block; }
+
+/* ── Typography ── */
+h2 { font-family: 'Instrument Serif', serif; font-size: 28px; font-weight: 400; letter-spacing: -0.02em; margin-bottom: 6px; }
+h3 { font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); margin: 32px 0 12px; }
+h4 { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+p { color: var(--ink2); font-size: 13px; margin-bottom: 12px; line-height: 1.7; }
+.lead { font-size: 16px; color: var(--ink); line-height: 1.65; max-width: 680px; margin-bottom: 32px; font-family: 'DM Sans', sans-serif; font-weight: 300; }
+
+/* ── Cards ── */
+.card { background: var(--paper2); border: 1px solid var(--rule); border-radius: 4px; padding: 20px 24px; margin-bottom: 12px; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-bottom: 24px; }
+
+/* ── Fact table ── */
+.fact-table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
+.fact-table td { padding: 9px 12px; border-bottom: 1px solid var(--rule2); font-size: 13px; vertical-align: top; }
+.fact-table td:first-child { font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; color: var(--ink3); letter-spacing: 0.05em; width: 180px; white-space: nowrap; }
+.fact-table td:last-child { color: var(--ink2); }
+
+/* ── Tag pills ── */
+.tag { display: inline-block; font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; padding: 2px 8px; border-radius: 2px; margin: 2px 3px 2px 0; letter-spacing: 0.04em; }
+.tag-blue { background: var(--blue2); color: var(--blue); }
+.tag-teal { background: var(--teal2); color: var(--teal); }
+.tag-amber { background: var(--amber2); color: var(--amber); }
+.tag-purple { background: var(--purple2); color: var(--purple); }
+.tag-green { background: var(--green2); color: var(--green); }
+.tag-red { background: #f8ddd8; color: var(--accent); }
+
+/* ── SVG diagrams ── */
+.diagram-wrap { background: var(--paper2); border: 1px solid var(--rule); border-radius: 4px; padding: 24px; margin: 16px 0 28px; overflow-x: auto; }
+.diagram-wrap svg { display: block; max-width: 100%; }
+
+/* ── Phase strip ── */
+.phase-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin: 16px 0 28px; }
+.phase-block { padding: 10px 8px; border-radius: 3px; text-align: center; }
+.phase-num { font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; margin-bottom: 4px; }
+.phase-name { font-size: 11px; font-weight: 500; margin-bottom: 3px; }
+.phase-sub { font-family: 'DM Mono', monospace; font-size: 9px; opacity: 0.7; }
+.phase-hitl { font-size: 9px; margin-top: 4px; }
+
+/* ── Decision cards ── */
+.decision-card { border-left: 3px solid var(--accent); padding: 16px 20px; margin-bottom: 12px; background: var(--paper2); border-radius: 0 4px 4px 0; }
+.decision-id { font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; color: var(--accent); letter-spacing: 0.08em; margin-bottom: 4px; }
+.decision-statement { font-size: 14px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
+.decision-rationale { font-size: 12px; color: var(--ink2); line-height: 1.65; }
+
+/* ── Journey flow ── */
+.journey-section { margin-bottom: 48px; }
+
+/* ── Mono blocks ── */
+.mono { font-family: 'DM Mono', monospace; font-size: 11px; background: var(--paper3); border: 1px solid var(--rule); border-radius: 3px; padding: 14px 16px; color: var(--ink2); line-height: 1.7; overflow-x: auto; margin-bottom: 16px; }
+.mono .c { color: var(--accent); }
+.mono .k { color: var(--blue); }
+.mono .s { color: var(--teal); }
+.mono .g { color: var(--ink3); }
+</style>
+</head>
+<body>
+
+<div class="site-header">
+  <div class="site-title">cv-<span>tailor</span></div>
+  <div class="site-meta">Architecture Reference · Complete · Deployed on M720q</div>
+</div>
+
+<div class="tab-nav">
+  <button class="tab-btn active" onclick="show('overview',this)">Overview</button>
+  <button class="tab-btn" onclick="show('technical',this)">Technical</button>
+  <button class="tab-btn" onclick="show('functional',this)">Functional</button>
+  <button class="tab-btn" onclick="show('journeys',this)">User Journeys</button>
+  <button class="tab-btn" onclick="show('principles',this)">Design Principles</button>
+</div>
+
+<!-- ═══════════════════════ OVERVIEW ═══════════════════════ -->
+<div id="overview" class="tab-panel active">
+  <h2>What is cv-tailor?</h2>
+  <p class="lead">A multi-agent decision-support system that automates the multi-model CV tailoring workflow. Takes a job description and a corpus of CV versions. Produces a tailored CV with a full audit trail.</p>
+
+  <h3>System boundary</h3>
+  <div class="diagram-wrap">
+    <svg width="100%" viewBox="0 0 820 300" role="img">
+      <title>cv-tailor system boundary diagram</title>
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+      <!-- System boundary -->
+      <rect x="180" y="20" width="480" height="260" rx="4" fill="none" stroke="#c84b2f" stroke-width="1" stroke-dasharray="6 3"/>
+      <text font-family="'DM Mono', monospace" font-size="10" font-weight="500" fill="#c84b2f" x="192" y="14" letter-spacing="0.06em">SYSTEM BOUNDARY</text>
+
+      <!-- External: Human -->
+      <rect x="20" y="100" width="90" height="48" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Sans', sans-serif" font-size="12" font-weight="500" fill="var(--ink)" x="65" y="121" text-anchor="middle">Human</text>
+      <text font-family="'DM Mono', monospace" font-size="10" fill="var(--ink3)" x="65" y="137" text-anchor="middle">recruiter / owner</text>
+
+      <!-- External: AI providers -->
+      <rect x="690" y="40" width="110" height="40" rx="3" fill="var(--amber2)" stroke="var(--amber)" stroke-width="0.5"/>
+      <text font-family="'DM Sans', sans-serif" font-size="11" font-weight="500" fill="var(--amber)" x="745" y="57" text-anchor="middle">Mistral AI</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="745" y="71" text-anchor="middle">small · embed</text>
+
+      <rect x="690" y="94" width="110" height="40" rx="3" fill="var(--purple2)" stroke="var(--purple)" stroke-width="0.5"/>
+      <text font-family="'DM Sans', sans-serif" font-size="11" font-weight="500" fill="var(--purple)" x="745" y="111" text-anchor="middle">Anthropic</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="745" y="125" text-anchor="middle">Sonnet · Haiku</text>
+
+      <rect x="690" y="148" width="110" height="40" rx="3" fill="var(--green2)" stroke="var(--green)" stroke-width="0.5"/>
+      <text font-family="'DM Sans', sans-serif" font-size="11" font-weight="500" fill="var(--green)" x="745" y="165" text-anchor="middle">OpenAI</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--green)" x="745" y="179" text-anchor="middle">gpt-4o-mini</text>
+
+      <!-- Internal: Web UI -->
+      <rect x="196" y="40" width="130" height="60" rx="3" fill="var(--blue2)" stroke="var(--blue)" stroke-width="0.5"/>
+      <text font-family="'DM Sans', sans-serif" font-size="11" font-weight="500" fill="var(--blue)" x="261" y="63" text-anchor="middle">Web UI</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="261" y="77" text-anchor="middle">React · FastAPI</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="261" y="89" text-anchor="middle">SSE · HITL</text>
+
+      <!-- Internal: CLI -->
+      <rect x="196" y="120" width="130" height="44" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Sans', sans-serif" font-size="11" font-weight="500" fill="var(--ink)" x="261" y="140" text-anchor="middle">CLI</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="261" y="154" text-anchor="middle">python -m tailor</text>
+
+      <!-- Internal: tailor package -->
+      <rect x="380" y="40" width="160" height="140" rx="3" fill="var(--teal2)" stroke="var(--teal)" stroke-width="0.75"/>
+      <text font-family="'DM Sans', sans-serif" font-size="12" font-weight="500" fill="var(--teal)" x="460" y="66" text-anchor="middle">tailor package</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="84" text-anchor="middle">phases 0–6</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="98" text-anchor="middle">dual-writer loop</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="112" text-anchor="middle">call_with_retry()</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="126" text-anchor="middle">audit trail</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="140" text-anchor="middle">security gates</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="154" text-anchor="middle">corpus + ingest</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="168" text-anchor="middle">ChromaDB</text>
+
+      <!-- Internal: Filesystem -->
+      <rect x="196" y="200" width="344" height="60" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Sans', sans-serif" font-size="11" font-weight="500" fill="var(--ink)" x="368" y="224" text-anchor="middle">Filesystem (bind-mounted · host persists)</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="368" y="242" text-anchor="middle">data/cvs/  ·  data/chroma/  ·  outputs/  ·  candidate/  ·  budgets.yaml</text>
+
+      <!-- Arrows -->
+      <line x1="110" y1="124" x2="194" y2="80" stroke="var(--ink3)" stroke-width="1" marker-end="url(#arr)"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="120" y="95">browser</text>
+      <line x1="110" y1="124" x2="194" y2="140" stroke="var(--ink3)" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="120" y="142">CLI</text>
+      <line x1="326" y1="90" x2="378" y2="100" stroke="var(--blue)" stroke-width="1" marker-end="url(#arr)"/>
+      <line x1="326" y1="142" x2="378" y2="130" stroke="var(--ink3)" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr)"/>
+      <line x1="540" y1="100" x2="688" y2="64" stroke="var(--amber)" stroke-width="1" marker-end="url(#arr)"/>
+      <line x1="540" y1="114" x2="688" y2="114" stroke="var(--purple)" stroke-width="1" marker-end="url(#arr)"/>
+      <line x1="540" y1="128" x2="688" y2="168" stroke="var(--green)" stroke-width="1" marker-end="url(#arr)"/>
+      <line x1="460" y1="180" x2="460" y2="198" stroke="var(--teal)" stroke-width="1" stroke-dasharray="3 2" marker-end="url(#arr)"/>
+    </svg>
+  </div>
+
+  <h3>Key facts</h3>
+  <table class="fact-table">
+    <tr><td>What it is</td><td>Multi-agent decision-support system for CV tailoring</td></tr>
+    <tr><td>What it is not</td><td>A wrapper around a chat API. Not a single-model prompt.</td></tr>
+    <tr><td>Problem solved</td><td>Manual multi-model CV workflow: 45–90 min, no audit trail → 2–4 min, full decision record</td></tr>
+    <tr><td>AI providers</td><td>Mistral (analysis + embeddings) · Anthropic Sonnet (orchestrator + primary writer) · GPT-4o-mini (challenger writer) · Anthropic Haiku (validation + HITL)</td></tr>
+    <tr><td>Deployment</td><td>M720q home server · Docker Compose · FastAPI :8000 · React :3000</td></tr>
+    <tr><td>Cost per full run</td><td>~$0.79 (F-28 validated, Airwallex JD, 8 sections, converged iter 2)</td></tr>
+    <tr><td>Test suite</td><td>191 tests · zero API calls · full E2E mocked pipeline</td></tr>
+    <tr><td>Security model</td><td>Not full auth — a spend guard. Capability cookie, fail closed, one unlock = full mode + corpus writes</td></tr>
+    <tr><td>Output</td><td>cv_final.md (clean) · cv_final.html (6 tabs + sticky summary card) · run_log.jsonl (audit)</td></tr>
+  </table>
+
+  <h3>Three modes of operation</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="tag tag-teal">one-time setup</div>
+      <h4 style="margin-top:8px">Corpus ingestion</h4>
+      <p>Ingest .docx CV files into ChromaDB at section granularity. Derives word budgets. CLI or web UI.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-amber">demo mode</div>
+      <div class="tag tag-red">full mode</div>
+      <h4 style="margin-top:8px">Tailoring run</h4>
+      <p>JD → fit assessment → initial draft → dual-writer refinement → human review → formatted output.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-purple">portfolio</div>
+      <h4 style="margin-top:8px">Run archive</h4>
+      <p>Owner sees all runs. Public sees only <code>public_demo</code> runs. Mutable visibility flags per run.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ TECHNICAL ═══════════════════════ -->
+<div id="technical" class="tab-panel">
+  <h2>Technical architecture</h2>
+  <p class="lead">Component map showing Docker boundary, services, data stores, volume mounts, and external API calls.</p>
+
+  <h3>Component diagram</h3>
+  <div class="diagram-wrap">
+    <svg width="100%" viewBox="0 0 820 420" role="img">
+      <title>cv-tailor technical component diagram</title>
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+
+      <!-- Docker boundary -->
+      <rect x="140" y="20" width="540" height="320" rx="4" fill="none" stroke="var(--teal)" stroke-width="1" stroke-dasharray="6 3"/>
+      <text font-family="'DM Mono', monospace" font-size="10" font-weight="500" fill="var(--teal)" x="152" y="14" letter-spacing="0.06em">DOCKER COMPOSE — M720q</text>
+
+      <!-- frontend service -->
+      <rect x="156" y="36" width="148" height="80" rx="3" fill="var(--blue2)" stroke="var(--blue)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--blue)" x="230" y="54" text-anchor="middle">frontend · :3000</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="230" y="68" text-anchor="middle">React + Vite + shadcn</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="230" y="82" text-anchor="middle">nginx-alpine (prod)</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="230" y="96" text-anchor="middle">Vite dev server (dev)</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="230" y="110" text-anchor="middle">restart: unless-stopped</text>
+
+      <!-- backend service -->
+      <rect x="326" y="36" width="160" height="96" rx="3" fill="var(--teal2)" stroke="var(--teal)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--teal)" x="406" y="54" text-anchor="middle">backend · :8000</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="406" y="68" text-anchor="middle">FastAPI + uvicorn</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="406" y="82" text-anchor="middle">SSE · HITL router</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="406" y="96" text-anchor="middle">asyncio.to_thread</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="406" y="110" text-anchor="middle">security gates</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="406" y="124" text-anchor="middle">capability cookie</text>
+
+      <!-- tailor package -->
+      <rect x="508" y="36" width="158" height="96" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="587" y="54" text-anchor="middle">tailor package</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="587" y="68" text-anchor="middle">phases 0–6</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="587" y="82" text-anchor="middle">claude_writer.py</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="587" y="96" text-anchor="middle">gpt_writer.py</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="587" y="110" text-anchor="middle">orchestrator_tool.py</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="587" y="124" text-anchor="middle">scorer · rubric · audit</text>
+
+      <!-- ChromaDB -->
+      <rect x="156" y="160" width="148" height="56" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="230" y="179" text-anchor="middle">ChromaDB</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="230" y="193" text-anchor="middle">embedded PersistentClient</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="230" y="207" text-anchor="middle">cv_corpus · cosine</text>
+
+      <!-- corpus package -->
+      <rect x="326" y="160" width="160" height="56" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="406" y="179" text-anchor="middle">corpus package</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="406" y="193" text-anchor="middle">ingest · retrieval</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink2)" x="406" y="207" text-anchor="middle">metadata · budgets</text>
+
+      <!-- Bind mounts -->
+      <rect x="156" y="256" width="510" height="68" rx="3" fill="var(--amber2)" stroke="var(--amber)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--amber)" x="411" y="276" text-anchor="middle">Host filesystem — bind-mounted volumes (back these up)</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="411" y="292" text-anchor="middle">data/chroma/  ·  data/cvs/  ·  outputs/  ·  candidate/  ·  budgets.yaml  ·  .env</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="411" y="308" text-anchor="middle">tmp/  (session state · TTL · not backed up)</text>
+
+      <!-- External providers -->
+      <rect x="700" y="36" width="108" height="40" rx="3" fill="var(--amber2)" stroke="var(--amber)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--amber)" x="754" y="54" text-anchor="middle">Mistral AI</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="754" y="68" text-anchor="middle">small · embed</text>
+
+      <rect x="700" y="90" width="108" height="40" rx="3" fill="var(--purple2)" stroke="var(--purple)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--purple)" x="754" y="108" text-anchor="middle">Anthropic</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="754" y="122" text-anchor="middle">Sonnet · Haiku</text>
+
+      <rect x="700" y="144" width="108" height="40" rx="3" fill="var(--green2)" stroke="var(--green)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--green)" x="754" y="162" text-anchor="middle">OpenAI</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--green)" x="754" y="176" text-anchor="middle">gpt-4o-mini</text>
+
+      <!-- External: browser -->
+      <rect x="20" y="60" width="100" height="44" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="70" y="79" text-anchor="middle">Browser</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="70" y="95" text-anchor="middle">:3000 · SSE</text>
+
+      <!-- External: CLI user -->
+      <rect x="20" y="124" width="100" height="44" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="70" y="143" text-anchor="middle">CLI user</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="70" y="159" text-anchor="middle">python -m tailor</text>
+
+      <!-- Arrows -->
+      <line x1="120" y1="82" x2="154" y2="76" stroke="var(--ink3)" stroke-width="1" marker-end="url(#arr2)"/>
+      <text font-family="'DM Mono', monospace" font-size="8" fill="var(--ink3)" x="122" y="72">/api/*</text>
+      <line x1="304" y1="80" x2="324" y2="80" stroke="var(--blue)" stroke-width="1" marker-end="url(#arr2)"/>
+      <text font-family="'DM Mono', monospace" font-size="8" fill="var(--blue)" x="306" y="72">proxy</text>
+      <line x1="486" y1="84" x2="506" y2="84" stroke="var(--teal)" stroke-width="1" marker-end="url(#arr2)"/>
+      <text font-family="'DM Mono', monospace" font-size="8" fill="var(--teal)" x="488" y="76">import</text>
+      <line x1="120" y1="146" x2="504" y2="108" stroke="var(--ink3)" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arr2)"/>
+      <text font-family="'DM Mono', monospace" font-size="8" fill="var(--ink3)" x="240" y="118">direct import</text>
+      <line x1="666" y1="78" x2="698" y2="60" stroke="var(--amber)" stroke-width="0.75" marker-end="url(#arr2)"/>
+      <line x1="666" y1="90" x2="698" y2="110" stroke="var(--purple)" stroke-width="0.75" marker-end="url(#arr2)"/>
+      <line x1="666" y1="102" x2="698" y2="160" stroke="var(--green)" stroke-width="0.75" marker-end="url(#arr2)"/>
+      <line x1="406" y1="216" x2="406" y2="254" stroke="var(--ink3)" stroke-width="0.75" stroke-dasharray="3 2" marker-end="url(#arr2)"/>
+      <line x1="230" y1="216" x2="230" y2="254" stroke="var(--ink3)" stroke-width="0.75" stroke-dasharray="3 2" marker-end="url(#arr2)"/>
+      <line x1="406" y1="160" x2="304" y2="188" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr2)"/>
+    </svg>
+  </div>
+
+  <h3>Model routing</h3>
+  <table class="fact-table">
+    <tr><td>mistral-small</td><td>Phase 0 JD analysis — keyword extraction, structured output. Cheap per call. Week 1 integration reuse.</td></tr>
+    <tr><td>mistral-embed</td><td>Corpus ingestion + Phase 1 retrieval. Vectors stay in same embedding space as query.</td></tr>
+    <tr><td>claude-sonnet-4-6</td><td>Orchestrator + primary writer (Phase 2 drafting, Phase 3 writer role, Phase 3 orchestrator adjudication, Phase 4 HITL free-text execution).</td></tr>
+    <tr><td>gpt-4o-mini</td><td>Challenger writer (Phase 3 writer role). Empirically harsher drafts, different training prior. Never picks its own verbatim output in Sonnet mode — orchestrator always selects or synthesises.</td></tr>
+    <tr><td>claude-haiku-4-5</td><td>Phase 5 formatting + grounding. Phase 1/4 HITL interpretation. Demo mode orchestrator (~20× cheaper than Sonnet, adequate for single-iteration dev pass).</td></tr>
+  </table>
+
+  <h3>Key implementation constraints</h3>
+  <div class="card-grid">
+    <div class="card"><h4>Import not subprocess</h4><p>FastAPI imports tailor functions directly. No shell overhead, shared in-process state, debuggable stack traces. (RFI learning)</p></div>
+    <div class="card"><h4>call_with_retry() everywhere</h4><p>Wraps every API call from all three providers. Rate limits absorbed invisibly. Load-bearing from run 1, not polish.</p></div>
+    <div class="card"><h4>asyncio.to_thread</h4><p>All pipeline calls off the FastAPI event loop. Blocking I/O (ChromaDB, file writes, API calls) never stalls SSE delivery.</p></div>
+    <div class="card"><h4>Filesystem-backed sessions</h4><p>Per-run state in tmp/{run_id}/. TTL cleanup. Stateless containers — all persistence on bind-mounted host volumes.</p></div>
+    <div class="card"><h4>ChromaDB cosine · immutable</h4><p>Distance metric set at collection creation, cannot change. Metric mismatch gives wrong rankings silently. Verified on create.</p></div>
+    <div class="card"><h4>nginx proxy_buffering off</h4><p>Required for SSE streams to reach the browser without buffering delay. nginx default would break the live progress feed.</p></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ FUNCTIONAL ═══════════════════════ -->
+<div id="functional" class="tab-panel">
+  <h2>How it works</h2>
+  <p class="lead">Seven deterministic phases wrap a single agentic loop. The phases always run in order. Only Phase 3 is genuinely uncertain — iterations, selections, and stopping time are determined at runtime.</p>
+
+  <h3>Pipeline phases</h3>
+  <div class="phase-strip">
+    <div class="phase-block" style="background:var(--amber2);border:1px solid var(--amber)">
+      <div class="phase-num" style="color:var(--amber)">0</div>
+      <div class="phase-name" style="color:var(--amber)">JD Analysis</div>
+      <div class="phase-sub" style="color:var(--amber)">Mistral</div>
+      <div class="phase-sub" style="color:var(--amber)">~0.4s</div>
+    </div>
+    <div class="phase-block" style="background:var(--teal2);border:1px solid var(--teal)">
+      <div class="phase-num" style="color:var(--teal)">1</div>
+      <div class="phase-name" style="color:var(--teal)">Fit Assessment</div>
+      <div class="phase-sub" style="color:var(--teal)">RAG + Sonnet</div>
+      <div class="phase-hitl" style="color:var(--accent)">⏸ HITL #1</div>
+    </div>
+    <div class="phase-block" style="background:var(--blue2);border:1px solid var(--blue)">
+      <div class="phase-num" style="color:var(--blue)">2</div>
+      <div class="phase-name" style="color:var(--blue)">Initial Draft</div>
+      <div class="phase-sub" style="color:var(--blue)">Sonnet</div>
+      <div class="phase-sub" style="color:var(--blue)">~8s</div>
+    </div>
+    <div class="phase-block" style="background:var(--purple2);border:2px solid var(--purple)">
+      <div class="phase-num" style="color:var(--purple)">3</div>
+      <div class="phase-name" style="color:var(--purple)">Refinement</div>
+      <div class="phase-sub" style="color:var(--purple)">agentic loop</div>
+      <div class="phase-sub" style="color:var(--purple)">~60–90s</div>
+    </div>
+    <div class="phase-block" style="background:var(--teal2);border:1px solid var(--teal)">
+      <div class="phase-num" style="color:var(--teal)">4</div>
+      <div class="phase-name" style="color:var(--teal)">Human Review</div>
+      <div class="phase-sub" style="color:var(--teal)">display + HITL</div>
+      <div class="phase-hitl" style="color:var(--accent)">⏸ HITL #2</div>
+    </div>
+    <div class="phase-block" style="background:var(--amber2);border:1px solid var(--amber)">
+      <div class="phase-num" style="color:var(--amber)">5</div>
+      <div class="phase-name" style="color:var(--amber)">Haiku Valid.</div>
+      <div class="phase-sub" style="color:var(--amber)">format · ground</div>
+      <div class="phase-hitl" style="color:var(--accent)">⏸ HITL #3</div>
+    </div>
+    <div class="phase-block" style="background:var(--paper3);border:1px solid var(--rule)">
+      <div class="phase-num" style="color:var(--ink3)">6</div>
+      <div class="phase-name" style="color:var(--ink)">Output Gen.</div>
+      <div class="phase-sub" style="color:var(--ink3)">assemble</div>
+      <div class="phase-sub" style="color:var(--ink3)">html + md</div>
+    </div>
+  </div>
+
+  <h3>Dual-writer refinement loop (Phase 3 detail)</h3>
+  <div class="diagram-wrap">
+    <svg width="100%" viewBox="0 0 820 360" role="img">
+      <title>Dual-writer refinement loop flowchart</title>
+      <defs>
+        <marker id="arr3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+
+      <!-- Inputs -->
+      <rect x="20" y="80" width="120" height="56" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="80" y="101" text-anchor="middle">LoopMemory</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="80" y="115" text-anchor="middle">rejected suggestions</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="80" y="129" text-anchor="middle">directions · scores</text>
+
+      <rect x="20" y="158" width="120" height="44" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="80" y="177" text-anchor="middle">CVCM (optional)</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="80" y="193" text-anchor="middle">value model</text>
+
+      <!-- Dual write -->
+      <rect x="180" y="60" width="140" height="72" rx="3" fill="var(--purple2)" stroke="var(--purple)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--purple)" x="250" y="82" text-anchor="middle">Claude Sonnet</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="250" y="96" text-anchor="middle">writer role</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="250" y="110" text-anchor="middle">draft + items[]</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="250" y="124" text-anchor="middle">pushback</text>
+
+      <rect x="180" y="152" width="140" height="72" rx="3" fill="var(--green2)" stroke="var(--green)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--green)" x="250" y="174" text-anchor="middle">GPT-4o-mini</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--green)" x="250" y="188" text-anchor="middle">writer role</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--green)" x="250" y="202" text-anchor="middle">draft + items[]</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--green)" x="250" y="216" text-anchor="middle">pushback</text>
+
+      <!-- Orchestrator -->
+      <rect x="380" y="80" width="160" height="124" rx="3" fill="var(--teal2)" stroke="var(--teal)" stroke-width="1"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--teal)" x="460" y="102" text-anchor="middle">Orchestrator</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="118" text-anchor="middle">Claude Sonnet</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="134" text-anchor="middle">adjudicates both drafts</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="150" text-anchor="middle">claude_quality / gpt_quality</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="166" text-anchor="middle">select · synthesise</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="460" y="182" text-anchor="middle">direction + converged</text>
+
+      <!-- CVCM tiebreak note -->
+      <text font-family="'DM Mono', monospace" font-size="8" fill="var(--ink3)" x="380" y="220">if |Δquality| &lt; 1.0 → CVCM tiebreak</text>
+
+      <!-- Disk write -->
+      <rect x="600" y="100" width="120" height="52" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="660" y="122" text-anchor="middle">disk write</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="660" y="138" text-anchor="middle">section_id_vN.md</text>
+
+      <!-- Convergence -->
+      <rect x="380" y="268" width="160" height="72" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink)" x="460" y="290" text-anchor="middle">convergence check</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="460" y="306" text-anchor="middle">kw_delta &lt; 0.05</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="460" y="320" text-anchor="middle">q_delta &lt; 0.5</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="460" y="334" text-anchor="middle">zero major items</text>
+
+      <!-- Arrows -->
+      <line x1="140" y1="108" x2="178" y2="100" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr3)"/>
+      <line x1="140" y1="180" x2="178" y2="180" stroke="var(--ink3)" stroke-width="0.75" stroke-dasharray="3 2" marker-end="url(#arr3)"/>
+      <line x1="320" y1="96" x2="378" y2="120" stroke="var(--purple)" stroke-width="1" marker-end="url(#arr3)"/>
+      <line x1="320" y1="188" x2="378" y2="164" stroke="var(--green)" stroke-width="1" marker-end="url(#arr3)"/>
+      <line x1="540" y1="138" x2="598" y2="130" stroke="var(--teal)" stroke-width="1" marker-end="url(#arr3)"/>
+      <line x1="460" y1="204" x2="460" y2="266" stroke="var(--teal)" stroke-width="0.75" marker-end="url(#arr3)"/>
+      <!-- Pushback loop -->
+      <path d="M460 204 L460 248 L180 248 L180 230" fill="none" stroke="var(--purple)" stroke-width="0.75" stroke-dasharray="4 3" marker-end="url(#arr3)"/>
+      <text font-family="'DM Mono', monospace" font-size="8" fill="var(--purple)" x="260" y="244">direction / pushback (1 exchange)</text>
+      <!-- Iterate back -->
+      <path d="M540 304 L780 304 L780 44 L175 44 L175 96" fill="none" stroke="var(--ink3)" stroke-width="0.75" stroke-dasharray="5 3" marker-end="url(#arr3)"/>
+      <text font-family="'DM Mono', monospace" font-size="8" fill="var(--ink3)" x="600" y="298">iterate or freeze + exit</text>
+    </svg>
+  </div>
+
+  <h3>Convergence and termination</h3>
+  <div class="mono">
+    <span class="g"># F-16 validated on real data. F-28 Sonnet run: converged at iter 2 (not iter cap)</span>
+    keyword_delta &lt; 0.05 AND quality_delta &lt; 0.5  →  <span class="s">convergence</span>
+    iteration == max_iterations                       →  <span class="c">hard stop</span>
+    zero major items (both writers, last iteration)   →  <span class="s">soft-stop permitted</span>
+
+    <span class="g"># F-28: freeze path contributed zero (Sonnet never marked converged=True)</span>
+    <span class="g"># The aggregate-plateau path was the safety net. Dual-signal is load-bearing.</span>
+  </div>
+
+  <h3>Section granularity — why sections, not CVs</h3>
+  <div class="card-grid">
+    <div class="card"><h4>Different convergence rates</h4><p>Profile may converge after iteration 1. Experience at Microsoft may need three passes. Treating them as one unit wastes iterations on sections that are already done.</p></div>
+    <div class="card"><h4>Cross-CV composition</h4><p>Phase 1 picks the best source section per section_type across all CVs. The AI-focused CV's Skills section may be best even when the generic CV is the overall fit.</p></div>
+    <div class="card"><h4>Intermediate version recovery</h4><p>Every section version is written to disk. Phase 4 can surface that profile_v2 was sharper than profile_v3. Not possible with monolithic CV drafts.</p></div>
+    <div class="card"><h4>Cost efficiency</h4><p>Frozen sections are excluded from subsequent dual-write calls. By iteration 2–3 most sections are frozen. Later iterations are cheap regardless of max_iterations.</p></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ USER JOURNEYS ═══════════════════════ -->
+<div id="journeys" class="tab-panel">
+  <h2>User journeys</h2>
+  <p class="lead">Three primary flows through the system. Each shows timing, decision points, HITL interactions, and what the system produces at each stage.</p>
+
+  <h3>Journey 1 — Tailoring run (full flow)</h3>
+  <div class="diagram-wrap">
+    <svg width="100%" viewBox="0 0 820 320" role="img">
+      <title>cv-tailor tailoring run user journey</title>
+      <defs>
+        <marker id="arr4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+
+      <!-- Swim lanes -->
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink3)" x="12" y="50" transform="rotate(-90,12,50)">USER</text>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink3)" x="12" y="180" transform="rotate(-90,12,180)">SYSTEM</text>
+      <line x1="24" y1="100" x2="810" y2="100" stroke="var(--rule)" stroke-width="0.5" stroke-dasharray="4 3"/>
+      <line x1="24" y1="220" x2="810" y2="220" stroke="var(--rule)" stroke-width="0.5" stroke-dasharray="4 3"/>
+
+      <!-- Step 1: Paste JD -->
+      <rect x="30" y="60" width="90" height="36" rx="3" fill="var(--blue2)" stroke="var(--blue)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--blue)" x="75" y="76" text-anchor="middle">Paste JD</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="75" y="90" text-anchor="middle">[Start]</text>
+
+      <line x1="120" y1="78" x2="138" y2="78" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr4)"/>
+
+      <!-- Phase 0+1 system -->
+      <rect x="140" y="128" width="100" height="44" rx="3" fill="var(--amber2)" stroke="var(--amber)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--amber)" x="190" y="148" text-anchor="middle">Ph 0+1</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="190" y="162" text-anchor="middle">JD + Fit</text>
+
+      <path d="M190 128 L190 96" fill="none" stroke="var(--amber)" stroke-width="0.75" stroke-dasharray="3 2" marker-end="url(#arr4)"/>
+      <rect x="140" y="60" width="100" height="36" rx="3" fill="var(--amber2)" stroke="var(--amber)" stroke-width="0.5" stroke-dasharray="4 2"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="190" y="76" text-anchor="middle">SSE progress</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="190" y="90" text-anchor="middle">phases stream</text>
+
+      <!-- HITL 1 -->
+      <rect x="264" y="128" width="90" height="44" rx="3" fill="var(--accent2)" stroke="var(--accent)" stroke-width="1"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--accent)" x="309" y="148" text-anchor="middle">⏸ HITL #1</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--accent)" x="309" y="162" text-anchor="middle">fit assessment</text>
+
+      <path d="M309 128 L309 96" fill="none" stroke="var(--accent)" stroke-width="0.75" marker-end="url(#arr4)"/>
+      <rect x="264" y="60" width="90" height="36" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink)" x="309" y="76" text-anchor="middle">Review fit</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="309" y="90" text-anchor="middle">free text reply</text>
+
+      <!-- no_fit branch -->
+      <path d="M309 172 L309 250" fill="none" stroke="var(--accent)" stroke-width="0.75" stroke-dasharray="4 2"/>
+      <rect x="264" y="252" width="90" height="36" rx="3" fill="var(--paper3)" stroke="var(--accent)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--accent)" x="309" y="268" text-anchor="middle">⛔ no_fit</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--accent)" x="309" y="282" text-anchor="middle">pipeline stops</text>
+
+      <!-- Ph 2+3 -->
+      <line x1="354" y1="150" x2="372" y2="150" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr4)"/>
+      <rect x="374" y="128" width="100" height="44" rx="3" fill="var(--purple2)" stroke="var(--purple)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--purple)" x="424" y="148" text-anchor="middle">Ph 2+3</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="424" y="162" text-anchor="middle">draft · refine</text>
+
+      <path d="M424 128 L424 96" fill="none" stroke="var(--purple)" stroke-width="0.75" stroke-dasharray="3 2" marker-end="url(#arr4)"/>
+      <rect x="374" y="60" width="100" height="36" rx="3" fill="var(--purple2)" stroke="var(--purple)" stroke-width="0.5" stroke-dasharray="4 2"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="424" y="76" text-anchor="middle">live iterations</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--purple)" x="424" y="90" text-anchor="middle">section status</text>
+
+      <!-- HITL 2 -->
+      <line x1="474" y1="150" x2="492" y2="150" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr4)"/>
+      <rect x="494" y="128" width="90" height="44" rx="3" fill="var(--accent2)" stroke="var(--accent)" stroke-width="1"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--accent)" x="539" y="148" text-anchor="middle">⏸ HITL #2</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--accent)" x="539" y="162" text-anchor="middle">section review</text>
+
+      <path d="M539 128 L539 96" fill="none" stroke="var(--accent)" stroke-width="0.75" marker-end="url(#arr4)"/>
+      <rect x="494" y="60" width="90" height="36" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink)" x="539" y="76" text-anchor="middle">[a–d] or [e]</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="539" y="90" text-anchor="middle">free text</text>
+
+      <!-- Ph 5 -->
+      <line x1="584" y1="150" x2="602" y2="150" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr4)"/>
+      <rect x="604" y="128" width="90" height="44" rx="3" fill="var(--amber2)" stroke="var(--amber)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--amber)" x="649" y="148" text-anchor="middle">⏸ HITL #3</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="649" y="162" text-anchor="middle">format · approve</text>
+
+      <path d="M649 128 L649 96" fill="none" stroke="var(--amber)" stroke-width="0.75" marker-end="url(#arr4)"/>
+      <rect x="604" y="60" width="90" height="36" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink)" x="649" y="76" text-anchor="middle">Approve / Reject</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="649" y="90" text-anchor="middle">binary only</text>
+
+      <!-- Download -->
+      <line x1="694" y1="78" x2="712" y2="78" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr4)"/>
+      <rect x="714" y="60" width="90" height="36" rx="3" fill="var(--teal2)" stroke="var(--teal)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--teal)" x="759" y="76" text-anchor="middle">Download</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="759" y="90" text-anchor="middle">cv_final.md</text>
+    </svg>
+  </div>
+
+  <h3>Journey 2 — Corpus management</h3>
+  <div class="diagram-wrap">
+    <svg width="100%" viewBox="0 0 820 200" role="img">
+      <title>Corpus management journey — add, edit, replace, delete</title>
+      <defs>
+        <marker id="arr5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+
+      <!-- Add CV -->
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink3)" x="20" y="36">ADD CV</text>
+      <rect x="20" y="42" width="80" height="36" rx="3" fill="var(--blue2)" stroke="var(--blue)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="60" y="58" text-anchor="middle">Upload</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="60" y="71" text-anchor="middle">.docx</text>
+      <line x1="100" y1="60" x2="116" y2="60" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr5)"/>
+      <rect x="118" y="42" width="100" height="36" rx="3" fill="var(--blue2)" stroke="var(--blue)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="168" y="58" text-anchor="middle">YAML form</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="168" y="71" text-anchor="middle">role · skills · date</text>
+      <line x1="218" y1="60" x2="234" y2="60" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr5)"/>
+      <rect x="236" y="42" width="110" height="36" rx="3" fill="var(--amber2)" stroke="var(--amber)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="291" y="58" text-anchor="middle">Ingest preview</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--amber)" x="291" y="71" text-anchor="middle">section inventory</text>
+      <line x1="346" y1="60" x2="362" y2="60" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr5)"/>
+      <rect x="364" y="42" width="90" height="36" rx="3" fill="var(--accent2)" stroke="var(--accent)" stroke-width="1"/>
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--accent)" x="409" y="58" text-anchor="middle">⏸ Confirm</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--accent)" x="409" y="71" text-anchor="middle">R-01 gate</text>
+      <line x1="454" y1="60" x2="470" y2="60" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr5)"/>
+      <rect x="472" y="42" width="110" height="36" rx="3" fill="var(--teal2)" stroke="var(--teal)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="527" y="58" text-anchor="middle">ChromaDB write</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="527" y="71" text-anchor="middle">+ .yaml sidecar</text>
+      <line x1="582" y1="60" x2="598" y2="60" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr5)"/>
+      <rect x="600" y="42" width="100" height="36" rx="3" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink)" x="650" y="58" text-anchor="middle">budgets.yaml</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="650" y="71" text-anchor="middle">re-derived</text>
+
+      <!-- Edit metadata -->
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink3)" x="20" y="108">EDIT META</text>
+      <rect x="20" y="114" width="120" height="36" rx="3" fill="var(--blue2)" stroke="var(--blue)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="80" y="130" text-anchor="middle">YAML form</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--blue)" x="80" y="143" text-anchor="middle">pre-filled</text>
+      <line x1="140" y1="132" x2="156" y2="132" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr5)"/>
+      <rect x="158" y="114" width="130" height="36" rx="3" fill="var(--teal2)" stroke="var(--teal)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="223" y="130" text-anchor="middle">PATCH .yaml only</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--teal)" x="223" y="143" text-anchor="middle">no ChromaDB write</text>
+
+      <!-- Replace -->
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink3)" x="360" y="108">REPLACE .DOCX</text>
+      <rect x="360" y="114" width="120" height="36" rx="3" fill="var(--accent2)" stroke="var(--accent)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--accent)" x="420" y="130" text-anchor="middle">Delete existing</text>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--accent)" x="420" y="143" text-anchor="middle">ChromaDB entries</text>
+      <line x1="480" y1="132" x2="496" y2="132" stroke="var(--ink3)" stroke-width="0.75" marker-end="url(#arr5)"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="500" y="132">→ then: Add CV flow above</text>
+
+      <!-- Delete -->
+      <text font-family="'DM Mono', monospace" font-size="9" font-weight="500" fill="var(--ink3)" x="20" y="175">DELETE</text>
+      <rect x="20" y="180" width="700" height="14" rx="2" fill="var(--paper3)" stroke="var(--rule)" stroke-width="0.5"/>
+      <text font-family="'DM Mono', monospace" font-size="9" fill="var(--ink3)" x="370" y="191" text-anchor="middle">DELETE /api/corpus/{filename} → all ChromaDB entries removed immediately · requires capability cookie</text>
+    </svg>
+  </div>
+
+  <h3>Journey 3 — HITL interaction patterns</h3>
+  <div class="card-grid">
+    <div class="card" style="border-left:3px solid var(--accent)">
+      <div class="tag tag-red">HITL #1 — Fit assessment</div>
+      <h4 style="margin-top:8px">Conversational + Haiku-interpreted</h4>
+      <p>cv-tailor presents section mix table, fit %, gaps. Human replies in free text ("swap Skills to generic CV"). Haiku interprets → structured decision shown back before pipeline resumes. <strong>no_fit</strong> stops pipeline with explanation; human can override.</p>
+    </div>
+    <div class="card" style="border-left:3px solid var(--accent)">
+      <div class="tag tag-red">HITL #2 — Section review</div>
+      <h4 style="margin-top:8px">Lettered options + escape hatch</h4>
+      <p>Section status table (converged / active / static). Unresolved items listed. Options [a–d] for known actions; [e] for free text. Only [e] triggers Haiku interpretation. Sonnet executes if revision needed.</p>
+    </div>
+    <div class="card" style="border-left:3px solid var(--accent)">
+      <div class="tag tag-red">HITL #3 — Formatting</div>
+      <h4 style="margin-top:8px">Binary — Approve / Reject only</h4>
+      <p>Haiku shows formatting diff + grounding report (Grounded Coverage %, Unsupported Claims count). Two buttons only. No Haiku interpretation needed — binary maps directly to pipeline state.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ DESIGN PRINCIPLES ═══════════════════════ -->
+<div id="principles" class="tab-panel">
+  <h2>Design principles</h2>
+  <p class="lead">The nine load-bearing decisions. Each one has a specific reason. "It seemed like a good idea" is not in any of them.</p>
+
+  <div class="decision-card">
+    <div class="decision-id">D-01 · D-02</div>
+    <div class="decision-statement">Deterministic scaffold, bounded agentic loop. LLMs called as tools.</div>
+    <div class="decision-rationale">Phases 0–2 and 4–6 always run in order because the task is known. Phase 3 is agentic because the right number of iterations, which draft to select, and when to stop are genuinely unknown in advance. The model is not the orchestrator's concern — it receives a structured result from a tool that happens to call a model internally. This makes providers swappable without touching the orchestration loop.</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-04 · D-05</div>
+    <div class="decision-statement">Dynamic scoring rubric with a JD-validation guard. Dual-signal convergence as the termination condition.</div>
+    <div class="decision-rationale">A static rubric measures the CV against the JD as written. A dynamic rubric measures it against what the JD means. The cap (max 2 additions/iteration) and JD-validation guard exist because F-28 proved they are load-bearing: Sonnet proposed 30+ rubric additions per run; the guard rejected every one. Without it, rubric inflation would have made the keyword coverage score meaningless. Two convergence signals (keyword_delta + quality_delta) because a single signal can be gamed; the F-28 Sonnet run confirmed the aggregate plateau path works even when the per-section freeze path contributes nothing.</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-06</div>
+    <div class="decision-statement">Audit trail is separate from context. Reasoning is logged, never injected back.</div>
+    <div class="decision-rationale">Two independent concerns: context (what the model sees) and audit trail (what the human reads). Injecting accumulated reasoning verbosity back into the context inflates token cost and can distort future model behaviour. Keeping them separate means the context stays clean and the audit trail stays complete. Every orchestrator decision — accept/reject, rubric update, convergence — is logged to run_log.jsonl and readable after the run without reconstructing the conversation.</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-12 · D-13 · D-32</div>
+    <div class="decision-statement">Section granularity. Static sections. Structural facts never enter draftable text.</div>
+    <div class="decision-rationale">The unit of work is a section, not a CV, because different sections converge at different rates. Interests and education are static — present in assembly, invisible to the loop. Job titles and dates are structural facts: F-29 showed that asking the drafter to preserve them produces inconsistent results (Microsoft lost its job title). The fix was structural: split them out before drafting, store in the manifest, re-attach verbatim at assembly. The model is a judgment engine, not a transcription service.</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-17</div>
+    <div class="decision-statement">Phase 1 recommends a section-level mix across CVs, not a single base CV.</div>
+    <div class="decision-rationale">With section-granular ingestion, the best source for Profile may be a different CV than the best source for Skills. A single-CV recommendation leaves value on the table that the corpus already contains. The retrieval granularity should match the recommendation granularity. Keyword coverage — not semantic similarity — is the right signal for cross-variant selection because semantic scores barely differ across versions of the same person's section (F-11).</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-18</div>
+    <div class="decision-statement">Conversational HITL with Haiku-interpreted free text. Interpretation shown before pipeline resumes.</div>
+    <div class="decision-rationale">Human review is the strongest safety mechanism in the system. The fit assessment checkpoint is conversational because the human has nuanced knowledge the model doesn't (Microsoft is PM work, not presales). The formatting checkpoint is binary because there's nothing to discuss. Haiku interprets free-text responses into structured decisions; the interpretation is shown back to the human before the pipeline resumes — so the pipeline always receives structured input and the human always knows what the system understood.</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-28</div>
+    <div class="decision-statement">Dual-writer loop. Two independent drafters, one orchestrator, one pushback exchange.</div>
+    <div class="decision-rationale">The original design had GPT as a critic returning CritiqueItems. The actual best workflow was: draft with Claude, rewrite with GPT, arbitrate. Two writers with different training priors (Claude more diplomatic, GPT more direct) produce a richer output space than one writer with one critic. The orchestrator can synthesise — F-28 showed synthesis at 100% in iteration 1 dropping to 50% in iteration 2 as drafts converged, which is what "earned, not reflexive" synthesis looks like. Pushback is one exchange only to prevent the mechanism from becoming a token-burning negotiation.</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-33</div>
+    <div class="decision-statement">CVCM: a durable candidate artifact consumed but never generated by the system.</div>
+    <div class="decision-rationale">Shifting from keyword optimisation toward value articulation produces more compelling CVs and more fabrication pressure. Better narrative context asks the model to frame experience through value creation patterns — which creates genuine pressure to invent claims the candidate can't support. The grounding check (Grounded Coverage % + Unsupported Claims count) is the mechanism that makes the CVCM safe to use. Authenticity and grounding are in tension; both must be tracked.</div>
+  </div>
+
+  <div class="decision-card">
+    <div class="decision-id">D-38 · D-39 · D-40</div>
+    <div class="decision-statement">Not full auth — a spend guard. One capability cookie; fail closed; visibility via filtering not 403.</div>
+    <div class="decision-rationale">The threat model is: stop anyone but the owner from running expensive operations or mutating corpus state on a public portfolio deployment. Not multi-tenant access control. A passphrase-unlock issuing a signed HttpOnly cookie achieves the first goal without building accounts, roles, or sessions. One unlock authorises full mode runs and corpus writes — same threat, same guard. No FULL_MODE_KEY environment variable means demo-only, view-only corpus — fail closed by default. Run visibility uses filtering (404 on private runs, not 403) so private run IDs are not revealed to public visitors.</div>
+  </div>
+</div>
+
+<script>
+function show(id, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>
