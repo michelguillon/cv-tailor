@@ -412,6 +412,39 @@ what changed (if anything).*
 
 ---
 
+### F-50 — Empty-synthesis orchestrator decision aborted the run: corrective retry + graceful fallback
+
+**Symptom (local run, demo mode).** `orchestrator decision invalid after retry (claude-haiku-4-5):
+synthesis selected but final_text is empty` — the whole run aborted on one section.
+
+**Cause.** In `adjudicate`, Haiku sometimes picks `selected_base="synthesis"` but omits/empties
+`final_text` (the merged section it's supposed to write). `_validate` flags it; the retry re-sent
+the *identical* prompt (so the model often repeated the mistake), and a second failure raised
+`OrchestratorError`, which Phase 3 doesn't catch → the run dies. This contradicts the loop's own
+resilience principle (a single-section model hiccup must not kill the run — cf. F-39 writer
+degradation, "a transient writer failure degrades to the survivor").
+
+**Fix (two layers).** (1) **Corrective retry:** the second attempt now appends *what was wrong*
+("…you MUST put the COMPLETE merged section in final_text; otherwise select claude/gpt"), so the
+model can self-correct instead of repeating itself. (2) **Graceful fallback:** if an empty
+synthesis is the *sole* remaining problem after the retry, degrade to the higher-scoring base draft
+(claude/gpt by the orchestrator's own quality scores) and proceed, recorded honestly in
+`synthesis_notes` ("synthesis text was empty after retry; fell back to …"). Any *other* invalidity
+(bad `selected_base`, out-of-range scores, empty direction) still raises — we only recover the one
+benign, well-understood case. `keyword_coverage` is then scored on the fallback text as usual.
+
+**Why fallback, not just a louder retry.** The orchestrator already produced valid quality scores
+and a direction; the only thing missing is the merged text. Picking the draft it scored higher is a
+faithful, no-extra-spend recovery (no synthesised reword of a single source — same spirit as the
+F-39 degrade-to-survivor path). The CV still ships from a real, higher-scored draft.
+
+**Affects** `tailor/tools/orchestrator_tool.py` (`adjudicate`), `tests/test_orchestrator.py`
+(`test_empty_synthesis_falls_back_to_higher_scoring_draft`, `test_retry_recovers_synthesis_text`;
+the old `test_synthesis_without_final_text_is_invalid` is replaced — empty synthesis is now
+recoverable, not fatal). 303 green.
+
+---
+
 ### F-49 — Corpus tab 500s on the server: one ChromaDB client per process (not per call)
 
 **Symptom (homeserver).** `GET /api/corpus/stats` and `/cvs` returned 500 with a ChromaDB

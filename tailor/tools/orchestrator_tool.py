@@ -162,9 +162,15 @@ def adjudicate(
         f"Adjudicate this section.{final_note}"
     )
     data, problems = None, []
-    for _ in range(2):
+    for attempt in range(2):
+        # On the retry, tell the model exactly what was wrong — a blind re-ask repeats the same
+        # mistake (esp. Haiku selecting "synthesis" then omitting final_text).
+        content = user if attempt == 0 else (
+            user + "\n\nYOUR PREVIOUS RESPONSE WAS INVALID: " + "; ".join(problems) + ".\n"
+            "If you select \"synthesis\" you MUST put the COMPLETE merged section in final_text; "
+            "otherwise select \"claude\" or \"gpt\" and use that draft as-is.")
         resp = claude_complete(
-            model=model, system=system, messages=[{"role": "user", "content": user}],
+            model=model, system=system, messages=[{"role": "user", "content": content}],
             tools=[_DECISION_TOOL], tool_choice={"type": "tool", "name": "submit_decision"},
             max_tokens=1500, client=client,
         )
@@ -175,7 +181,21 @@ def adjudicate(
         problems = _validate(data)
         if not problems:
             break
-    if data is None or problems:
+
+    if data is None:
+        raise OrchestratorError(f"orchestrator returned no decision after retry ({model})")
+    # Graceful recovery (F-50): Haiku sometimes selects "synthesis" but leaves final_text empty.
+    # A single-section model hiccup must NOT abort the whole run (cf. F-39 writer degradation):
+    # when an empty synthesis is the SOLE problem and the rest of the decision is sound, fall back
+    # to the higher-scoring base draft and proceed, recorded honestly in synthesis_notes.
+    if problems == ["synthesis selected but final_text is empty"]:
+        fallback = "claude" if float(data["claude_quality"]) >= float(data["gpt_quality"]) else "gpt"
+        data["selected_base"] = fallback
+        data["synthesis_notes"] = (data.get("synthesis_notes") or
+                                   f"synthesis text was empty after retry; fell back to the "
+                                   f"higher-scoring draft ({fallback})")
+        problems = []
+    if problems:
         raise OrchestratorError(f"orchestrator decision invalid after retry ({model}): " + "; ".join(problems))
 
     base = data["selected_base"]

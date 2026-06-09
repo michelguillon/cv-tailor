@@ -67,11 +67,25 @@ def test_retries_then_raises_on_bad_selected_base():
                    model="m", client=fake_claude(bad, bad))
 
 
-def test_synthesis_without_final_text_is_invalid():
-    bad = decision(base="synthesis", final_text="")
-    with pytest.raises(OrchestratorError):
-        adjudicate("profile", draft("claude", "a"), draft("gpt", "b"), rubric(), jd(),
-                   model="m", client=fake_claude(bad, bad))
+def test_empty_synthesis_falls_back_to_higher_scoring_draft():
+    """F-50: Haiku selecting 'synthesis' but leaving final_text empty (even after the retry) must
+    NOT abort the run — degrade to the higher-scoring base draft and proceed, labelled honestly."""
+    bad = decision(base="synthesis", final_text="", cq=8.0, gq=6.0)
+    dec, text = adjudicate("profile", draft("claude", "alpha beta claude"), draft("gpt", "gpt"),
+                           rubric(), jd(), model="m", client=fake_claude(bad, bad))
+    assert dec.selected_base == "claude" and text == "alpha beta claude"   # higher score wins
+    assert "fell back" in (dec.synthesis_notes or "")
+    assert dec.keyword_coverage == 1.0                                     # scored on the fallback text
+
+
+def test_retry_recovers_synthesis_text():
+    """The corrective retry feeds the problem back, so a model that omits final_text once but
+    supplies it on the second attempt yields a valid synthesis (no fallback needed)."""
+    empty = decision(base="synthesis", final_text="")
+    good = decision(base="synthesis", final_text="alpha beta merged")
+    dec, text = adjudicate("profile", draft("claude", "a"), draft("gpt", "b"), rubric(), jd(),
+                           model="m", client=fake_claude(empty, good))
+    assert dec.selected_base == "synthesis" and text == "alpha beta merged"
 
 
 def test_source_text_is_passed_to_the_orchestrator_for_grounding():
