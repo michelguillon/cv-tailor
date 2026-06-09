@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import statistics
 import sys
+import threading
 from pathlib import Path
 
 import yaml
@@ -309,14 +310,40 @@ def print_inventory(parsed: list[ParsedCV]) -> bool:
 # ChromaDB                                                                    #
 # --------------------------------------------------------------------------- #
 
+_CLIENT_CACHE: dict[str, object] = {}
+_CLIENT_LOCK = threading.Lock()
+
+
+def _persistent_client(persist_dir: str):
+    """One ChromaDB `PersistentClient` per persist_dir for the process lifetime (F-49).
+
+    ChromaDB 1.x (Rust bindings) is NOT safe to instantiate repeatedly against the same path:
+    every `chromadb.PersistentClient(path=...)` re-enters a *process-global* shared-system cache,
+    and constructing a second client tears down the first's system (`system.stop()` → `del
+    self.bindings`). After that, any client to that path hits `'RustBindingsAPI' object has no
+    attribute 'bindings'`, `KeyError: <persist_dir>`, or `Could not connect to tenant
+    default_tenant`. The old `get_collection` built a fresh client on every call, so the moment the
+    API request threadpool and a run thread touched ChromaDB concurrently the Corpus tab started
+    500ing. Reusing one client per path (chromadb's own guidance) removes the whole cascade.
+
+    Double-checked locking so two threads can't both construct the first client."""
+    client = _CLIENT_CACHE.get(persist_dir)
+    if client is None:
+        import chromadb
+        with _CLIENT_LOCK:
+            client = _CLIENT_CACHE.get(persist_dir)          # re-check under the lock
+            if client is None:
+                client = chromadb.PersistentClient(path=persist_dir)
+                _CLIENT_CACHE[persist_dir] = client
+    return client
+
+
 def get_collection(config: dict, collection_name: str | None = None):
     """Open the persistent collection, verifying the immutable metric (R-03)."""
-    import chromadb
-
     chroma_cfg = config["chroma"]
     name = collection_name or chroma_cfg["collection"]
     metric = chroma_cfg["metric"]
-    client = chromadb.PersistentClient(path=chroma_cfg["persist_dir"])
+    client = _persistent_client(chroma_cfg["persist_dir"])
     collection = client.get_or_create_collection(name=name, metadata={"hnsw:space": metric})
     actual = (collection.metadata or {}).get("hnsw:space")
     if actual != metric:

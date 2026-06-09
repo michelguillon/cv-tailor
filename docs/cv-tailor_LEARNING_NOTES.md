@@ -412,6 +412,40 @@ what changed (if anything).*
 
 ---
 
+### F-49 — Corpus tab 500s on the server: one ChromaDB client per process (not per call)
+
+**Symptom (homeserver).** `GET /api/corpus/stats` and `/cvs` returned 500 with a ChromaDB
+traceback cluster: `Could not connect to tenant default_tenant. Are you sure it exists?` →
+`AttributeError: 'RustBindingsAPI' object has no attribute 'bindings'` → `KeyError: 'data/chroma'`.
+Intermittent: tailoring runs still drafted from the corpus, yet the Corpus tab failed.
+
+**Root cause.** `get_collection` called `chromadb.PersistentClient(path=…)` on **every** invocation.
+ChromaDB 1.x (installed 1.5.9; Rust bindings) keeps a *process-global* shared-system cache keyed by
+path; constructing a second client for a path tears down the first's system (`system.stop()` → `del
+self.bindings`). After that, any client to that path raises the `bindings` AttributeError / `KeyError:
+<path>` / the misleading "tenant default_tenant" error. It stayed hidden under the CLI (one client,
+one process) and surfaced only once the **API request threadpool and a run thread** created clients
+concurrently — exactly the web-deploy access pattern. The "could not connect to tenant" was a
+*downstream symptom* of the torn-down system, not a genuinely missing/incompatible store.
+
+**Fix.** `corpus/ingest.py:_persistent_client(persist_dir)` — a lock-guarded, double-checked
+process singleton: build one `PersistentClient` per persist_dir and reuse it (chromadb's own
+guidance). `get_collection` now resolves the client through it; `get_or_create_collection` still runs
+per call (cheap, idempotent). No behaviour change for the CLI; the web path stops thrashing the
+shared-system cache. Test: `test_get_collection_reuses_one_client` (8 concurrent calls → exactly one
+client constructed). Also **pinned `chromadb>=1.5,<2`** (was unbounded `>=0.5`): an accidental major
+bump can stop reading a store written by the prior version — bump deliberately + re-ingest with
+`--replace`, never by surprise.
+
+**If it persists after deploy** (consistent, not intermittent, "Could not connect to tenant"): the
+store really is from an older/incompatible chromadb — re-seed with `docker compose run --rm cli
+python -m corpus.ingest --cv-dir data/cvs/ --replace`.
+
+**Affects** `corpus/ingest.py` (`_persistent_client`, `get_collection`), `requirements.txt` (pin),
+`tests/test_corpus.py`. Independent of the runs (F-48). 302 green.
+
+---
+
 ### F-48 — A non-owner couldn't view their own run (D-40 gap, found on the homeserver): a live session now grants viewing
 
 **Symptom (reported by a friend running live).** They could *start* a run and watch its SSE

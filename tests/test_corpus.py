@@ -396,3 +396,39 @@ def test_build_where_excludes_seniority():
     import inspect
     from corpus.retrieval import build_where
     assert "seniority" not in inspect.signature(build_where).parameters
+
+
+def test_get_collection_reuses_one_client(monkeypatch):
+    """ChromaDB 1.x (Rust bindings) breaks when a path gets multiple PersistentClients in one
+    process — the cause of the deployment's Corpus-tab 500s (F-49). get_collection must build a
+    client once per persist_dir and reuse it, even across threads."""
+    import threading as _threading
+    import types
+
+    import chromadb
+
+    from corpus import ingest
+
+    constructed = []
+
+    class _FakeClient:
+        def __init__(self, path):
+            constructed.append(path)
+        def get_or_create_collection(self, name, metadata=None):
+            return types.SimpleNamespace(metadata={"hnsw:space": "cosine"})
+
+    monkeypatch.setattr(chromadb, "PersistentClient", lambda path: _FakeClient(path))
+    monkeypatch.setattr(ingest, "_CLIENT_CACHE", {})          # isolate from other tests/process state
+    cfg = {"chroma": {"persist_dir": "data/chroma", "collection": "cv_sections_cosine",
+                      "metric": "cosine"}}
+
+    cols = []
+    threads = [_threading.Thread(target=lambda: cols.append(ingest.get_collection(cfg)))
+               for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert constructed == ["data/chroma"]                     # exactly one client, despite 8 concurrent calls
+    assert len(cols) == 8

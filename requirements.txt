@@ -6,8 +6,10 @@ anthropic>=0.40
 openai>=1.50
 mistralai>=2.0.0,<3.0.0          # 2.x layout: `from mistralai.client import Mistral` (F-07)
 
-# Retrieval (Week 1 reuse)
-chromadb>=0.5
+# Retrieval (Week 1 reuse). Pinned to the 1.x line (Rust bindings): an unbounded `>=0.5` let a
+# rebuild jump major versions and stop reading a store written by the prior one ("Could not connect
+# to tenant default_tenant"). Bump deliberately + re-ingest with --replace, never by surprise (F-49).
+chromadb>=1.5,<2
 
 # Ingestion / parsing
 python-docx>=1.1
