@@ -176,6 +176,25 @@ def test_start_run_empty_jd_rejected(client, run_store):
     assert client.post("/api/runs", json={"jd_text": "   ", "mode": "demo"}).status_code == 400
 
 
+def test_run_failure_persists_traceback_footer(tmp_path):
+    """A crashed run thread now leaves its cause on disk (F-48 follow-up): a terminal
+    `run_failed` footer in run_log.jsonl, so a Phase-N crash isn't a silently truncated log.
+    It's a non-reasoning record (type, no phase/event), like run_complete, so the report's
+    Reasoning tab skips it."""
+    from api.runner import _record_run_failure
+    from tailor.audit import read_entries
+    out, rid = tmp_path / "outputs", "run_20260101_000000"
+    try:
+        raise RuntimeError("gpt writer exploded")              # a real active traceback to capture
+    except RuntimeError as exc:
+        _record_run_failure(str(out), rid, exc)
+    foot = read_entries(out / rid / "run_log.jsonl")[-1]
+    assert foot["type"] == "run_failed"
+    assert foot["error"] == "gpt writer exploded" and foot["error_type"] == "RuntimeError"
+    assert "raise RuntimeError" in foot["traceback"]           # the captured stack, not just the message
+    assert "phase" not in foot and "event" not in foot         # footer, not a reasoning entry
+
+
 # --------------------------------------------------------------------------- #
 # conversational HITL (UI Step 4) — SSEHITL handoff through the API, no LLM     #
 # --------------------------------------------------------------------------- #
@@ -522,6 +541,24 @@ def test_private_run_view_404_until_unlock(client, runs_disk, monkeypatch):
     assert client.get("/api/runs/run_20260102_000000/report").status_code == 200  # public opens
     client.post("/api/full-mode/unlock", json={"key": "pw"})
     assert client.get("/api/runs/run_20260101_000000/detail").status_code == 200
+
+
+def test_private_run_viewable_while_session_live(client, runs_disk, monkeypatch):
+    """A live session grants a non-owner access to their own run's output (report + detail +
+    downloads) without an unlock — the friends-run-live case (§12.9). Access ends with the
+    session: once it's gone, a still-private run narrows back to owner-or-public (404)."""
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    rid = "run_20260101_000000"                                  # the private run on disk
+    assert client.get(f"/api/runs/{rid}/detail").status_code == 404      # no session yet → 404
+    store = client.app.state.sessions
+    store.create(rid, mode="demo")                              # the creator's live session
+    try:
+        assert client.get(f"/api/runs/{rid}/detail").status_code == 200
+        assert client.get(f"/api/runs/{rid}/report").status_code == 200
+        assert client.get(f"/api/runs/{rid}/files/cv_final.md").status_code in (200, 404)
+    finally:
+        store.delete(rid)                                      # session TTL'd / gone
+    assert client.get(f"/api/runs/{rid}/report").status_code == 404      # back to owner-or-public
 
 
 def test_run_meta_mutations_require_unlock(client, runs_disk, monkeypatch):

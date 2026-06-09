@@ -17,13 +17,40 @@ Two HITL handlers share the pipeline's handler interface (fit / review / formatt
 
 from __future__ import annotations
 
+import logging
 import threading
+import traceback
+from pathlib import Path
 
+from tailor.audit import AuditLogger, utc_now_iso
 from tailor.config import cv_display_name, load_config, resolve_run_config
 from tailor.phases import phase1_fit_assessment, phase4_hitl
 from tailor.run import AutoHITL, PipelineStop, run_pipeline
 
 __all__ = ["launch_run", "SSEHITL"]
+
+log = logging.getLogger("cv_tailor.runner")
+
+
+def _record_run_failure(output_dir: str, run_id: str, exc: Exception) -> None:
+    """Persist a crashed run's cause so it's diagnosable after the fact (F-48 follow-up).
+
+    The volatile session carries the error over SSE, but a disconnected browser misses it and
+    the session is GC'd by TTL — so a Phase-N crash otherwise left `run_log.jsonl` truncated with
+    no cause. Log the full traceback server-side (visible in `docker compose logs`) AND append a
+    terminal `run_failed` footer to the run log (a non-reasoning record, like `run_complete`, so
+    the report's Reasoning tab skips it). Best-effort: a logging failure must never mask `exc`."""
+    log.exception("run %s failed", run_id)
+    try:
+        AuditLogger(Path(output_dir) / run_id / "run_log.jsonl").log_footer({
+            "type": "run_failed",
+            "ts": utc_now_iso(),
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "traceback": traceback.format_exc(),
+        })
+    except Exception:                              # never let audit-write failure shadow the crash
+        log.exception("could not write run_failed footer for %s", run_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -223,6 +250,7 @@ def launch_run(store, session, jd_text, *, mode="demo", key=None, max_iterations
             session.error = str(exc)
             session.set_status("stopped")          # run_pipeline already emitted 'stopped'
         except Exception as exc:                   # surface any failure to the stream
+            _record_run_failure(output_dir, session.run_id, exc)   # + traceback to logs + run_log
             session.error = str(exc)
             session.add_event({"type": "error", "message": str(exc)})
             session.set_status("error")

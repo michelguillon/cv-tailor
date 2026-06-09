@@ -46,7 +46,12 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
   visibility & retention (D-40/§12.9):** the archive is **capability-aware** — `GET /archive`
   and `/{id}/detail|report|files` return only `public_demo` runs (list redacted) unless the
   request is unlocked (`verify_token` on `cv_full_mode`); a private run **404s** when locked
-  (don't leak ids). Mutations `PATCH /{id}/meta` (company_name/keep/public_demo), `DELETE /{id}`,
+  (don't leak ids). **Exception — live-session grant (F-48):** `_viewable` also passes when a
+  live in-memory `Session` exists for the run id, so whoever just ran a job (a non-owner) can
+  view their own report/detail/downloads until the session is GC'd by TTL (the friends-run-live
+  case). Tradeoff: timestamped run ids are guessable, so the grant is id-holder-wide during that
+  window — fine for the demo; upgrade to a per-run view token if it ever matters. Mutations
+  `PATCH /{id}/meta` (company_name/keep/public_demo), `DELETE /{id}`,
   `POST /cleanup` are `require_unlocked` (403). Visibility/retention flags live in a **mutable
   sidecar** `outputs/<run_id>/run_meta.json` (`api/run_meta.py`) — never in the append-only
   `run_log.jsonl` (audit ≠ context). Retention helpers in `api/archive.py` (`cleanup_runs` ages

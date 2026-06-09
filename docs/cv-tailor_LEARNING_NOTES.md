@@ -412,6 +412,49 @@ what changed (if anything).*
 
 ---
 
+### F-48 — A non-owner couldn't view their own run (D-40 gap, found on the homeserver): a live session now grants viewing
+
+**Symptom (reported by a friend running live).** They could *start* a run and watch its SSE
+progress, but every attempt to open the report or download the CV 404'd — confirmed in the
+backend logs: `GET /api/runs/<id>/report → 404`, `…/files/cv_final.md → 404` for the friend,
+then `200` once the owner unlocked. Root cause: `_viewable` was **owner-or-public only** and a
+fresh run defaults to `public_demo=false`, so a non-owner had *no* path to their own output —
+the `D-40` archive gate didn't anticipate the friends-run-live use case (it was built around
+owner browsing + a curated public list).
+
+**Fix (chosen model: "while the session is live").** `_viewable` now also returns true when a
+live in-memory `Session` exists for the run id (`request.app.state.sessions.get(run_id)`). The
+creator who just ran a job can see their result (report + detail + downloads) for as long as the
+session is retained, then access narrows back to owner-or-public when the session is GC'd by TTL
+(terminal sessions live ≥1h, `api/session.py`). No new auth surface, no schema/sidecar change —
+the session already exists for the SSE/HITL handoff; we just read its presence.
+
+**Tradeoff (accepted, not hidden).** Run ids are timestamped (`run_YYYYMMDD_HHMMSS`) and thus
+guessable, so during the session window anyone holding/guessing the id can view a private run.
+Acceptable for the demo deployment; the documented upgrade path is a per-run view token if it
+ever matters. `run_detail` returns full (non-redacted) fields under the session grant — correct,
+since the grant is "the creator viewing their own run," not the public archive list.
+
+**Also fixed in the same pass — crash diagnosability.** A *crashed* run thread was undiagnosable
+after the fact: `api/runner.py`'s `except Exception` emitted the error only over SSE + the volatile
+session (no server-side traceback, no terminal event in `run_log.jsonl`), so a Phase-3 crash left
+the audit log truncated with no cause — exactly how a real run died mid-refinement on the
+homeserver. `_record_run_failure` now (a) logs the full traceback via `logging` (visible in
+`docker compose logs`) and (b) appends a terminal `run_failed` footer to `run_log.jsonl` (a
+non-reasoning record: `type` + error + error_type + traceback, no phase/event, so `_build_reasoning`
+skips it like `run_complete`). Best-effort — an audit-write failure can't shadow the original `exc`.
+
+**Still open (needs server facts, NOT yet fixed):** the deployment's **Corpus tab 500s** on a
+ChromaDB tenant/bindings error (`Could not connect to tenant default_tenant` → `RustBindingsAPI has
+no attribute 'bindings'` → `KeyError: 'data/chroma'`) — likely a stale/incompatible persisted store
+or multiple `PersistentClient`s per process; independent of the runs.
+
+**Affects** D-40 / §12.9 (the viewability rule), `api/routers/runs.py` (`_viewable`), `api/runner.py`
+(`_record_run_failure`), `api/CLAUDE.md`, `tests/test_api.py` (`test_private_run_viewable_while_
+session_live`, `test_run_failure_persists_traceback_footer`). 301 green.
+
+---
+
 ### F-47 — company_name auto-filled from the JD (D-40 follow-up): inferred in Phase 0, manual still wins
 
 **What shipped.** The run-list company label is no longer manual-only. `JDAnalysis` gained an

@@ -41,8 +41,19 @@ def _unlocked(request: Request) -> bool:
 
 
 def _viewable(request: Request, run_id: str) -> bool:
-    """A run is viewable if the request is unlocked (owner) or the run is a public demo."""
-    return _unlocked(request) or archive.is_public(OUTPUT_DIR, run_id)
+    """A run is viewable if the request is unlocked (owner), the run is a public demo, or a
+    live session for it still exists. The session grant lets whoever ran a job see their own
+    output (report + downloads) without an owner unlock — the friends-run-live case (§12.9):
+    a non-owner can drive a run over SSE but, without this, every attempt to view the result
+    404s. Access lasts only while the in-memory session is retained (GC'd by TTL after the run
+    reaches a terminal state, api/session.py), then narrows back to owner-or-public.
+
+    Tradeoff (accepted): run ids are timestamped and therefore guessable, so during the
+    session window anyone holding/guessing the id can view a private run. Acceptable for the
+    demo deployment; tighten to a per-run view token if that ever matters."""
+    return (_unlocked(request)
+            or archive.is_public(OUTPUT_DIR, run_id)
+            or request.app.state.sessions.get(run_id) is not None)
 
 
 class StartRunRequest(BaseModel):
