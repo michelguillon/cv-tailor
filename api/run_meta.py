@@ -21,13 +21,15 @@ __all__ = ["META_FILE", "default_meta", "read_meta", "write_meta", "created_at_f
 
 META_FILE = "run_meta.json"
 
-# Only these keys are persisted/editable; anything else in a PATCH body is ignored.
-_FIELDS = ("company_name", "keep", "public_demo")
+# Persisted keys; anything else in a PATCH body is ignored. `job_radar_source` is write-once
+# at run creation (Integration §5.2) — it has no PATCH field, so an edit to the others (which
+# read-merge-write through here) leaves it untouched.
+_FIELDS = ("company_name", "keep", "public_demo", "job_radar_source")
 
 
 def default_meta() -> dict:
-    """The meta of a run with no sidecar yet: private, not kept, no company."""
-    return {"company_name": None, "keep": False, "public_demo": False}
+    """The meta of a run with no sidecar yet: private, not kept, no company, no Job Radar link."""
+    return {"company_name": None, "keep": False, "public_demo": False, "job_radar_source": None}
 
 
 def created_at_from_id(run_id: str) -> str | None:

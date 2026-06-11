@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from api import archive
+from api.job_radar import JobRadarError, fetch_job, job_radar_source
 from api.run_meta import write_meta
 from api.runner import launch_run
 from api.security import FULL_COOKIE, full_mode_configured, require_unlocked, verify_token
@@ -57,11 +58,15 @@ def _viewable(request: Request, run_id: str) -> bool:
 
 
 class StartRunRequest(BaseModel):
-    jd_text: str
+    jd_text: str = ""           # may be empty when sourced from Job Radar (the JD is fetched then)
     mode: str = "demo"
     max_iterations: int | None = None
     auto: bool = False          # True = AutoHITL (no pauses); False = conversational HITL (UI Step 4)
     company_name: str | None = None   # optional label for the run list (§12.9); editable later
+    # Job Radar handoff (Integration §5.2): when source == "job_radar", the backend fetches the
+    # JD from Job Radar server-side using job_id (never the browser — avoids CORS).
+    source: str | None = None
+    job_id: str | None = None
     # No `key` field: full mode is gated on the capability cookie (D-38), not a per-run key.
 
 
@@ -114,6 +119,11 @@ def run_detail(run_id: str, request: Request) -> dict:
     detail = archive.run_detail(OUTPUT_DIR, run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"no output for run {run_id!r}")
+    # The Job Radar reference links to a personal job-search tool — owner-only, even for a
+    # public-demo run or a live-session viewer (Integration §5.4). The archive list already
+    # redacts it; the detail endpoint isn't redacted, so blank it here when locked.
+    if not _unlocked(request):
+        detail["job_radar_source"] = None
     return detail
 
 
@@ -162,7 +172,27 @@ def delete_run(run_id: str, request: Request) -> dict:
 
 @router.post("", status_code=201)
 def start_run(body: StartRunRequest, request: Request) -> dict:
-    if not body.jd_text.strip():
+    # Job Radar handoff (Integration §5.2): fetch the JD server-side before doing anything
+    # else, so a fetch failure aborts the request and never leaves a half-created run. The
+    # fetched raw_text is the JD body; `company` seeds the run label; the rest is the
+    # immutable reference stored on the run. Fail loud — never start a run with an empty JD.
+    jd_text = body.jd_text
+    company_name = body.company_name
+    jr_source = None
+    if body.source == "job_radar" and body.job_id:
+        try:
+            job = fetch_job(body.job_id)
+        except JobRadarError as exc:
+            raise HTTPException(status_code=502, detail=f"Could not load JD from Job Radar: {exc}")
+        raw = (job.get("raw_text") or "").strip()
+        if not raw:
+            raise HTTPException(status_code=502,
+                                detail="Could not load JD from Job Radar: the job has no JD text")
+        jd_text = job["raw_text"]
+        company_name = job.get("company") or company_name
+        jr_source = job_radar_source(job)
+
+    if not jd_text.strip():
         raise HTTPException(status_code=400, detail="jd_text is empty")
     # Full mode is gated on the capability cookie (D-38, §12.7), never a per-run key.
     # Fail closed: no server key configured, or no valid cookie → forbidden (403).
@@ -191,14 +221,15 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
     else:
         raise HTTPException(status_code=500, detail="could not allocate a run id")
 
-    # Persist the visibility sidecar up front when a company label was supplied (§12.9). New
-    # runs default private + not-kept; the run dir is the pipeline's, created here idempotently.
-    if body.company_name:
+    # Persist the visibility sidecar up front when there's something to store — a company label
+    # (§12.9) or the Job Radar reference (Integration §5.2, write-once). New runs default private
+    # + not-kept; the run dir is the pipeline's, created here idempotently.
+    if company_name or jr_source:
         run_dir = Path(OUTPUT_DIR) / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        write_meta(run_dir, company_name=body.company_name)
+        write_meta(run_dir, company_name=company_name, job_radar_source=jr_source)
 
-    launch_run(store, session, body.jd_text, mode=body.mode, key=key,
+    launch_run(store, session, jd_text, mode=body.mode, key=key,
                max_iterations=body.max_iterations, auto=body.auto)
     return {"run_id": run_id, "mode": body.mode, "status": session.status}
 

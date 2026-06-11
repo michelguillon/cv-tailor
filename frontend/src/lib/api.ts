@@ -146,9 +146,32 @@ export interface Capabilities {
   full_unlocked: boolean;
 }
 
+// Job Radar handoff (Integration §5.2). The immutable reference stored on a run that
+// originated from Job Radar; owner-only (null/absent in the redacted public view).
+export interface JobRadarSource {
+  job_id: string | null;
+  company: string | null;
+  title: string | null;
+  source_url: string | null;
+  fit_label: string | null;
+  fit_score: number | null;
+}
+
+// Job Radar prefill (Integration §5.2): the proxied job detail the Run page pre-fills with.
+export interface JobRadarPrefill {
+  job_id: string;
+  company: string | null;
+  title: string | null;
+  raw_text: string;
+  source_url: string | null;
+  fit_label: string | null;
+  fit_score: number | null;
+}
+
 export interface ArchiveRun {
   run_id: string;
   created_at: string | null;        // run-id timestamp (null in the redacted public view)
+  job_radar_source?: JobRadarSource | null;   // Integration §5.2 (owner-only; redacted public)
   company_name: string | null;      // editable label; UI shows "Unknown company" when null
   mode: string | null;
   role_title: string | null;
@@ -225,8 +248,19 @@ export const api = {
       `/corpus/cvs/${encodeURIComponent(filename)}/metadata`,
       { metadata },
     ),
-  startRun: (jd_text: string, mode: string, auto = false, company_name: string | null = null) =>
-    post<StartRunResponse>("/runs", { jd_text, mode, auto, company_name }),
+  startRun: (
+    jd_text: string,
+    mode: string,
+    auto = false,
+    company_name: string | null = null,
+    // When the run came from Job Radar, pass {source, job_id}; the backend re-fetches the JD
+    // server-side (authoritative) and stores the immutable reference (Integration §5.2).
+    jobRadar: { source: string; job_id: string } | null = null,
+  ) =>
+    post<StartRunResponse>("/runs", { jd_text, mode, auto, company_name, ...(jobRadar ?? {}) }),
+  // Job Radar prefill proxy (Integration §5.2) — server-side fetch to pre-populate the form.
+  jobRadarPrefill: (jobId: string) =>
+    get<JobRadarPrefill>(`/job-radar/jobs/${encodeURIComponent(jobId)}`),
   capabilities: () => get<Capabilities>("/capabilities"),
   unlockFullMode: (key: string) => post<{ unlocked: boolean }>("/full-mode/unlock", { key }),
   lockFullMode: () => post<{ unlocked: boolean }>("/full-mode/lock", {}),

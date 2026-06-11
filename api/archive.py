@@ -24,7 +24,9 @@ __all__ = ["list_runs", "run_detail", "run_file", "delete_run", "cleanup_runs",
 DOWNLOADABLE = {"cv_final.md", "cv_final.html"}
 
 # Owner-only fields blanked from the redacted public view (§12.9 — public ≠ full metadata).
-_REDACTED = ("cost_estimated_usd", "cost_breakdown", "created_at", "unsupported_claims")
+# job_radar_source is owner-only: it links to a personal job-search tool (Integration §5.4).
+_REDACTED = ("cost_estimated_usd", "cost_breakdown", "created_at", "unsupported_claims",
+             "job_radar_source")
 
 
 def _run_dir(output_dir: str | Path, run_id: str) -> Path | None:
@@ -92,6 +94,7 @@ def _summary(run_dir: Path) -> dict:
         "fit_band": card["fit_band"] if fit_score is not None else None,
         "keep": meta["keep"],
         "public_demo": meta["public_demo"],
+        "job_radar_source": meta.get("job_radar_source"),   # Integration §5.2 (owner-only, redacted)
         "has_md": (run_dir / "cv_final.md").exists(),
         "has_html": (run_dir / "cv_final.html").exists(),
     }

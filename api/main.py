@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import archive
-from api.routers import corpus, full_mode, hitl, runs
+from api.routers import corpus, full_mode, hitl, job_radar, runs
 from api.session import SessionStore
 
 logger = logging.getLogger("cv-tailor")
@@ -59,3 +59,4 @@ app.include_router(corpus.router)
 app.include_router(runs.router)
 app.include_router(hitl.router)
 app.include_router(full_mode.router)
+app.include_router(job_radar.router)

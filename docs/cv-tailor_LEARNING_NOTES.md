@@ -412,6 +412,50 @@ what changed (if anything).*
 
 ---
 
+### F-51 — Job Radar handoff built (Integration §5.2): server-side JD fetch + write-once reference on the run
+
+**What.** cv-tailor can now be opened from Job Radar with `?source=job_radar&job_id=<id>`. The Run
+page fetches the JD (through the backend), pre-fills the form, and the resulting run carries an
+immutable reference back to the originating role. The cv-tailor side of Phase 2 of the Job
+Radar ↔ cv-tailor integration (`../job-radar/docs/INTEGRATION_SPEC_JR_CVT.md §5`). The pipeline
+(Phases 0–6), HITL, and auth model are untouched.
+
+**Server-side fetch, not client-side (`api/job_radar.py`).** The browser never calls Job Radar
+directly. The backend fetches `GET {JOB_RADAR_API_URL}/api/jobs/{job_id}` (public, no auth) at two
+points: a display-only proxy (`/api/job-radar/jobs/{id}`, `api/routers/job_radar.py`) so the Run
+page can pre-populate the JD textarea + company *before* the user starts; and authoritatively in
+`POST /api/runs` when `source=job_radar`, where the fetched `raw_text` becomes the JD body and
+`company` seeds the run label. Going server-side (a) avoids CORS, (b) keeps the single Job Radar
+call in one place, and (c) leaves room for the Phase-3 callback auth without touching the frontend.
+The double fetch (proxy + run start) is deliberate: the proxy is a preview; the run-start fetch is
+the source of truth for the stored reference and the JD, so an edited/stale textarea can't drift it.
+
+**Reference in `run_meta.json`, not `run_log.jsonl`.** The `job_radar_source` snapshot (job_id,
+company, title, source_url, fit_label, fit_score) is *mutable-state-adjacent* run metadata, so it
+lives in the sidecar next to `public_demo`/`keep`/`company_name` (D-40/F-46 pattern) — never in the
+append-only audit log (audit ≠ context, D-06). It's **write-once at creation**: it has no PATCH
+field, and since the sidecar is read-merge-written, later edits to the other fields preserve it.
+
+**Fail loud on an empty JD (no silent fallback).** Any fetch problem (network, 404, non-JSON, or
+empty `raw_text`) raises `JobRadarError` → `502` from `POST /api/runs`, and **no run is created** —
+the request aborts before allocating a run id. A run is never started with an empty/placeholder JD
+body. The frontend degrades gracefully on the *proxy* failure (inline "paste the JD manually",
+drops the linkage → a normal run) but never blocks the page.
+
+**Owner-only reference (Integration §5.4).** `source_url` points at a personal job-search tool, so
+`job_radar_source` is redacted from the public archive view (added to `archive._REDACTED`) and
+blanked in `GET /runs/{id}/detail` for any locked request — even a public-demo run or a live-session
+viewer. Visible only to the owner (valid capability cookie). Runs from Job Radar default
+`public_demo: false` (the existing §12.9 default, not overridden).
+
+**Affects** `api/job_radar.py` (new), `api/routers/job_radar.py` (new prefill proxy), `api/main.py`
+(register router), `api/routers/runs.py` (`StartRunRequest.source/job_id`, fetch+store in
+`start_run`, detail redaction), `api/run_meta.py` (`job_radar_source` field), `api/archive.py`
+(surface + redact), `frontend` (`api.ts` types/methods, `RunPage` URL handling + prefill,
+`OutputPanel` provenance line), `.env.example` (`JOB_RADAR_API_URL`). 315 green; `tsc -b` clean.
+
+---
+
 ### F-50 — Empty-synthesis orchestrator decision aborted the run: corrective retry + graceful fallback
 
 **Symptom (local run, demo mode).** `orchestrator decision invalid after retry (claude-haiku-4-5):

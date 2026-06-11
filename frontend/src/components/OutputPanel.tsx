@@ -77,6 +77,26 @@ export function OutputPanel({ runId, onBack }: { runId: string; onBack: () => vo
                 )}
                 <span>· {detail.iterations} iteration(s)</span>
               </div>
+              {/* Job Radar provenance (Integration §5.2) — owner-only (null/absent for public);
+                  links back to the originating role. */}
+              {detail.job_radar_source && (
+                <div className="text-xs text-muted-foreground">
+                  From Job Radar:{" "}
+                  <span className="text-foreground">{detail.job_radar_source.company ?? "job"}</span>
+                  {detail.job_radar_source.fit_label && ` — ${detail.job_radar_source.fit_label}`}
+                  {detail.job_radar_source.fit_score != null && ` (${detail.job_radar_source.fit_score})`}
+                  {detail.job_radar_source.source_url && (
+                    <a
+                      href={detail.job_radar_source.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-1 inline-flex items-center gap-0.5 underline-offset-2 hover:underline"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
 

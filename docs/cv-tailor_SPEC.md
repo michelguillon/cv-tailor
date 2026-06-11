@@ -1924,3 +1924,45 @@ never conflated with public/private visibility; the list reads by company + role
 
 **CLI is unaffected.** Runs still write to `outputs/<run_id>/` exactly as before; visibility
 and retention are a Web-surface concern. A CLI/owner can still inspect every run on disk.
+
+### 12.10 — Job Radar handoff (built, Integration §5.2 / F-51)
+
+cv-tailor is the *how should I pursue this role?* half of a pair with **Job Radar** (*which roles
+are worth pursuing?*). Phase 2 of their integration (`../job-radar/docs/INTEGRATION_SPEC_JR_CVT.md
+§5`) lets a Job Radar role open straight into a pre-populated cv-tailor run. The pipeline (Phases
+0–6), HITL, auth, and output formats are unchanged — this is purely an entry path + a stored link.
+
+**URL handoff.** Job Radar's *Create CV in cv-tailor ↗* button opens
+`…/new?source=job_radar&job_id=<job_id>`. On mount the Run page reads the query params,
+**strips them** (`history.replaceState`, so a refresh doesn't re-trigger), and — when
+`source=job_radar` — fetches the job to pre-fill the form.
+
+**Server-side fetch (never the browser).** The JD is pulled from Job Radar's **public**
+`GET {JOB_RADAR_API_URL}/api/jobs/{job_id}` server-side, in two places:
+- **Prefill proxy** `GET /api/job-radar/jobs/{job_id}` (`api/routers/job_radar.py`) — display-only;
+  the Run page calls *this*, not Job Radar, to pre-populate the JD textarea + company (avoids CORS).
+- **Run start** `POST /api/runs` with `source=job_radar` + `job_id` (`api/routers/runs.py`) — the
+  authoritative fetch: `raw_text` becomes the JD body, `company` seeds the run label, and the rest
+  becomes the stored reference. The textarea is read-only once loaded (the JD is authoritative).
+
+`JOB_RADAR_API_URL` (env, default `https://job-radar.michel-portfolio.co.uk`) allows local override.
+No auth — the endpoint is public (Phase 2). Phase 3's callback (cv-tailor → Job Radar) will add a
+service token later; not built here.
+
+**Stored reference — `run_meta.json`, write-once.** A run from Job Radar carries
+`job_radar_source: {job_id, company, title, source_url, fit_label, fit_score}` in the **mutable
+sidecar** (`api/run_meta.py`), beside `public_demo`/`keep`/`company_name` (§12.9) — never in the
+append-only `run_log.jsonl` (audit ≠ context, D-06). It's set at creation and never mutated (no
+PATCH field); it returns in `GET /api/runs/{id}/detail` and `/archive`.
+
+**Failure contract — fail loud, never silent.** Any fetch problem (network, 404, non-JSON, or empty
+`raw_text`) → **502** from `POST /api/runs` and **no run is created** (the request aborts before
+allocating a run id). A run is never started with an empty/placeholder JD. On a *proxy* failure the
+Run page shows an inline "Could not load job from Job Radar — paste the JD manually", drops the
+linkage (→ a normal run), and never blocks the page.
+
+**Visibility.** Runs from Job Radar default `public_demo: false` (the existing §12.9 default — not
+overridden). `job_radar_source` is **owner-only**: `source_url` points at a personal job-search
+tool, so it's redacted from the public archive list and blanked in `GET /runs/{id}/detail` for any
+locked request (even a public-demo run or a live-session viewer). The owner sees a small
+*From Job Radar: Company — fit_label (score) ↗* line in the output panel, linking back to the role.

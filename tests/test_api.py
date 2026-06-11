@@ -451,7 +451,8 @@ def _make_run(out, run_id, *, meta=None, phase0_company=None):
 def test_run_meta_defaults_and_roundtrip(tmp_path):
     rd = tmp_path / "run_x"
     rd.mkdir()
-    assert run_meta.read_meta(rd) == {"company_name": None, "keep": False, "public_demo": False}
+    assert run_meta.read_meta(rd) == {"company_name": None, "keep": False, "public_demo": False,
+                                      "job_radar_source": None}
     run_meta.write_meta(rd, company_name="Acme", public_demo=True)
     m = run_meta.read_meta(rd)
     assert m["company_name"] == "Acme" and m["public_demo"] is True and m["keep"] is False
@@ -459,6 +460,10 @@ def test_run_meta_defaults_and_roundtrip(tmp_path):
     run_meta.write_meta(rd, company_name=None, public_demo=False)
     m = run_meta.read_meta(rd)
     assert m["company_name"] == "Acme" and m["public_demo"] is False
+    # job_radar_source is write-once at creation and survives later edits to the other fields.
+    run_meta.write_meta(rd, job_radar_source={"job_id": "sha256:abc", "company": "Acme"})
+    run_meta.write_meta(rd, keep=True)                       # an unrelated edit
+    assert run_meta.read_meta(rd)["job_radar_source"] == {"job_id": "sha256:abc", "company": "Acme"}
 
 
 def test_created_at_from_id():
@@ -596,6 +601,168 @@ def test_start_run_persists_company(client, run_store, runs_disk, monkeypatch):
     r = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "company_name": "Globex"})
     assert r.status_code == 201
     assert run_meta.read_meta(runs_disk / "run_20260601_090000")["company_name"] == "Globex"
+
+
+# --------------------------------------------------------------------------- #
+# Job Radar handoff (Integration §5.2, F-50) — server-side JD fetch on a run    #
+# --------------------------------------------------------------------------- #
+
+_JR_JOB = {
+    "job_id": "sha256:abc123", "company": "Elastic", "title": "Principal PM, AI agents",
+    "source_url": "https://jobs.example.com/elastic/pm", "location": "United Kingdom",
+    "fit_label": "strong_fit", "fit_score": 10, "priority_score": 10,
+    "raw_text": "Full JD text — we are hiring a Principal PM for AI agents.",
+}
+
+
+@pytest.fixture
+def jr_run(client, run_store, runs_disk, monkeypatch):
+    """A POST /api/runs sourced from Job Radar, with the pipeline + run id + JD fetch mocked.
+    Returns a helper that posts and yields (response, run_dir) so each test asserts the sidecar."""
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(runs_router, "new_run_id", lambda: "run_20260612_120000")
+
+    def go(*, job=_JR_JOB, raises=None, body=None):
+        if raises is not None:
+            from api.job_radar import JobRadarError
+            monkeypatch.setattr(runs_router, "fetch_job",
+                                lambda *a, **k: (_ for _ in ()).throw(JobRadarError(raises)))
+        else:
+            monkeypatch.setattr(runs_router, "fetch_job", lambda *a, **k: job)
+        payload = body or {"jd_text": "", "mode": "demo", "source": "job_radar",
+                           "job_id": "sha256:abc123"}
+        resp = client.post("/api/runs", json=payload)
+        return resp, runs_disk / "run_20260612_120000"
+
+    return go
+
+
+def test_run_from_job_radar_success(jr_run, run_store):
+    resp, run_dir = jr_run()
+    assert resp.status_code == 201
+    meta = run_meta.read_meta(run_dir)
+    assert meta["company_name"] == "Elastic"                       # company → run label
+    src = meta["job_radar_source"]
+    assert src["job_id"] == "sha256:abc123" and src["fit_label"] == "strong_fit"
+    assert src["fit_score"] == 10 and src["source_url"].endswith("/elastic/pm")
+    # the fetched raw_text became the run's JD (written to the session tmp dir)
+    jd = (run_store.base_dir / "run_20260612_120000" / "jd.txt").read_text(encoding="utf-8")
+    assert "Principal PM" in jd
+
+
+def test_run_meta_has_job_radar_source(jr_run):
+    _, run_dir = jr_run()
+    assert run_meta.read_meta(run_dir)["job_radar_source"]["company"] == "Elastic"
+
+
+def test_run_from_job_radar_is_private(jr_run):
+    _, run_dir = jr_run()
+    meta = run_meta.read_meta(run_dir)                              # default not overridden (§12.9)
+    assert meta["public_demo"] is False and meta["keep"] is False
+
+
+def test_run_from_job_radar_not_found(jr_run):
+    resp, run_dir = jr_run(raises="job not found in Job Radar")
+    assert resp.status_code == 502 and "Job Radar" in resp.json()["detail"]
+    assert not run_dir.exists()                                     # no run created
+
+
+def test_run_from_job_radar_empty_raw_text(jr_run):
+    resp, run_dir = jr_run(job={**_JR_JOB, "raw_text": ""})
+    assert resp.status_code == 502
+    assert not run_dir.exists()                                     # never a run with an empty JD
+
+
+def test_run_from_job_radar_network_error(jr_run):
+    resp, run_dir = jr_run(raises="could not reach Job Radar (timeout)")
+    assert resp.status_code == 502
+    assert not run_dir.exists()
+
+
+def test_run_without_job_radar_source(client, run_store, runs_disk, monkeypatch):
+    """A normal run (no job_id) has no Job Radar reference — backwards compatibility."""
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(runs_router, "new_run_id", lambda: "run_20260612_130000")
+    r = client.post("/api/runs", json={"jd_text": "tailor my cv", "mode": "demo"})
+    assert r.status_code == 201
+    # no sidecar written at all (no company, no JR source) → read defaults to None
+    assert run_meta.read_meta(runs_disk / "run_20260612_130000")["job_radar_source"] is None
+
+
+# --- prefill proxy + fetch_job unit + owner-only redaction --- #
+
+def test_job_radar_prefill_proxies(client, monkeypatch):
+    import api.routers.job_radar as jr_router
+    monkeypatch.setattr(jr_router, "fetch_job", lambda *a, **k: _JR_JOB)
+    r = client.get("/api/job-radar/jobs/sha256:abc123")
+    assert r.status_code == 200
+    b = r.json()
+    assert b["company"] == "Elastic" and b["raw_text"].startswith("Full JD")
+    assert b["fit_label"] == "strong_fit" and b["source_url"].endswith("/elastic/pm")
+
+
+def test_job_radar_prefill_error(client, monkeypatch):
+    import api.routers.job_radar as jr_router
+    from api.job_radar import JobRadarError
+    monkeypatch.setattr(jr_router, "fetch_job",
+                        lambda *a, **k: (_ for _ in ()).throw(JobRadarError("boom")))
+    assert client.get("/api/job-radar/jobs/x").status_code == 502
+
+
+def test_fetch_job_maps_http_errors(monkeypatch):
+    """job_radar.fetch_job maps transport/HTTP outcomes to JobRadarError or a dict."""
+    import httpx
+
+    from api import job_radar
+
+    def transport(handler):
+        return httpx.MockTransport(handler)
+
+    # 200 → the parsed payload
+    monkeypatch.setattr(job_radar.httpx, "get",
+                        lambda url, **k: httpx.Client(transport=transport(
+                            lambda req: httpx.Response(200, json=_JR_JOB))).get(url))
+    assert job_radar.fetch_job("sha256:abc123")["company"] == "Elastic"
+    # 404 → JobRadarError
+    monkeypatch.setattr(job_radar.httpx, "get",
+                        lambda url, **k: httpx.Client(transport=transport(
+                            lambda req: httpx.Response(404))).get(url))
+    with pytest.raises(job_radar.JobRadarError):
+        job_radar.fetch_job("missing")
+    # network failure → JobRadarError
+    def boom(url, **k):
+        raise httpx.ConnectError("no route to host")
+    monkeypatch.setattr(job_radar.httpx, "get", boom)
+    with pytest.raises(job_radar.JobRadarError):
+        job_radar.fetch_job("x")
+
+
+def test_job_radar_source_redacted_for_public(tmp_path):
+    """job_radar_source is owner-only (Integration §5.4): present for the owner, blanked in the
+    redacted public archive view."""
+    out = tmp_path / "outputs"
+    _make_run(out, "run_20260612_140000",
+              meta={"public_demo": True, "job_radar_source": {"job_id": "sha256:abc", "company": "Elastic"}})
+    owner = archive.list_runs(out)[0]
+    assert owner["job_radar_source"]["company"] == "Elastic"
+    public = archive.list_runs(out, include_private=False, redact=True)[0]
+    assert public["job_radar_source"] is None
+
+
+def test_run_detail_redacts_job_radar_source_when_locked(client, runs_disk, monkeypatch):
+    """GET /runs/{id}/detail blanks the Job Radar reference for a locked (non-owner) request,
+    even on a public-demo run; the owner sees it (Integration §5.4)."""
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    out = runs_disk
+    _make_run(out, "run_20260612_150000",
+              meta={"public_demo": True, "job_radar_source": {"job_id": "sha256:abc", "company": "Elastic"}})
+    locked = client.get("/api/runs/run_20260612_150000/detail").json()    # public can open it
+    assert locked["job_radar_source"] is None
+    client.post("/api/full-mode/unlock", json={"key": "pw"})
+    owner = client.get("/api/runs/run_20260612_150000/detail").json()
+    assert owner["job_radar_source"]["company"] == "Elastic"
 
 
 def test_corpus_delete_removes_sections(client, monkeypatch, unlocked):

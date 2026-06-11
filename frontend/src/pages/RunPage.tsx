@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink, Lock, LockOpen } from "lucide-react";
-import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision } from "@/lib/api";
+import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision, type JobRadarPrefill } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +42,13 @@ export function RunPage() {
   const [mode, setMode] = useState<"demo" | "full">("demo");
   const [auto, setAuto] = useState(false);
 
+  // Job Radar handoff (Integration §5.2): opened with ?source=job_radar&job_id=<id>, the JD is
+  // fetched (server-side, via the backend proxy) and the run carries the immutable reference.
+  const [jobRadar, setJobRadar] = useState<{ source: string; job_id: string } | null>(null);
+  const [jobPrefill, setJobPrefill] = useState<JobRadarPrefill | null>(null);
+  const [jobLoading, setJobLoading] = useState(false);
+  const [jobError, setJobError] = useState<string | null>(null);
+
   // Full mode is gated on the shared owner unlock (D-38/D-39); the capability state +
   // unlock dialog live in UnlockProvider so the Corpus page reuses the same one unlock.
   const { configured, requestUnlock, lock } = useUnlock();
@@ -62,6 +69,38 @@ export function RunPage() {
   const doneRef = useRef(false);
 
   useEffect(() => () => esRef.current?.close(), []);
+
+  // On mount: if launched from Job Radar (?source=job_radar&job_id=<id>), fetch the JD through
+  // the backend proxy (no direct cross-origin call — avoids CORS) and pre-fill the form. Strip
+  // the params (replace, don't push) so a refresh doesn't re-trigger. Fail gracefully: on any
+  // error, fall back to manual paste — never block the page (Integration §5.2).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("source") !== "job_radar") return;
+    const jobId = params.get("job_id");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("source");
+    url.searchParams.delete("job_id");
+    window.history.replaceState({}, "", url.toString());
+    if (!jobId) return;
+
+    setJobLoading(true);
+    setJobError(null);
+    api
+      .jobRadarPrefill(jobId)
+      .then((job) => {
+        if (!job.raw_text.trim()) {
+          setJobError("Could not load job from Job Radar — paste the JD manually.");
+          return;
+        }
+        setJd(job.raw_text);
+        if (job.company) setCompany(job.company);
+        setJobPrefill(job);
+        setJobRadar({ source: "job_radar", job_id: job.job_id });
+      })
+      .catch(() => setJobError("Could not load job from Job Radar — paste the JD manually."))
+      .finally(() => setJobLoading(false));
+  }, []);
 
   function onPickMode(value: "demo" | "full") {
     if (value === "demo") {
@@ -184,7 +223,7 @@ export function RunPage() {
     reset();
     setRunning(true);
     try {
-      const { run_id } = await api.startRun(jd, mode, auto, company.trim() || null);
+      const { run_id } = await api.startRun(jd, mode, auto, company.trim() || null, jobRadar);
       setRunId(run_id);
       runIdRef.current = run_id;
       const es = new EventSource(api.runStreamUrl(run_id));
@@ -215,11 +254,40 @@ export function RunPage() {
 
       <Card>
         <CardContent className="space-y-4 pt-6">
+          {jobLoading && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading job from Job Radar…
+            </div>
+          )}
+          {jobError && (
+            <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-500">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> {jobError}
+            </div>
+          )}
+          {jobPrefill && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>
+                From Job Radar: <span className="font-medium text-foreground">{jobPrefill.company ?? "job"}</span>
+                {jobPrefill.fit_label && ` — ${jobPrefill.fit_label}`}
+                {jobPrefill.fit_score != null && ` (${jobPrefill.fit_score})`}
+              </span>
+              {jobPrefill.source_url && (
+                <a
+                  href={jobPrefill.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 underline-offset-2 hover:underline"
+                >
+                  <ExternalLink className="h-3 w-3" /> view role
+                </a>
+              )}
+            </div>
+          )}
           <textarea
             value={jd}
             onChange={(e) => setJd(e.target.value)}
             placeholder="Paste the job description here…"
-            disabled={running}
+            disabled={running || jobLoading || !!jobRadar}
             className="h-44 w-full resize-y rounded-md border border-border bg-background p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           />
           <div className="flex flex-wrap items-center gap-3">
