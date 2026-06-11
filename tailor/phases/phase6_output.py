@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import difflib
 import html
+import json
 import re
 from pathlib import Path
 
@@ -234,6 +235,22 @@ def _build_reasoning(ctx) -> list[dict]:
     return [{"phase": ph, "entries": evs} for ph, evs in grouped.items()]
 
 
+def _job_radar_source(output_dir: Path) -> dict | None:
+    """The Job Radar provenance, if this run came from a Job Radar handoff (Integration §5.2).
+
+    Read defensively from the `run_meta.json` sidecar — an API-layer file (absent for CLI runs),
+    so this is read straight off disk with no dependency on `api/` (which itself imports `tailor`)."""
+    path = output_dir / "run_meta.json"
+    if not path.exists():
+        return None
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    src = meta.get("job_radar_source") if isinstance(meta, dict) else None
+    return src if isinstance(src, dict) else None
+
+
 def _build_grounding(flags) -> dict:
     """Provenance for the report's Grounding tab (F-35): the verifier's unsupported-claim
     flags, flattened. `flags` is {section_id: [CritiqueItem, ...]} or None."""
@@ -270,6 +287,13 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
         # unsupported = verifier flag count (F-35). No new LLM pass.
         "summary_card": summary_card(fit.outcome, fit.overall_fit_score,
                                      grounded_coverage, grounding["total"]),
+        # Overall CV quality = the final iteration's aggregate critique_score (0–10, the
+        # "quality" column of the Scores tab). Shown in the header alongside coverage so the
+        # at-a-glance card answers "how good is the writing", not just "how well does it match".
+        "quality_score": (None if not iterations or iterations[-1].critique_score is None
+                          else round(iterations[-1].critique_score, 1)),
+        # Job Radar provenance (Integration §5.2), if this run came from a handoff — header badge.
+        "job_radar_source": _job_radar_source(ctx.output_dir),
         "jd_raw": jd_raw,                                  # raw JD for the JD tab (D-37)
         # Role-fit summary (F-39): the CVCM value-alignment narrative + transferable
         # strengths + gaps, so "why am I a fit" is visible after any run (incl. --yes/auto,

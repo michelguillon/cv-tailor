@@ -176,6 +176,34 @@ def test_generate_output_renders_summary_card(tmp_path):
     assert "Grounded Coverage:" in html and "60%" in html
     assert "Unsupported Claims:" in html
     assert "Status: Review Required" in html
+    # CV overall quality (final iteration critique_score = 7.0) shown in the header
+    assert "CV Quality:" in html and "7.0/10" in html
+
+
+def test_header_shows_job_radar_provenance_when_present(tmp_path):
+    """A run created from Job Radar (run_meta.json sidecar) shows a 'From Job Radar' badge in the
+    report header; a plain run shows nothing (Integration §5.2 / F-51)."""
+    import json
+
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    fit = FitAssessment(outcome="partial", overall_fit_score=0.58)
+    rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
+    (ctx.output_dir / "run_meta.json").write_text(json.dumps({
+        "job_radar_source": {"company": "Elastic", "fit_label": "strong_fit", "fit_score": 10,
+                             "source_url": "https://jobs.example.com/elastic/pm"}}), encoding="utf-8")
+    html = Path(generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)["html"]).read_text("utf-8")
+    assert "From Job Radar: Elastic" in html and "strong_fit" in html
+    assert 'href="https://jobs.example.com/elastic/pm"' in html
+
+
+def test_header_no_job_radar_badge_for_plain_run(tmp_path):
+    ctx = RunContext.create(run_id="r", base_dir=tmp_path)
+    manifest = setup(ctx)
+    fit = FitAssessment(outcome="partial", overall_fit_score=0.58)
+    rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
+    html = Path(generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)["html"]).read_text("utf-8")
+    assert "From Job Radar" not in html
 
 
 def test_jd_tab_renders_raw_jd(tmp_path):

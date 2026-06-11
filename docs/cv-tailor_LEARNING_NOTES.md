@@ -448,6 +448,16 @@ blanked in `GET /runs/{id}/detail` for any locked request — even a public-demo
 viewer. Visible only to the owner (valid capability cookie). Runs from Job Radar default
 `public_demo: false` (the existing §12.9 default, not overridden).
 
+**Report header (follow-up).** The Phase-6 HTML report's sticky card (`templates/output.html`) now
+also shows a **From Job Radar: Company · fit (score) ↗** badge — Phase 6 reads the provenance from
+`run_meta.json` defensively (no `api/` import; absent for CLI runs). Same edit added **★ CV Quality:
+x/10** (the final iteration's aggregate `critique_score`, the Scores-tab quality number) beside
+grounded coverage, so the at-a-glance card answers "how good is the writing", not just "how well does
+it match". Caveat (accepted by the owner): the report is a *baked* file served by `/report`, which is
+viewable for `public_demo` runs — so unlike the redacted JSON API, the badge (incl. `source_url`)
+would show if a Job-Radar-sourced run is deliberately published. Only the owner can publish, and such
+runs default private, so the exposure is opt-in.
+
 **Affects** `api/job_radar.py` (new), `api/routers/job_radar.py` (new prefill proxy), `api/main.py`
 (register router), `api/routers/runs.py` (`StartRunRequest.source/job_id`, fetch+store in
 `start_run`, detail redaction), `api/run_meta.py` (`job_radar_source` field), `api/archive.py`

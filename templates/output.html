@@ -72,12 +72,18 @@
     <span class="fit {{ summary_card.fit_band }}">Fit: {{ summary_card.fit_label }}{% if summary_card.fit_pct is not none %} ({{ summary_card.fit_pct }}%){% endif %}</span>
     <span class="metric"><span class="lbl">✓ Grounded Coverage:</span>
       {{ (summary_card.grounded_pct ~ '%') if summary_card.grounded_pct is not none else '—' }}</span>
+    <span class="metric"><span class="lbl">★ CV Quality:</span>
+      {{ (quality_score ~ '/10') if quality_score is not none else '—' }}</span>
     <span class="metric {{ 'flag' if summary_card.unsupported else 'ok' }}">
       {{ '⚠' if summary_card.unsupported else '✓' }} <span class="lbl">Unsupported Claims:</span> {{ summary_card.unsupported }}</span>
     <span class="sep">|</span>
     <span class="status">Status: {{ summary_card.status }}</span>
     <span class="sep">|</span>
     <span class="run">Run: {{ run_id }} · rubric v{{ rubric.version }}</span>
+    {% if job_radar_source %}
+    <span class="sep">|</span>
+    <span class="run">From Job Radar: {{ job_radar_source.company or 'job' }}{% if job_radar_source.fit_label %} · {{ job_radar_source.fit_label }}{% if job_radar_source.fit_score is not none %} ({{ job_radar_source.fit_score }}){% endif %}{% endif %}{% if job_radar_source.source_url %} <a href="{{ job_radar_source.source_url }}" target="_blank" rel="noreferrer">↗</a>{% endif %}</span>
+    {% endif %}
   </div>
 </header>
 <nav>
