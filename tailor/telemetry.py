@@ -36,8 +36,12 @@ log = logging.getLogger("tailor.telemetry")
 
 __all__ = [
     "is_enabled", "init_langfuse", "run_trace", "span", "open_span", "generation",
-    "set_metadata", "set_generation", "attach_scores", "flush",
+    "set_metadata", "set_generation", "attach_scores", "flush", "debug_trace",
 ]
+
+# Set once the global Langfuse singleton is live, so init_langfuse() is a true no-op on
+# repeat calls (the startup hook + the debug endpoint both call it).
+_INITIALIZED = False
 
 
 def is_enabled() -> bool:
@@ -62,9 +66,14 @@ def init_langfuse() -> None:
     if not enabled:
         log.info("Langfuse DISABLED — LANGFUSE_PUBLIC_KEY not set in this process's environment")
         return
+    global _INITIALIZED
+    if _INITIALIZED:
+        log.info("Langfuse already initialised (singleton live)")
+        return
     try:
         from langfuse import Langfuse
         client = Langfuse()
+        _INITIALIZED = True
         # auth_check() is the decisive probe: it confirms the SDK can reach the host AND the
         # keys authenticate. A True here but empty UI ⇒ wrong project/host; a False/raise ⇒
         # bad keys or unreachable host (the real cause of silent "no traces").
@@ -306,3 +315,30 @@ def flush() -> None:
         get_client().flush()
     except Exception:
         log.debug("langfuse flush failed", exc_info=True)
+
+
+def debug_trace(name: str = "debug_trace") -> dict:
+    """Create one minimal trace + score with NO LLM call and flush it — exercises the whole
+    export path (init → trace → score → flush → server) at zero cost, for diagnosing silent
+    "no traces" (F-53). Returns {trace_id, enabled, host}; trace_id is None when disabled/failed."""
+    info: dict = {"trace_id": None, "enabled": is_enabled(), "host": _resolved_host()}
+    if not is_enabled():
+        return info
+    try:
+        import time
+        from langfuse import Langfuse, get_client
+        init_langfuse()                                  # ensure the singleton exists (idempotent)
+        seed = f"{name}_{int(time.time() * 1000)}"       # unique per call → a fresh trace each hit
+        tid = Langfuse.create_trace_id(seed=seed)
+        info["trace_id"] = tid
+        lf = get_client()
+        with lf.start_as_current_observation(as_type="span", name=name,
+                                             trace_context={"trace_id": tid}):
+            pass                                         # empty root span — no children, no LLM call
+        lf.create_score(name="debug_score", value=1.0, trace_id=tid, data_type="NUMERIC")
+        lf.flush()
+        log.info("Langfuse: debug trace created name=%s trace_id=%s host=%s",
+                 name, tid, _resolved_host())
+    except Exception:
+        log.exception("Langfuse debug_trace failed")
+    return info

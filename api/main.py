@@ -58,6 +58,14 @@ def health() -> dict:
     return {"status": "ok", "service": "cv-tailor", "sessions": len(app.state.sessions.list())}
 
 
+@app.get("/api/debug/trace")
+def debug_trace() -> dict:
+    """Zero-cost Langfuse path check (F-53): create a minimal `debug_trace` + `debug_score`
+    with NO LLM call and flush, then report {trace_id, enabled, host}. Use it to confirm the
+    SDK→server export works without running the pipeline — then look for the id in the UI."""
+    return telemetry.debug_trace()
+
+
 app.include_router(corpus.router)
 app.include_router(runs.router)
 app.include_router(hitl.router)
