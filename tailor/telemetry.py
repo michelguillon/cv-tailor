@@ -45,17 +45,35 @@ def is_enabled() -> bool:
     return bool(os.getenv("LANGFUSE_PUBLIC_KEY"))
 
 
+def _resolved_host() -> str:
+    """The host the SDK will use — precedence LANGFUSE_BASE_URL → LANGFUSE_HOST → cloud default."""
+    return os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST") or "https://cloud.langfuse.com"
+
+
 def init_langfuse() -> None:
     """Initialise the Langfuse global singleton once at app startup. No-op (and
     import-safe) when unconfigured; a failed init disables tracing, never crashes boot."""
-    if not is_enabled():
+    enabled = is_enabled()
+    # DEBUG (F-53): log on every boot whether tracing is on and what host/keys the SDK sees, so
+    # "no traces" can be diagnosed from the backend log without code spelunking.
+    log.info("init_langfuse called: enabled=%s host=%s public_key_set=%s secret_key_set=%s",
+             enabled, _resolved_host(), bool(os.getenv("LANGFUSE_PUBLIC_KEY")),
+             bool(os.getenv("LANGFUSE_SECRET_KEY")))
+    if not enabled:
+        log.info("Langfuse DISABLED — LANGFUSE_PUBLIC_KEY not set in this process's environment")
         return
     try:
         from langfuse import Langfuse
-        Langfuse()
-        # SDK host precedence is LANGFUSE_BASE_URL → LANGFUSE_HOST → cloud default.
-        host = os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST") or "https://cloud.langfuse.com"
-        log.info("Langfuse tracing enabled (host=%s)", host)
+        client = Langfuse()
+        # auth_check() is the decisive probe: it confirms the SDK can reach the host AND the
+        # keys authenticate. A True here but empty UI ⇒ wrong project/host; a False/raise ⇒
+        # bad keys or unreachable host (the real cause of silent "no traces").
+        try:
+            ok = client.auth_check()
+            log.info("Langfuse init OK: host=%s auth_check=%s", _resolved_host(), ok)
+        except Exception as exc:
+            log.warning("Langfuse init: auth_check FAILED against host=%s (%s) — traces won't land",
+                        _resolved_host(), exc)
     except Exception:                                  # observability must not break startup
         log.exception("Langfuse init failed; tracing disabled")
 
@@ -151,6 +169,8 @@ def run_trace(run_id: str, *, mode: str, job_radar_source: dict | None = None):
     def obs_factory():
         from langfuse import Langfuse, get_client
         tid = Langfuse.create_trace_id(seed=run_id)
+        log.info("Langfuse: creating root trace 'cv_tailor_run' run_id=%s trace_id=%s host=%s",
+                 run_id, tid, _resolved_host())
         return get_client().start_as_current_observation(
             as_type="span", name="cv_tailor_run", trace_context={"trace_id": tid})
 
@@ -169,6 +189,7 @@ def span(name: str, *, metadata: dict | None = None):
     nest under it automatically. Set late-arriving metadata via `set_metadata(obs, ...)`."""
     def factory():
         from langfuse import get_client
+        log.debug("Langfuse: creating span %s", name)
         return get_client().start_as_current_observation(
             as_type="span", name=name, metadata=_strmeta(metadata))
 
@@ -207,6 +228,7 @@ def generation(name: str, *, model: str, input=None):
     """An LLM call span. Record output + token usage via `set_generation(obs, ...)`."""
     def factory():
         from langfuse import get_client
+        log.debug("Langfuse: creating generation %s (model=%s)", name, model)
         return get_client().start_as_current_observation(
             as_type="generation", name=name, model=model, input=input)
 
@@ -268,7 +290,9 @@ def attach_scores(run_id: str, metrics: dict | None, job_radar_source: dict | No
             scores.append(("job_radar_fit_score", float(jr_fit) / 10))
         for name, value in scores:
             lf.create_score(name=name, value=value, trace_id=tid, data_type="NUMERIC")
-        lf.flush()
+        lf.flush()                                     # force the batch out — the run thread is ending
+        log.info("Langfuse: attached %d score(s) for run %s (trace %s) and flushed",
+                 len(scores), run_id, tid)
     except Exception:
         log.exception("langfuse attach_scores failed for run %s", run_id)
 
