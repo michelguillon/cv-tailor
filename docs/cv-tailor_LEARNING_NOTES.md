@@ -447,7 +447,7 @@ failure was server/network/config and **silent** — each looked like "no traces
 (`docker exec … urlopen http://localhost:8000/api/debug/trace`), it exercises the whole export
 path and is the single triage tool for the chain below.
 
-**The four stacked causes, in order, all non-code:**
+**The five stacked causes, in order (four config, one code):**
 1. **Trace-blob S3 bucket never created** → ingest returned 200 but the server logged
    `Failed to upload JSON to S3` (F-53). A Langfuse "healthy" check must persist a span to S3,
    not just probe API liveness.
@@ -464,6 +464,14 @@ path and is the single triage tool for the chain below.
    `pk-lf/sk-lf`, so cv-tailor's traces landed in the *other* project's dashboard. `auth_check`
    still returns `true` (keys are valid) — the trace is just under the wrong project. Each app
    needs its own project's keys.
+5. **Unflushed root span (the one real code bug)** → after 1–4, `/api/debug/trace` traced but
+   *real runs didn't*. In `api/runner.target()`, `attach_scores()` (which flushes) runs *inside*
+   the `with run_trace` block — flushing while the **root span is still open** — and the daemon
+   run-thread ends right after the `with` exits, before the periodic exporter fires. The debug
+   endpoint flushes *after* its span closes, so it never hit this. Fix: `run_trace` flushes in a
+   `finally` once its root span has closed. **A span isn't exported until it's *ended*; if the
+   producing thread is about to die, flush *after* the root closes.** ✅ Verified live 2026-06-12:
+   full trace tree (root → phase → iteration → per-model generations) renders in the UI.
 
 **Two cross-cutting lessons.** (a) **App-logger INFO is invisible under uvicorn** — `tailor.*`
 logs propagate to the root last-resort handler (WARNING+ only), so `grep langfuse` on the backend

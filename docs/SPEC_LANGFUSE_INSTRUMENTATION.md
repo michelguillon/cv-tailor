@@ -498,9 +498,11 @@ queryable and joinable via IDs stored in `corpus/cv_tailor_links.jsonl`.
 3. ✅ All existing cv-tailor tests pass unchanged (328 untraced; +46 re-run *traced* to validate the
    enabled path — `tests/conftest.py` keeps the suite untraced by default)
 
-**Outstanding:** one live web run with the bucket in place, to confirm the trace renders in the
-Langfuse UI (the only step that needs the running server). Code, SDK API usage (against the real
-`langfuse 4.7.1`), and the disabled/enabled paths are all validated locally.
+**✅ Verified live (2026-06-12).** A full-mode run on a real job renders the complete trace in the
+cv-tailor Langfuse project: the `cv_tailor_run` root (~8–10 min) with nested
+`phase2_initial_draft → phase3_refinement → iteration_1/iteration_2` spans, and generations for
+every model (`mistral_extraction`, `claude-sonnet-4`, `gpt-4o-mini`, `claude-haiku-4-5`) with
+token/latency. The final blocker was a run-path flush bug, not config — see §10.6 / F-54.
 
 ## 7. Definition of Done — Job Radar (Phase B)
 
@@ -650,12 +652,28 @@ still returns `true` (the keys are valid), the traces just appear under the *oth
 app must use **its own project's keys** (§2.1 / §3.1 specify one project each). Symptom:
 `auth_check:true`, endpoint returns a `trace_id`, but the cv-tailor dashboard is empty.
 
-### 10.5 The full failure chain we hit (all server/config, none code)
+### 10.5 The full failure chain we hit (server/config + one run-path bug)
 
 1. Trace-blob **S3 bucket didn't exist** → ingest 200 but `Failed to upload JSON to S3` (§9).
 2. Backend used the **public URL** it couldn't reach from inside Docker → fixed to the internal host (10.2).
 3. **`auth_check` in startup** hung the lifespan → backend refused `:8000` (10.3).
 4. **Shared key pair** → traces landed in the Job Radar project's dashboard (10.4).
+5. **Unflushed root span** → `/api/debug/trace` traced but real runs didn't (10.6).
 
 Each looked like "no traces" with no obvious error. The `/api/debug/trace` JSON (`enabled` →
-`auth_check` → `trace_id` → check the *right* project) collapses all four into a quick triage.
+`auth_check` → `trace_id` → check the *right* project) collapses 1–4 into a quick triage; #5 was
+the run-path-only bug it couldn't catch (the debug endpoint flushes after its span closes).
+
+### 10.6 The run-path flush bug — debug traced, real runs didn't
+
+After 1–4 were fixed, `/api/debug/trace` landed traces but **real runs still didn't**. Cause: in
+`api/runner.target()`, `attach_scores()` (which calls `flush()`) runs *inside* the
+`with run_trace` block — so it flushes while the **root span is still open**. The root span only
+closes when the `with` exits, and nothing flushed after that, so the completed root span depended
+on Langfuse's periodic exporter — but the daemon run-thread ends right there. The debug endpoint
+never hit this because it flushes *after* its span closes. Fix: `run_trace` flushes in a `finally`,
+after its own root span closes (`tailor/telemetry.run_trace`). **Lesson: a span isn't exported
+until it's *ended*; if the producing thread is about to die, flush *after* the root closes, not
+before.** Diagnosed with three WARNING-level logs (INFO is dropped by uvicorn, 10.3) bracketing the
+run path — ENTER / root-span-created / attach_scores-flushed — which showed the first two firing
+but never the third *for a completed run*.
