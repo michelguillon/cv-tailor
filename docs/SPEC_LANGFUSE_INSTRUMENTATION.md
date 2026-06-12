@@ -585,3 +585,77 @@ an API liveness probe.
 **Files touched:** `+tailor/telemetry.py`, `+tests/conftest.py`, `requirements.txt`,
 `tailor/helpers.py`, `tailor/run.py`, `tailor/phases/phase3_refinement.py`, `api/main.py`,
 `api/runner.py`. No business logic, prompts, schemas, or existing tests changed.
+
+---
+
+## 10. Debug + operations — verifying the trace path at zero cost (F-54)
+
+Getting traces to actually land took longer than wiring the SDK, because the failure modes were
+all **server/network/config**, not code — and each was silent. This section is the runbook.
+
+### 10.1 `GET /api/debug/trace` — the zero-cost path check
+
+`api/main.py` exposes an unauthenticated debug endpoint that creates a minimal `debug_trace`
+(empty root span + one `debug_score = 1.0`) and flushes it — **no LLM call, no pipeline, $0**. It
+exercises the entire export path (init → trace → score → flush → server) and returns the verdict
+as JSON:
+
+```bash
+docker exec cv-tailor-backend python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/api/debug/trace').read())"
+# {"trace_id":"…","enabled":true,"host":"http://langfuse-langfuse-web-1:3000","auth_check":true,"error":null}
+```
+
+Read it as a decision tree — **the JSON is the diagnostic, not the logs** (see 10.3):
+- `enabled:false` → `LANGFUSE_PUBLIC_KEY` not in the backend container's env.
+- `auth_check:false` + `error` → host unreachable or keys invalid from inside the container.
+- `auth_check:true` + a `trace_id` that **appears in the UI** → the whole path works.
+- `auth_check:true` but the trace **isn't in the UI** → it's in a *different project* (see 10.4).
+
+`localhost:8000` here is correct: it runs *inside* `cv-tailor-backend`, hitting uvicorn directly —
+the right way to isolate "is the backend serving?" from the Caddy/nginx/tunnel chain. "Container
+Started" (Docker) ≠ "uvicorn listening" (app ready), so allow a few seconds / look for
+`Uvicorn running on http://0.0.0.0:8000` before calling it.
+
+### 10.2 Networking — point the backend at the *internal* host
+
+The homeserver runs cv-tailor behind a Cloudflare Tunnel → Caddy. The backend container **cannot**
+hairpin to its own public URL (`https://langfuse.michel-portfolio.co.uk`) from inside the Docker
+network. It must reach Langfuse over the **shared Docker network by container name**:
+
+```
+LANGFUSE_BASE_URL=http://langfuse-langfuse-web-1:3000     # internal; NOT the public https URL
+```
+
+Requires the cv-tailor backend and the Langfuse stack to share a network (here, the external
+`caddy` network). SDK host precedence is `LANGFUSE_BASE_URL` → `LANGFUSE_HOST` → cloud default.
+
+### 10.3 Startup must not block; logs are nearly invisible — so diagnose via the response
+
+- **Never probe an external service in the FastAPI lifespan.** `init_langfuse()` originally called
+  `auth_check()` (a synchronous, no-timeout HTTP call) at startup. uvicorn only binds `:8000`
+  *after* lifespan startup completes, so a slow Langfuse host hung boot → the backend refused
+  connections (`ConnectionRefusedError [111]`). Fix: `init_langfuse()` only constructs the client
+  (fast, no network); `auth_check()` lives in `/api/debug/trace` (request-time, can't wedge boot).
+- **App-logger INFO is swallowed under uvicorn.** `tailor.telemetry` logs propagate to the root
+  logger, which has only the last-resort handler (WARNING+), so `docker logs … | grep langfuse`
+  comes back empty even when tracing runs fine. That's why the decisive signals (`auth_check`,
+  `trace_id`, `error`) are returned in the endpoint's **JSON body**, not relied on in logs.
+
+### 10.4 One key pair per project — or traces land in the wrong dashboard
+
+Langfuse API keys are **per project**. Reusing a single `pk-lf-…`/`sk-lf-…` pair across cv-tailor
+*and* Job Radar sends both apps' traces into whichever project those keys belong to — `auth_check`
+still returns `true` (the keys are valid), the traces just appear under the *other* project. Each
+app must use **its own project's keys** (§2.1 / §3.1 specify one project each). Symptom:
+`auth_check:true`, endpoint returns a `trace_id`, but the cv-tailor dashboard is empty.
+
+### 10.5 The full failure chain we hit (all server/config, none code)
+
+1. Trace-blob **S3 bucket didn't exist** → ingest 200 but `Failed to upload JSON to S3` (§9).
+2. Backend used the **public URL** it couldn't reach from inside Docker → fixed to the internal host (10.2).
+3. **`auth_check` in startup** hung the lifespan → backend refused `:8000` (10.3).
+4. **Shared key pair** → traces landed in the Job Radar project's dashboard (10.4).
+
+Each looked like "no traces" with no obvious error. The `/api/debug/trace` JSON (`enabled` →
+`auth_check` → `trace_id` → check the *right* project) collapses all four into a quick triage.

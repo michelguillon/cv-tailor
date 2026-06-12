@@ -359,6 +359,12 @@ CV list with per-row [Edit Metadata] / [Replace .docx] / [Delete]
 {"type": "run_complete", "run_id": "...", "cost_total_usd": 0.048}
 ```
 
+**Reconnect resilience (F-55):** the stream traverses Cloudflare → tunnel → Caddy → nginx, any of
+which can drop a long-lived connection. The client lets EventSource auto-reconnect (a transient
+"Reconnecting…" badge on `readyState===CONNECTING`, a hard error only on `CLOSED`) and dedupes the
+backend's buffer replay by event `seq`; the backend sends a `ping` every 10s, a `connected` event
+on open (early bytes), and `id: <seq>` per event. A drop is a self-healing blip, not a fatal error.
+
 ### HITL interaction patterns
 
 | Checkpoint | Interaction | Haiku call? |
@@ -482,8 +488,12 @@ as trace scores. `run_id`+`job_id` ride in metadata as cross-system join keys (t
 traces). Unset key ⇒ a clean no-op (the CLI and tests run untraced). `tailor/telemetry.py` is
 the only SDK importer; the root trace is opened on the run's worker thread (`api/runner`, not
 `launch_run` — OTel context is thread-local), with generations captured at the
-`claude_complete`/`gpt_complete` chokepoint. Full design + the self-hosted-server prerequisite
-(the trace-blob S3 bucket must exist) in `docs/SPEC_LANGFUSE_INSTRUMENTATION.md`.
+`claude_complete`/`gpt_complete` chokepoint. **`GET /api/debug/trace`** (F-54) creates a minimal
+trace with no LLM call ($0) and returns `{trace_id, enabled, host, auth_check, error}` — the
+self-diagnosing path check for "no traces". On the homeserver the backend must reach Langfuse by
+the **internal** Docker address (`LANGFUSE_BASE_URL=http://langfuse-langfuse-web-1:3000`), not the
+public URL (no hairpin), and each app needs its **own** project's keys (shared keys → wrong
+dashboard). Full design + the deploy/network runbook in `docs/SPEC_LANGFUSE_INSTRUMENTATION.md` §10.
 
 ---
 

@@ -412,6 +412,68 @@ what changed (if anything).*
 
 ---
 
+### F-55 — SSE reconnect resilience: a transient proxy/tunnel drop is now a self-healing blip, not a fatal error
+
+**What.** The run-progress SSE stream (`/api/runs/{id}/stream`) traverses three proxies on the
+homeserver — Cloudflare edge → cloudflared tunnel → Caddy → the frontend nginx — any of which can
+cut a long-lived connection during a slow phase or a HITL wait. Two changes stop a drop from
+surfacing as "Lost connection to the run stream" and aborting the UI.
+
+**Frontend was killing EventSource's own auto-reconnect (the real fix).** `RunPage.tsx`'s
+`es.onerror` immediately called `finish()` → `es.close()`, defeating the browser's built-in
+reconnect (with `Last-Event-ID` + backoff). Now it branches on `es.readyState`: **CONNECTING** →
+EventSource is already retrying, so show a transient "Reconnecting…" badge and leave it open;
+**CLOSED** → it gave up, *then* surface the error. The backend already replays its event buffer
+from seq 0 on reconnect, so the run continues seamlessly — a `lastSeqRef` seq-dedup drops the
+replay so the timeline doesn't double-append or re-fire HITL panels. A disconnect that spans
+`run_complete` even recovers: the buffered terminal event arrives on reconnect and renders.
+
+**Backend hardening (`runs.py`).** `ping=10` (was the 15s default) for more margin under proxy
+idle timeouts; emit a `connected` event immediately on stream open so the proxy chain sees bytes
+within Cloudflare's ~100s time-to-first-byte window during a slow Phase 0; `id: <seq>` on every
+event so `Last-Event-ID` is set for resume. nginx was already correct (`proxy_buffering off`,
+3600s) — the gap was the client treating a recoverable blip as fatal, plus the outer CF/tunnel
+layers the app doesn't control.
+
+---
+
+### F-54 — Langfuse debug endpoint + the silent server/config failure chain (SPEC §10)
+
+**What.** Getting traces to *land* took far longer than wiring the SDK (F-53), because every
+failure was server/network/config and **silent** — each looked like "no traces, no errors". Added
+`GET /api/debug/trace` (`api/main.py` → `telemetry.debug_trace`): it creates a minimal
+`debug_trace` + `debug_score` with **no LLM call** ($0), flushes, and returns
+`{trace_id, enabled, host, auth_check, error}`. Runnable from inside the container
+(`docker exec … urlopen http://localhost:8000/api/debug/trace`), it exercises the whole export
+path and is the single triage tool for the chain below.
+
+**The four stacked causes, in order, all non-code:**
+1. **Trace-blob S3 bucket never created** → ingest returned 200 but the server logged
+   `Failed to upload JSON to S3` (F-53). A Langfuse "healthy" check must persist a span to S3,
+   not just probe API liveness.
+2. **Public host unreachable from inside Docker** → the backend can't hairpin to its own
+   Cloudflare URL; it must reach Langfuse by container name over a shared network
+   (`LANGFUSE_BASE_URL=http://langfuse-langfuse-web-1:3000`). SDK precedence:
+   `LANGFUSE_BASE_URL` → `LANGFUSE_HOST` → cloud default.
+3. **`auth_check()` in the FastAPI lifespan hung startup** → uvicorn binds `:8000` only after
+   startup completes, so a synchronous, no-timeout probe to a slow host left the backend refusing
+   connections (`ConnectionRefusedError [111]`). **Never probe an external service at startup.**
+   `init_langfuse()` now only constructs the client; `auth_check()` lives in the debug endpoint
+   (request-time).
+4. **One key pair shared across projects** → cv-tailor and Job Radar reused the same
+   `pk-lf/sk-lf`, so cv-tailor's traces landed in the *other* project's dashboard. `auth_check`
+   still returns `true` (keys are valid) — the trace is just under the wrong project. Each app
+   needs its own project's keys.
+
+**Two cross-cutting lessons.** (a) **App-logger INFO is invisible under uvicorn** — `tailor.*`
+logs propagate to the root last-resort handler (WARNING+ only), so `grep langfuse` on the backend
+log is empty even when tracing works; the decisive signals therefore ride in the endpoint's JSON,
+not the logs. (b) **A zero-cost, self-diagnosing endpoint** (`enabled` → `auth_check` → `trace_id`
+→ check the right project) collapses a multi-layer, silent failure into a 5-second triage — worth
+building early for any externally-exported observability.
+
+---
+
 ### F-53 — Langfuse instrumentation (SPEC_LANGFUSE_INSTRUMENTATION): opt-in tracing via one module; root trace on the run thread
 
 **What.** Added Langfuse v4 (OTel-based) observability: a run produces one trace
