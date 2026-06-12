@@ -676,4 +676,6 @@ after its own root span closes (`tailor/telemetry.run_trace`). **Lesson: a span 
 until it's *ended*; if the producing thread is about to die, flush *after* the root closes, not
 before.** Diagnosed with three WARNING-level logs (INFO is dropped by uvicorn, 10.3) bracketing the
 run path — ENTER / root-span-created / attach_scores-flushed — which showed the first two firing
-but never the third *for a completed run*.
+but never the third *for a completed run*. Now trimmed to a single kept confirmation —
+`Langfuse trace created: run_id=… trace_id=…` (WARNING, so it shows; one line per run to correlate
+a run with its trace) — the other two downgraded to DEBUG.
