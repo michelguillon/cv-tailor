@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from corpus.retrieval import all_sections
-from tailor import cost
+from tailor import cost, telemetry
 from tailor.candidate import load_cvcm
 from tailor.config import load_budgets, load_config, resolve_run_config
 from tailor.phases import phase4_hitl, phase5_validation
@@ -135,10 +135,18 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # cost-noting helper (it uses the Mistral client directly), so note its usage
         # here. Phase 1+ go through claude_complete/gpt_complete, which note themselves.
         emit("phase_start", phase="phase0_jd_analysis", label="JD analysis")
-        jd, rubric, jd_usage = analyse_jd(jd_text, model=rc.jd_model)
-        if jd_usage is not None:
-            cost.note(rc.jd_model, getattr(jd_usage, "prompt_tokens", 0) or 0,
-                      getattr(jd_usage, "completion_tokens", 0) or 0)
+        with telemetry.span("phase0_jd_analysis") as _sp0, \
+                telemetry.generation("mistral_extraction", model=rc.jd_model, input=jd_text) as _gen0:
+            jd, rubric, jd_usage = analyse_jd(jd_text, model=rc.jd_model)
+            if jd_usage is not None:
+                in_tok = getattr(jd_usage, "prompt_tokens", 0) or 0
+                out_tok = getattr(jd_usage, "completion_tokens", 0) or 0
+                cost.note(rc.jd_model, in_tok, out_tok)
+                telemetry.set_generation(_gen0, input_tokens=in_tok, output_tokens=out_tok,
+                                         output={"role_title": jd.role_title,
+                                                 "seniority_level": jd.seniority_level,
+                                                 "required_keywords": rubric.required_keywords})
+            telemetry.set_metadata(_sp0, role_title=jd.role_title, seniority_level=jd.seniority_level)
         ctx.write_checkpoint("phase0_jd_analysis", jd)
         ctx.write_checkpoint("phase0_rubric", rubric)
         ctx.audit.log_event("phase0", "jd_analysed", f"{jd.role_title} ({jd.seniority_level})",
@@ -150,8 +158,14 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         emit("phase_start", phase="phase1_fit_assessment", label="Fit assessment")
         sections = all_sections(config)
         ctx.audit.log_event("phase1", "cvcm", "value model loaded" if cvcm else "no value model (optional)")
-        fit, _ = assess_fit(jd, rubric, model=rc.orchestrator_model, config=config,
-                            sections=sections, cvcm=cvcm)
+        with telemetry.span("phase1_fit_assessment") as _sp1:
+            # The fit-assessment Claude call traces itself as a generation inside claude_complete,
+            # nesting here automatically; this span just carries the phase-level verdict metadata.
+            fit, _ = assess_fit(jd, rubric, model=rc.orchestrator_model, config=config,
+                                sections=sections, cvcm=cvcm)
+            telemetry.set_metadata(_sp1, outcome=fit.outcome,
+                                   overall_fit_score=round(fit.overall_fit_score, 4),
+                                   cvcm_enabled=cvcm is not None)
         ctx.write_checkpoint("phase1_fit_assessment", fit)
         emit("phase_complete", phase="phase1_fit_assessment",
              outcome=fit.outcome, fit_score=round(fit.overall_fit_score, 3), hitl_required=True)
@@ -172,20 +186,28 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
 
         # Phase 2 — initial draft (Claude)
         emit("phase_start", phase="phase2_initial_draft", label="Initial draft")
-        manifest = draft_sections(fit, jd, rubric, sections, budgets, ctx,
-                                  model=rc.orchestrator_model, cvcm=cvcm)
+        with telemetry.span("phase2_initial_draft") as _sp2:
+            manifest = draft_sections(fit, jd, rubric, sections, budgets, ctx,
+                                      model=rc.orchestrator_model, cvcm=cvcm)
+            telemetry.set_metadata(_sp2, sections=len(manifest))
         emit("phase_complete", phase="phase2_initial_draft", sections=len(manifest))
 
         # Phase 3 — dual-writer refinement loop (emits per-section + per-iteration events)
         emit("phase_start", phase="phase3_refinement", label="Refinement loop",
              max_iterations=rc.max_iterations)
-        result = refine(manifest, jd, rubric, budgets, ctx,
-                        model=rc.orchestrator_model, gpt_model=rc.gpt_model,
-                        max_iterations=rc.max_iterations,
-                        keyword_delta_threshold=rc.keyword_delta_threshold,
-                        critique_delta_threshold=rc.critique_delta_threshold,
-                        max_rubric_additions=rc.max_rubric_additions,
-                        on_event=on_event, cvcm=cvcm)
+        with telemetry.span("phase3_refinement") as _sp3:
+            # refine() opens a child span per iteration; the writer/orchestrator generations
+            # (via claude_complete/gpt_complete) nest under those automatically.
+            result = refine(manifest, jd, rubric, budgets, ctx,
+                            model=rc.orchestrator_model, gpt_model=rc.gpt_model,
+                            max_iterations=rc.max_iterations,
+                            keyword_delta_threshold=rc.keyword_delta_threshold,
+                            critique_delta_threshold=rc.critique_delta_threshold,
+                            max_rubric_additions=rc.max_rubric_additions,
+                            on_event=on_event, cvcm=cvcm)
+            telemetry.set_metadata(_sp3, iterations_run=len(result.iterations),
+                                   converged=result.converged,
+                                   convergence_reason=result.convergence_reason)
         rubric = result.final_rubric
         emit("phase_complete", phase="phase3_refinement",
              converged=result.converged, convergence_reason=result.convergence_reason,
@@ -196,16 +218,24 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # unsupported claim as a major review item, so fabrication is shown to the human
         # (and recorded for the report) before anything ships — never silently.
         emit("phase_start", phase="phase4_hitl", label="Human review")
-        flags = verifier.verify_run(ctx, result.manifest, model=rc.validation_model)
-        flag_count = _merge_verification_flags(ctx, result, flags)
+        # The grounding check (Haiku verifier) is the traced unit — its generations nest in this
+        # span. Human review (hitl.review) is left untraced: it can block on a person indefinitely.
+        with telemetry.span("phase4_grounding") as _sp4:
+            flags = verifier.verify_run(ctx, result.manifest, model=rc.validation_model)
+            flag_count = _merge_verification_flags(ctx, result, flags)
+            grounded_coverage = result.iterations[-1].keyword_coverage if result.iterations else None
+            telemetry.set_metadata(_sp4, fabrication_flags=flag_count,
+                                   grounded_coverage=grounded_coverage)
         hitl.review(ctx, result, jd, rubric, budgets, rc)
         emit("phase_complete", phase="phase4_hitl", fabrication_flags=flag_count)
 
         # Phase 5 — formatting validation (Haiku) + assembled length check
         emit("phase_start", phase="phase5_validation", label="Formatting")
-        corrections = phase5_validation.validate_formatting(ctx, result.manifest,
-                                                            model=rc.validation_model)
-        length = phase5_validation.assembled_length_check(result.manifest, budgets)
+        with telemetry.span("phase5_validation") as _sp5:
+            corrections = phase5_validation.validate_formatting(ctx, result.manifest,
+                                                                model=rc.validation_model)
+            length = phase5_validation.assembled_length_check(result.manifest, budgets)
+            telemetry.set_metadata(_sp5, corrections=len(corrections))
         if corrections and hitl.formatting(corrections, length):
             phase5_validation.apply_corrections(ctx, corrections, result.manifest)
         emit("phase_complete", phase="phase5_validation", corrections=len(corrections))
@@ -226,9 +256,11 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # state (versions all 0); without this the run dir isn't self-describing and a report
         # can't be regenerated faithfully from disk (F-40).
         ctx.write_checkpoint("final_manifest", result.manifest)
-        out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations,
-                              config=config, source_docx=source_docx, verification_flags=flags,
-                              jd_raw=jd_text)
+        with telemetry.span("phase6_output") as _sp6:
+            out = generate_output(ctx, result.manifest, jd, fit, rubric, result.iterations,
+                                  config=config, source_docx=source_docx, verification_flags=flags,
+                                  jd_raw=jd_text)
+            telemetry.set_metadata(_sp6, sections=len(result.manifest), docx=bool(out.get("docx")))
         emit("phase_complete", phase="phase6_output")
 
         footer = _finalise(ctx, tracker, rc, iterations_run=len(result.iterations))

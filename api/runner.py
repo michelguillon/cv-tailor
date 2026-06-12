@@ -25,6 +25,7 @@ from pathlib import Path
 
 from api.job_radar import cv_tailor_base_url, post_results_to_job_radar, service_key
 from api.run_meta import read_meta
+from tailor import telemetry
 from tailor.audit import AuditLogger, utc_now_iso
 from tailor.config import cv_display_name, load_config, resolve_run_config
 from tailor.phases import phase1_fit_assessment, phase4_hitl
@@ -300,22 +301,37 @@ def launch_run(store, session, jd_text, *, mode="demo", key=None, max_iterations
         rc = resolve_run_config(load_config(), mode=mode, key=key, max_iterations=max_iterations)
         hitl = SSEHITL(session, validation_model=rc.validation_model)
 
+    # Langfuse trace metadata: read the run's Job Radar provenance once up front (write-once at
+    # run creation, Integration §5.2). The durable run dir is under output_dir (where the pipeline
+    # writes checkpoints + run_meta.json), NOT store.base_dir (the session tmp holding only jd.txt).
+    # Absent ⇒ None ⇒ a plain cv_tailor_run trace.
+    run_dir = Path(output_dir) / session.run_id
+    job_radar_source = read_meta(run_dir).get("job_radar_source") or None
+
     def target() -> None:
         try:
             session.set_status("running")
-            summary = run_pipeline(
-                str(jd_path), mode=mode, key=key, max_iterations=max_iterations,
-                output_dir=output_dir, hitl=hitl, run_id=session.run_id,
-                on_event=session.add_event,
-            )
-            session.result = summary
-            # Phase 3 (Integration §6): if this run came from Job Radar, POST metrics back. Runs
-            # AFTER run_complete (already streamed) but BEFORE terminal status, so the trailing
-            # job_radar_linked event is still delivered over the open stream. Never raises.
-            try:
-                _link_back_to_job_radar(session, summary, output_dir)
-            except Exception:                              # defensive — callback must not break completion
-                log.exception("job radar callback path errored for run %s", session.run_id)
+            # Open the Langfuse root trace HERE — on the run thread — so every phase span nests
+            # under it (OTel context is thread-local; decorating launch_run, which only spawns
+            # this thread, would orphan them — F-53). No-op unless LANGFUSE_PUBLIC_KEY is set.
+            with telemetry.run_trace(session.run_id, mode=mode, job_radar_source=job_radar_source):
+                summary = run_pipeline(
+                    str(jd_path), mode=mode, key=key, max_iterations=max_iterations,
+                    output_dir=output_dir, hitl=hitl, run_id=session.run_id,
+                    on_event=session.add_event,
+                )
+                session.result = summary
+                # Phase 3 (Integration §6): if this run came from Job Radar, POST metrics back. Runs
+                # AFTER run_complete (already streamed) but BEFORE terminal status, so the trailing
+                # job_radar_linked event is still delivered over the open stream. Never raises.
+                try:
+                    _link_back_to_job_radar(session, summary, output_dir)
+                except Exception:                          # defensive — callback must not break completion
+                    log.exception("job radar callback path errored for run %s", session.run_id)
+                # Attach the run's scores to its Langfuse trace (best-effort; never raises). Reuses
+                # the same metrics the Job Radar callback assembles from on-disk checkpoints (§2.6).
+                telemetry.attach_scores(session.run_id, _callback_metrics(run_dir, summary),
+                                        job_radar_source=job_radar_source)
             session.set_status("complete")
         except PipelineStop as exc:                # no_fit / human stop
             session.error = str(exc)

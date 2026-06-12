@@ -25,6 +25,10 @@ uvicorn[standard]>=0.30
 sse-starlette>=2.1
 python-multipart>=0.0.9          # multipart/form-data for CV upload (UI Step 2)
 
+# Observability (opt-in) — Langfuse v4, OTel-based (SPEC_LANGFUSE_INSTRUMENTATION). Tracing is a
+# clean no-op when LANGFUSE_PUBLIC_KEY is unset, so tests + the CLI run untraced (tailor/telemetry.py).
+langfuse>=4.0.0
+
 # Tests
 pytest>=8.0
 httpx>=0.27                      # FastAPI/Starlette TestClient transport

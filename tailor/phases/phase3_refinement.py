@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
+from tailor import telemetry
 from tailor.models import IterationScore, ScoringRubric, SectionScore, WriterDraft
 from tailor.tools import claude_writer, gpt_writer, orchestrator_tool
 from tailor.tools.gpt_writer import WriterError
@@ -185,6 +186,10 @@ def refine(
         if not active:
             converged, reason = True, "all_sections_converged"
             break
+        # Per-iteration span (no-op when tracing is off). Opened manually so the long body
+        # below isn't re-indented; the writer/orchestrator generations nest under it. Closed
+        # just before the loop break/continue (see `_close_iter()`).
+        _itsp, _close_iter = telemetry.open_span(f"iteration_{n}")
         is_final = (n == max_iterations)
 
         section_scores: dict[str, SectionScore] = {}
@@ -349,6 +354,8 @@ def refine(
                         f"{newly_frozen} frozen, {remaining_active} active",
                         iteration=n, keyword_score=agg_keyword, critique_score=agg_quality,
                         rubric_version=rubric.version)
+        telemetry.set_metadata(_itsp, keyword_coverage=agg_keyword, critique_score=agg_quality,
+                               sections_converged=newly_frozen, sections_active=remaining_active)
 
         # termination (D-05). Most informative reason first; never exceed max.
         zero_major = major_total == 0
@@ -363,6 +370,7 @@ def refine(
             converged, reason = False, "max_iterations"
 
         prev_keyword, prev_quality = agg_keyword, agg_quality
+        _close_iter()                          # close the iteration span before continue/break
         if reason:
             break
 

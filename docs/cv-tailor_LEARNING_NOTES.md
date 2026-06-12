@@ -412,6 +412,59 @@ what changed (if anything).*
 
 ---
 
+### F-53 — Langfuse instrumentation (SPEC_LANGFUSE_INSTRUMENTATION): opt-in tracing via one module; root trace on the run thread
+
+**What.** Added Langfuse v4 (OTel-based) observability: a run produces one trace
+(`cv_tailor_run`) with a span per phase, a span per Phase-3 iteration, a generation per LLM
+call (with token usage), and `fit_score`/`coverage_score`/`cv_quality_score`/`job_radar_fit_score`
+attached as scores. **Tracing only — no business logic, prompt, or existing-test changes.**
+
+**Threading: the spec's `@observe()`-on-`launch_run` would orphan every span.** Langfuse v4
+nests observations via OTel context, which is **thread-local**. But `api/runner.launch_run`
+only *spawns* a daemon thread (`target()`) and returns — the pipeline (and all phase calls) run
+on that thread. So the root trace is opened **inside `target()`**, wrapping `run_pipeline`, not
+by decorating `launch_run`. The spec's illustrative code (decorating `launch_run`) predates the
+threaded runner and would have produced a root trace with zero children plus N orphan phase
+traces. The spec's exact code is acknowledged-illustrative (written against v2, signatures don't
+match the real phases either), so this is an adaptation, not a divergence.
+
+**Deterministic trace id from `run_id`.** There's no persistent trace object after the run thread
+exits, so scores are attached post-hoc by `lf.create_score(trace_id=…)`. For that id to match the
+trace, the root span claims a deterministic id — `Langfuse.create_trace_id(seed=run_id)` — and
+`attach_scores` re-derives the same id. `run_id` also rides in trace metadata as the cross-system
+lookup key (join with Job Radar traces).
+
+**One module imports the SDK (`tailor/telemetry.py`) — the observability analogue of `helpers.py`.**
+Everything traces through its context managers, which are **clean no-ops when `LANGFUSE_PUBLIC_KEY`
+is unset** and **swallow their own errors** (observability must never break a run) while **never
+masking an exception from the wrapped body** (record on the span, then re-raise). Generations are
+captured in `helpers.claude_complete`/`gpt_complete` — the same chokepoint where usage is already
+tapped for `cost.py` (D-02) — so *every* Claude/GPT call across all phases gets a generation with
+real token counts for free, with no signature changes to the writer/orchestrator tools (their
+calls weren't returning usage). Phase 0's Mistral call doesn't go through those helpers, so its
+generation is created in `run.py` from the usage `analyse_jd` already returns.
+
+**Phase-3 iteration span without re-indenting the loop.** The iteration body is ~175 lines; a
+`with` block would have re-indented all of it (transcription risk in a delicate degradation/
+pushback loop). Instead `telemetry.open_span()` returns `(obs, close)` and is entered/closed
+linearly (`__enter__` activates the span in the OTel contextvar, so child generations still nest);
+`close()` runs just before the loop's break/continue. Trade-off: a mid-iteration exception leaves
+that one span unclosed — acceptable, the run is already aborting and the root span still closes.
+
+**Tests stay untraced via `tests/conftest.py`, not by relying on env.** `docker-compose.yml` loads
+`.env` (which carries the real key) into the `cli` container, so the suite would otherwise run
+*traced* — exporting mock-data spans to the production Langfuse server. `conftest.py` pops
+`LANGFUSE_PUBLIC_KEY` before any `is_enabled()` call, matching the spec's "tests pass with no key"
+contract and keeping test noise out of prod. The self-hosted host is read from `LANGFUSE_BASE_URL`
+(the SDK's precedence is `LANGFUSE_BASE_URL` → `LANGFUSE_HOST` → cloud default), which the existing
+`.env` already sets correctly.
+
+**Reuse:** generations piggyback on the existing `cost.note` chokepoint; scores reuse
+`_callback_metrics` (F-52) and `job_radar_source` (F-51); the no-op-by-config pattern mirrors the
+Job Radar callback's `service_key()` opt-in (F-52).
+
+---
+
 ### F-52 — Job Radar callback built (Integration §6): cv-tailor POSTs run metrics back on completion
 
 **What.** Phase 3 closes the loop: when a run that came from Job Radar (`run_meta.json` carries

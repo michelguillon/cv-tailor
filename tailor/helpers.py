@@ -26,7 +26,7 @@ import openai
 from mistralai.client import Mistral
 from mistralai.client.errors import MistralError
 
-from tailor import cost
+from tailor import cost, telemetry
 
 __all__ = [
     "get_mistral_client",
@@ -53,6 +53,22 @@ log = logging.getLogger("tailor.helpers")
 import re as _re
 
 _TRAILING_TAG = _re.compile(r"\s*<\/?[a-zA-Z_][\w.\-]*(?:\s[^<>]*)?/?>\s*$")
+
+
+def _anthropic_output(resp):
+    """Compact, JSON-safe view of a Claude response for the trace (text + tool calls);
+    None on any shape surprise — observability never reaches into the hot path."""
+    try:
+        parts = []
+        for b in resp.content:
+            t = getattr(b, "type", None)
+            if t == "text":
+                parts.append(getattr(b, "text", ""))
+            elif t == "tool_use":
+                parts.append({"tool": getattr(b, "name", None), "input": getattr(b, "input", None)})
+        return parts or None
+    except Exception:
+        return None
 
 
 def strip_tool_artifacts(text: str | None) -> str | None:
@@ -255,14 +271,21 @@ def claude_complete(
         kwargs["tools"] = tools
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
-    resp = call_with_retry(client.messages.create, retryable_exc=anthropic.APIError, **kwargs)
-    u = getattr(resp, "usage", None)
-    if u is not None:
-        # cached tokens count as input for the estimate (caching is a no-op at our scale, F-22)
-        in_tok = ((getattr(u, "input_tokens", 0) or 0)
-                  + (getattr(u, "cache_creation_input_tokens", 0) or 0)
-                  + (getattr(u, "cache_read_input_tokens", 0) or 0))
-        cost.note(model, in_tok, getattr(u, "output_tokens", 0) or 0)
+    # One generation span per call (no-op when tracing is off). It nests under whatever
+    # phase/iteration span is current on this thread, so every Claude call in the pipeline
+    # is captured with its token usage — at the same chokepoint cost.py already taps (D-02).
+    with telemetry.generation(model, model=model, input=messages) as gen:
+        resp = call_with_retry(client.messages.create, retryable_exc=anthropic.APIError, **kwargs)
+        u = getattr(resp, "usage", None)
+        if u is not None:
+            # cached tokens count as input for the estimate (caching is a no-op at our scale, F-22)
+            in_tok = ((getattr(u, "input_tokens", 0) or 0)
+                      + (getattr(u, "cache_creation_input_tokens", 0) or 0)
+                      + (getattr(u, "cache_read_input_tokens", 0) or 0))
+            out_tok = getattr(u, "output_tokens", 0) or 0
+            cost.note(model, in_tok, out_tok)
+            telemetry.set_generation(gen, output=_anthropic_output(resp),
+                                     input_tokens=in_tok, output_tokens=out_tok)
     return resp
 
 
@@ -293,8 +316,16 @@ def gpt_complete(
     }
     if response_format is not None:
         kwargs["response_format"] = response_format
-    resp = call_with_retry(client.chat.completions.create, retryable_exc=openai.APIError, **kwargs)
-    u = getattr(resp, "usage", None)
-    if u is not None:
-        cost.note(model, getattr(u, "prompt_tokens", 0) or 0, getattr(u, "completion_tokens", 0) or 0)
+    with telemetry.generation(model, model=model, input=messages) as gen:   # no-op when tracing is off
+        resp = call_with_retry(client.chat.completions.create, retryable_exc=openai.APIError, **kwargs)
+        u = getattr(resp, "usage", None)
+        if u is not None:
+            in_tok = getattr(u, "prompt_tokens", 0) or 0
+            out_tok = getattr(u, "completion_tokens", 0) or 0
+            cost.note(model, in_tok, out_tok)
+            try:
+                output = resp.choices[0].message.content
+            except Exception:
+                output = None
+            telemetry.set_generation(gen, output=output, input_tokens=in_tok, output_tokens=out_tok)
     return resp
