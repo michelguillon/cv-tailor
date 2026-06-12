@@ -412,6 +412,59 @@ what changed (if anything).*
 
 ---
 
+### F-52 — Job Radar callback built (Integration §6): cv-tailor POSTs run metrics back on completion
+
+**What.** Phase 3 closes the loop: when a run that came from Job Radar (`run_meta.json` carries
+`job_radar_source.job_id`) completes, cv-tailor POSTs summary metrics back to Job Radar's
+`POST /api/cv-tailor-results` with `Authorization: Bearer <JOB_RADAR_SERVICE_KEY>`. The pipeline,
+HITL, and run-completion behaviour are unchanged; this is a best-effort side effect after the run.
+
+**Opt-in by configuration, not code (`service_key()`).** The callback fires only when
+`JOB_RADAR_SERVICE_KEY` is set. Unset ⇒ skipped silently, and the run behaves exactly as in Phase 2.
+A deployment enables Phase 3 by setting the env var — no rebuild, no flag in code. `post_results_to_
+job_radar()` also no-ops without the key as a second guard.
+
+**Synchronous httpx, not async (deviation from the prompt's `AsyncClient`/`create_task`).** The
+prompt assumed an async completion handler, but `run_pipeline` finishes on a **worker thread** with
+no event loop (`api/runner.py:launch_run`), so `asyncio.create_task` would raise "no running event
+loop". A sync `httpx.post` (mirroring the existing `fetch_job`) is the consistent, correct bridge —
+called from the run thread after `run_complete`. It is the *only* module touching the network here,
+like `fetch_job`. 5 s timeout; **never raises** (network/timeout/non-2xx → log a warning, return
+`False`); the run's outcome is independent of it.
+
+**Ordering: callback runs after `run_complete`, before terminal status — so the SSE indicator is
+deliverable.** Two prompt requirements pull against each other: "fire-and-forget, never block
+completion" vs "show ✓/⚠ in the SSE timeline". The browser closes its stream on `run_complete`, so a
+*post-completion* event would never be seen. Resolution: `run_pipeline` emits `run_complete` (browser
+shows "complete", spinner stops) → the callback runs (≤5 s) → a single `job_radar_linked` ({ok})
+event is added → `set_status("complete")` (terminal, closes the stream). The completion event fires
+first and a callback failure never changes the outcome, but the session reaches terminal status up to
+5 s later. The frontend keeps the EventSource open briefly after `run_complete` for a Job Radar run
+(8 s grace, `jobRadarRef`) to catch the trailing indicator; `doneRef` is set on `run_complete` so a
+later stream-close isn't mis-reported as "Lost connection". Best-effort: if the key is unset (no
+event) the grace simply lapses.
+
+**Metrics read from on-disk checkpoints, not the `run_pipeline` return.** The summary dict omits fit
+score, CV quality, and CVCM, so `_callback_metrics` reads the same checkpoints the archive uses:
+`fit_score` ← `phase1_fit_assessment.json:overall_fit_score` (0–1); `coverage_score` ← the summary's
+`grounded_coverage` (final grounded `keyword_coverage`, F-38, 0–1); `cv_quality_score` ← the latest
+iteration's aggregate `critique_score` (0–10, the Scores-tab/header quality, F-51 follow-up), walking
+back past a fully-frozen final iteration whose score is `None`; `cvcm_enabled` ← `value_alignment_
+notes is not None` (D-33); `tailoring_mode` ← summary `mode`. **`cv_quality_score` is the aggregate
+`critique_score`, NOT an average of per-section `claude_quality`** (the prompt's snippet) — the former
+is what the report/Scores tab show as "CV quality", so the callback and the UI report the same number.
+Any missing metric degrades to `None` rather than blocking the callback. Field names/scales match Job
+Radar's cleaned-up schema (deviation 43): `fit_score`/`coverage_score`/`cv_quality_score`.
+
+**Affects** `api/job_radar.py` (`service_key`/`cv_tailor_base_url`/`post_results_to_job_radar`),
+`api/runner.py` (`_callback_metrics`/`_final_cv_quality`/`_link_back_to_job_radar`, trigger in
+`launch_run`), `api/routers/runs.py` (pass `output_dir=OUTPUT_DIR` to `launch_run` so the meta dir and
+callback read-dir match), `frontend` (`RunPage` keep-open + indicator, `api.ts` event type),
+`.env.example` (`JOB_RADAR_SERVICE_KEY`, `CV_TAILOR_BASE_URL`), `tests/test_job_radar_callback.py`
+(new) + e2e in `test_api.py`. 328 green; `tsc -b` clean.
+
+---
+
 ### F-51 — Job Radar handoff built (Integration §5.2): server-side JD fetch + write-once reference on the run
 
 **What.** cv-tailor can now be opened from Job Radar with `?source=job_radar&job_id=<id>`. The Run

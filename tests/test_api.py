@@ -765,6 +765,63 @@ def test_run_detail_redacts_job_radar_source_when_locked(client, runs_disk, monk
     assert owner["job_radar_source"]["company"] == "Elastic"
 
 
+# --------------------------------------------------------------------------- #
+# Phase 3 callback (Integration §6, F-52) — fires on completion, fails soft     #
+# --------------------------------------------------------------------------- #
+
+def _start_jr_run(client, monkeypatch, run_id, *, post_result=True, with_source=True, key="secret"):
+    """Start a run (from Job Radar unless with_source=False) with the pipeline + run id mocked
+    and post_results_to_job_radar replaced by a recorder. Returns (run_id, calls)."""
+    import api.runner as runner_mod
+    calls = []
+    monkeypatch.setattr(runner_mod, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(runs_router, "new_run_id", lambda: run_id)
+    monkeypatch.setattr(runs_router, "fetch_job", lambda *a, **k: _JR_JOB)
+    monkeypatch.setattr(runner_mod, "post_results_to_job_radar",
+                        lambda *a, **k: (calls.append((a, k)), post_result)[1])
+    if key is None:
+        monkeypatch.delenv("JOB_RADAR_SERVICE_KEY", raising=False)
+    else:
+        monkeypatch.setenv("JOB_RADAR_SERVICE_KEY", key)
+    body = ({"jd_text": "", "mode": "demo", "source": "job_radar", "job_id": "sha256:abc123"}
+            if with_source else {"jd_text": "tailor my cv", "mode": "demo"})
+    rid = client.post("/api/runs", json=body).json()["run_id"]
+    return rid, calls
+
+
+def test_callback_fires_on_completion(client, run_store, runs_disk, monkeypatch):
+    rid, calls = _start_jr_run(client, monkeypatch, "run_20260612_120000")
+    s = _await_terminal(client, rid)
+    assert s["status"] == "complete" and len(calls) == 1
+    args, _kw = calls[0]
+    assert args[0] == "sha256:abc123" and args[1] == rid          # job_id, run_id (positional)
+    sess = client.app.state.sessions.get(rid)
+    assert any(e.get("type") == "job_radar_linked" and e.get("ok") is True for e in sess.events)
+
+
+def test_callback_skipped_without_source(client, run_store, runs_disk, monkeypatch):
+    rid, calls = _start_jr_run(client, monkeypatch, "run_20260612_121000", with_source=False)
+    _await_terminal(client, rid)
+    assert calls == []                                           # no job_radar_source → no callback
+
+
+def test_callback_skipped_without_key(client, run_store, runs_disk, monkeypatch):
+    rid, calls = _start_jr_run(client, monkeypatch, "run_20260612_122000", key=None)
+    s = _await_terminal(client, rid)
+    assert s["status"] == "complete" and calls == []             # key unset → Phase-2 behaviour
+    sess = client.app.state.sessions.get(rid)
+    assert not any(e.get("type") == "job_radar_linked" for e in sess.events)
+
+
+def test_callback_failure_does_not_break_run(client, run_store, runs_disk, monkeypatch):
+    rid, calls = _start_jr_run(client, monkeypatch, "run_20260612_123000", post_result=False)
+    s = _await_terminal(client, rid)
+    assert s["status"] == "complete" and len(calls) == 1         # run still completes
+    sess = client.app.state.sessions.get(rid)
+    assert any(e.get("type") == "run_complete" for e in sess.events)     # run_complete still fired
+    assert any(e.get("type") == "job_radar_linked" and e.get("ok") is False for e in sess.events)
+
+
 def test_corpus_delete_removes_sections(client, monkeypatch, unlocked):
     class FakeCollection:
         def __init__(self):

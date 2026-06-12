@@ -48,6 +48,8 @@ export function RunPage() {
   const [jobPrefill, setJobPrefill] = useState<JobRadarPrefill | null>(null);
   const [jobLoading, setJobLoading] = useState(false);
   const [jobError, setJobError] = useState<string | null>(null);
+  // Phase 3: result of the "link back to Job Radar" callback, shown in the run summary.
+  const [jobLink, setJobLink] = useState<{ ok: boolean } | null>(null);
 
   // Full mode is gated on the shared owner unlock (D-38/D-39); the capability state +
   // unlock dialog live in UnlockProvider so the Corpus page reuses the same one unlock.
@@ -67,8 +69,13 @@ export function RunPage() {
   const runIdRef = useRef<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const doneRef = useRef(false);
+  const jobRadarRef = useRef<{ source: string; job_id: string } | null>(null);
+  const linkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => esRef.current?.close(), []);
+  useEffect(() => () => {
+    esRef.current?.close();
+    if (linkTimerRef.current) clearTimeout(linkTimerRef.current);
+  }, []);
 
   // On mount: if launched from Job Radar (?source=job_radar&job_id=<id>), fetch the JD through
   // the backend proxy (no direct cross-origin call — avoids CORS) and pre-fill the form. Strip
@@ -96,7 +103,9 @@ export function RunPage() {
         setJd(job.raw_text);
         if (job.company) setCompany(job.company);
         setJobPrefill(job);
-        setJobRadar({ source: "job_radar", job_id: job.job_id });
+        const ref = { source: "job_radar", job_id: job.job_id };
+        setJobRadar(ref);
+        jobRadarRef.current = ref;   // ref mirror — read inside the SSE handler closure
       })
       .catch(() => setJobError("Could not load job from Job Radar — paste the JD manually."))
       .finally(() => setJobLoading(false));
@@ -127,7 +136,21 @@ export function RunPage() {
     setHitl(null);
     setHitlBusy(false);
     setHitlLog([]);
+    setJobLink(null);
+    if (linkTimerRef.current) {
+      clearTimeout(linkTimerRef.current);
+      linkTimerRef.current = null;
+    }
     doneRef.current = false;
+  }
+
+  function closeStream() {
+    if (linkTimerRef.current) {
+      clearTimeout(linkTimerRef.current);
+      linkTimerRef.current = null;
+    }
+    esRef.current?.close();
+    esRef.current = null;
   }
 
   function finish() {
@@ -135,8 +158,7 @@ export function RunPage() {
     setRunning(false);
     setHitl(null);
     setHitlBusy(false);
-    esRef.current?.close();
-    esRef.current = null;
+    closeStream();
   }
 
   async function decide(d: HitlDecision) {
@@ -199,6 +221,7 @@ export function RunPage() {
         break;
       case "run_complete":
         setHitl(null);
+        setHitlBusy(false);
         setSummary({
           outcome: ev.outcome as string,
           iterations: ev.iterations as number,
@@ -206,7 +229,21 @@ export function RunPage() {
           convergence_reason: ev.convergence_reason as string,
           cost: ev.cost_estimated_usd as number,
         });
-        finish();
+        // The run is logically done — suppress any later stream-close error and stop the spinner.
+        doneRef.current = true;
+        setRunning(false);
+        // Phase 3: a Job Radar run emits a trailing `job_radar_linked` event AFTER run_complete;
+        // keep the stream open briefly to show the ✓/⚠ indicator, then close (grace fallback in
+        // case the callback is skipped server-side, e.g. no service key).
+        if (jobRadarRef.current) {
+          linkTimerRef.current = setTimeout(closeStream, 8000);
+        } else {
+          closeStream();
+        }
+        break;
+      case "job_radar_linked":
+        setJobLink({ ok: Boolean(ev.ok) });
+        closeStream();
         break;
       case "stopped":
         setError(`Stopped: ${ev.message ?? ev.outcome ?? "pipeline stopped"}`);
@@ -448,6 +485,18 @@ export function RunPage() {
                 <span className="self-center text-xs text-muted-foreground">
                   (also under the Runs tab)
                 </span>
+              </div>
+            )}
+            {/* Phase 3: best-effort confirmation that metrics were linked back to Job Radar. */}
+            {jobLink && (
+              <div className="flex w-full items-center gap-1.5 text-xs">
+                {jobLink.ok ? (
+                  <span className="text-success">✓ Linked back to Job Radar</span>
+                ) : (
+                  <span className="text-amber-600 dark:text-amber-500">
+                    ⚠ Could not link back to Job Radar — add metrics manually
+                  </span>
+                )}
               </div>
             )}
           </CardContent>

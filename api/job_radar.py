@@ -11,13 +11,18 @@ caller turns into an error response — a run is never started with an empty/pla
 
 from __future__ import annotations
 
+import logging
 import os
 
 import httpx
 
-__all__ = ["JobRadarError", "api_url", "fetch_job", "job_radar_source"]
+__all__ = ["JobRadarError", "api_url", "fetch_job", "job_radar_source",
+           "service_key", "cv_tailor_base_url", "post_results_to_job_radar"]
+
+log = logging.getLogger("cv_tailor.job_radar")
 
 DEFAULT_API_URL = "https://job-radar.michel-portfolio.co.uk"
+DEFAULT_CV_TAILOR_BASE_URL = "https://cv-tailor.michel-portfolio.co.uk"
 
 
 class JobRadarError(Exception):
@@ -63,3 +68,59 @@ def job_radar_source(data: dict) -> dict:
         "fit_label": data.get("fit_label"),
         "fit_score": data.get("fit_score"),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 — completed-run callback (cv-tailor → Job Radar, Integration §6)     #
+# --------------------------------------------------------------------------- #
+
+def service_key() -> str:
+    """The shared secret for the Job Radar callback (`JOB_RADAR_SERVICE_KEY`), or "" when unset.
+
+    Unset ⇒ the callback is skipped silently and the run behaves exactly as in Phase 2 — the
+    integration is opt-in *by configuration*, not by a code change (Integration §6.2 / F-52)."""
+    return os.environ.get("JOB_RADAR_SERVICE_KEY", "").strip()
+
+
+def cv_tailor_base_url() -> str:
+    """Public base URL of this cv-tailor deployment, for the `output_link` sent to Job Radar."""
+    raw = os.environ.get("CV_TAILOR_BASE_URL", DEFAULT_CV_TAILOR_BASE_URL).strip().rstrip("/")
+    return raw or DEFAULT_CV_TAILOR_BASE_URL
+
+
+def post_results_to_job_radar(job_id: str, run_id: str, *, fit_score, coverage_score,
+                              cv_quality_score, cvcm_enabled: bool, tailoring_mode,
+                              output_link: str, timeout: float = 5.0) -> bool:
+    """POST completed-run metrics back to Job Radar (Integration §6.2). Fire-and-forget:
+    **never raises** — Job Radar is not in cv-tailor's critical path. Returns True iff Job Radar
+    accepted (2xx); False on a missing key, network error, timeout, or non-2xx (logged).
+
+    Synchronous `httpx` (mirrors `fetch_job`): the run completes on a worker thread with no event
+    loop, so there is no async seam to schedule onto — a sync POST after `run_complete` is the
+    consistent, simplest bridge (F-52). The metric field names/scales match Job Radar's schema:
+    `fit_score`/`coverage_score` are 0–1, `cv_quality_score` is 0–10 (deviation 43)."""
+    key = service_key()
+    if not key:                                          # opt-in by config — Phase-2 behaviour
+        return False
+    payload = {
+        "job_id": job_id,
+        "cv_tailor_run_id": run_id,
+        "fit_score": fit_score,
+        "coverage_score": coverage_score,
+        "cv_quality_score": cv_quality_score,
+        "cvcm_enabled": cvcm_enabled,
+        "tailoring_mode": tailoring_mode,
+        "output_link": output_link,
+        "source": "cv_tailor_api",
+    }
+    url = f"{api_url()}/api/cv-tailor-results"
+    try:
+        resp = httpx.post(url, json=payload,
+                          headers={"Authorization": f"Bearer {key}"}, timeout=timeout)
+    except httpx.HTTPError as exc:                        # network error, timeout, DNS, …
+        log.warning("Job Radar callback failed for run %s: %s", run_id, exc)
+        return False
+    if resp.status_code // 100 != 2:
+        log.warning("Job Radar callback for run %s returned HTTP %s", run_id, resp.status_code)
+        return False
+    return True

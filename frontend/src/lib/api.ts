@@ -296,4 +296,5 @@ export const RUN_EVENT_TYPES = [
   "hitl_interpreted",  // Haiku read free text — shown back before applying
   "hitl_applied",      // a section was revised
   "hitl_error",        // an action could not be applied (re-published, try again)
+  "job_radar_linked",  // Phase 3: results POSTed back to Job Radar ({ok}) — ✓/⚠ in the timeline
 ] as const;

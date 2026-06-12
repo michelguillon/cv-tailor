@@ -230,7 +230,7 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
         write_meta(run_dir, company_name=company_name, job_radar_source=jr_source)
 
     launch_run(store, session, jd_text, mode=body.mode, key=key,
-               max_iterations=body.max_iterations, auto=body.auto)
+               max_iterations=body.max_iterations, auto=body.auto, output_dir=OUTPUT_DIR)
     return {"run_id": run_id, "mode": body.mode, "status": session.status}
 
 

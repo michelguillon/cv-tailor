@@ -1966,3 +1966,24 @@ overridden). `job_radar_source` is **owner-only**: `source_url` points at a pers
 tool, so it's redacted from the public archive list and blanked in `GET /runs/{id}/detail` for any
 locked request (even a public-demo run or a live-session viewer). The owner sees a small
 *From Job Radar: Company — fit_label (score) ↗* line in the output panel, linking back to the role.
+
+**Phase 3 — completion callback (Integration §6 / F-52).** When a run that came from Job Radar
+*completes*, cv-tailor POSTs summary metrics back to
+`JOB_RADAR_API_URL/api/cv-tailor-results` with `Authorization: Bearer <JOB_RADAR_SERVICE_KEY>` and
+`source: "cv_tailor_api"`. Three metrics, names/scales matching Job Radar's schema:
+`fit_score` (0–1, Phase-1 `overall_fit_score`), `coverage_score` (0–1, final grounded
+`keyword_coverage`, F-38), `cv_quality_score` (0–10, the latest iteration's aggregate
+`critique_score` — the same "CV quality" the Scores tab + report header show), plus `cvcm_enabled`,
+`tailoring_mode`, and an `output_link`. Metrics are read from the run's on-disk checkpoints
+(decoupled from `run_pipeline`'s return), degrading to `null` rather than blocking.
+
+- **Opt-in by config:** the callback fires only when `JOB_RADAR_SERVICE_KEY` is set; unset ⇒ skipped
+  silently (exactly Phase-2 behaviour). `CV_TAILOR_BASE_URL` sets the `output_link` host.
+- **Best-effort, never in the critical path:** synchronous `httpx.post` (the run completes on a
+  worker thread — no event loop to schedule onto), 5 s timeout, **never raises**; a failure logs a
+  warning and the run still completes. `run_complete` fires *before* the callback, so the browser is
+  never blocked on it.
+- **UI indicator:** a single `job_radar_linked` SSE event ({ok}) is emitted after the callback, shown
+  in the run summary as *✓ Linked back to Job Radar* / *⚠ Could not link back to Job Radar — add
+  metrics manually*. Because the browser closes its stream on `run_complete`, the Run page keeps the
+  EventSource open briefly (grace window) for a Job Radar run to catch this trailing event.

@@ -17,11 +17,14 @@ Two HITL handlers share the pipeline's handler interface (fit / review / formatt
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import traceback
 from pathlib import Path
 
+from api.job_radar import cv_tailor_base_url, post_results_to_job_radar, service_key
+from api.run_meta import read_meta
 from tailor.audit import AuditLogger, utc_now_iso
 from tailor.config import cv_display_name, load_config, resolve_run_config
 from tailor.phases import phase1_fit_assessment, phase4_hitl
@@ -215,6 +218,67 @@ class SSEHITL:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 3 — link a completed run back to Job Radar (Integration §6, F-52)      #
+# --------------------------------------------------------------------------- #
+
+def _final_cv_quality(run_dir: Path) -> float | None:
+    """The run's overall CV quality (0–10) for the callback: the latest iteration's aggregate
+    `critique_score` (the Scores-tab quality / report-header value). Walks back to the last
+    iteration that has a non-None score, since a fully-converged final iteration freezes all
+    sections and reports None — we want the real converged quality, not a null."""
+    iters = sorted(run_dir.glob("iteration_*.json"), key=lambda p: int(p.stem.split("_")[1]))
+    for p in reversed(iters):
+        try:
+            score = json.loads(p.read_text(encoding="utf-8")).get("critique_score")
+        except (json.JSONDecodeError, OSError):
+            continue
+        if score is not None:
+            return round(score, 1)
+    return None
+
+
+def _callback_metrics(run_dir: Path, summary: dict) -> dict:
+    """Assemble the three Job Radar metrics + flags from the run's on-disk checkpoints + summary.
+
+    Decoupled from `run_pipeline`'s return shape (which omits fit/quality/CVCM) — read from the
+    same checkpoints the archive uses. Any missing metric degrades to None rather than blocking
+    the callback (Integration §6.2): fit_score/coverage_score 0–1, cv_quality_score 0–10."""
+    fit_score = None
+    cvcm_enabled = False
+    p1 = run_dir / "phase1_fit_assessment.json"
+    if p1.exists():
+        try:
+            fit = json.loads(p1.read_text(encoding="utf-8"))
+            fit_score = fit.get("overall_fit_score")
+            cvcm_enabled = fit.get("value_alignment_notes") is not None   # CVCM ran (D-33)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {
+        "fit_score": fit_score,
+        "coverage_score": summary.get("grounded_coverage"),   # final grounded coverage (F-38)
+        "cv_quality_score": _final_cv_quality(run_dir),
+        "cvcm_enabled": cvcm_enabled,
+        "tailoring_mode": summary.get("mode"),
+    }
+
+
+def _link_back_to_job_radar(session, summary: dict, output_dir: str) -> None:
+    """Best-effort Phase-3 callback after a run completes (Integration §6). Skips silently unless
+    the run came from Job Radar AND `JOB_RADAR_SERVICE_KEY` is set (opt-in by config). Emits a
+    single `job_radar_linked` SSE event ({ok}) so the timeline can show ✓/⚠. Never raises — a
+    failed callback must not affect run completion (`run_complete` has already fired)."""
+    run_dir = Path(output_dir) / session.run_id
+    jr = read_meta(run_dir).get("job_radar_source")
+    if not jr or not jr.get("job_id") or not service_key():
+        return                                            # Phase-2 behaviour: no callback, no event
+    metrics = _callback_metrics(run_dir, summary)
+    ok = post_results_to_job_radar(                       # never raises; False on any failure
+        jr["job_id"], session.run_id,
+        output_link=f"{cv_tailor_base_url()}/runs/{session.run_id}", **metrics)
+    session.add_event({"type": "job_radar_linked", "ok": ok})
+
+
+# --------------------------------------------------------------------------- #
 # Launch                                                                       #
 # --------------------------------------------------------------------------- #
 
@@ -245,6 +309,13 @@ def launch_run(store, session, jd_text, *, mode="demo", key=None, max_iterations
                 on_event=session.add_event,
             )
             session.result = summary
+            # Phase 3 (Integration §6): if this run came from Job Radar, POST metrics back. Runs
+            # AFTER run_complete (already streamed) but BEFORE terminal status, so the trailing
+            # job_radar_linked event is still delivered over the open stream. Never raises.
+            try:
+                _link_back_to_job_radar(session, summary, output_dir)
+            except Exception:                              # defensive — callback must not break completion
+                log.exception("job radar callback path errored for run %s", session.run_id)
             session.set_status("complete")
         except PipelineStop as exc:                # no_fit / human stop
             session.error = str(exc)
