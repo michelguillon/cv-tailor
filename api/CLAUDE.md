@@ -82,6 +82,20 @@ reuse `phase4_hitl.{interpret_freetext,revise_section}` / `phase1.interpret_fit_
 verbatim — no provider code in the endpoint. `POST /api/runs` takes `auto: bool`
 (default false = conversational; `auto:true` → `AutoHITL`, start-to-finish demo).
 
+## Observability (Langfuse, opt-in — SPEC_LANGFUSE_INSTRUMENTATION §10–11, F-53/F-54)
+
+All tracing routes through `tailor/telemetry.py` (the only SDK importer; no-op when
+`LANGFUSE_PUBLIC_KEY` is unset). The api package owns three touch-points:
+- **`main.py` startup** — `telemetry.init_langfuse()` in the lifespan. It only *constructs* the
+  client; **never probe (`auth_check`) at startup** — uvicorn binds `:8000` only after startup, so
+  a slow host would hang the boot (a real bug we hit). `auth_check` lives in the debug endpoint.
+- **`runner.py` `target()`** — `telemetry.run_trace(run_id, …)` wraps `run_pipeline` **on the run's
+  worker thread** (OTel context is thread-local; `launch_run` only spawns the thread). It flushes
+  after its root span closes, then `attach_scores()` adds the run's scores.
+- **`GET /api/debug/trace`** (`main.py`) — a **$0** path check: makes a minimal trace with no LLM
+  call and returns `{trace_id, enabled, host, auth_check, error}`. The first triage tool for "no
+  traces" (run it from inside the container). Diagnostics are WARNING level — uvicorn drops INFO.
+
 ## Tests
 
 - `tests/test_api.py` — Starlette `TestClient`, in-process, **no real API calls**

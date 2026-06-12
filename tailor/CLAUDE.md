@@ -27,7 +27,15 @@ The orchestrator and all phases/tools. Entry point: `python -m tailor`
   phases never touch it.
 - `helpers.py` — the three provider clients + `call_with_retry()`. **This is the
   only module that touches a provider SDK directly** (and the one place usage is
-  captured for `cost.py`).
+  captured for `cost.py`). Generations are also captured here (the same usage
+  chokepoint), so all Claude/GPT calls trace with token counts (F-53).
+- `telemetry.py` — Langfuse observability (opt-in, SPEC_LANGFUSE_INSTRUMENTATION). **The only
+  module that imports the langfuse SDK** (the observability analogue of `helpers.py`). Every
+  trace/span/generation/score routes through its context managers, which are a **clean no-op when
+  `LANGFUSE_PUBLIC_KEY` is unset** and never raise into the pipeline. The root trace opens on the
+  run's worker thread (`api/runner`), generations at the `helpers` chokepoint. `debug_trace()`
+  backs `GET /api/debug/trace` — a $0 path check (F-53/F-54). Flush *after* a span's scope closes,
+  never block startup on `auth_check`, and keep diagnostics at WARNING (uvicorn drops INFO).
 - `run_context.py` — per-run output dir, versioned section files, audit logger.
   The checkpoint substrate every phase writes through (`write_section`,
   `write_checkpoint`, `read_section`).

@@ -1,8 +1,9 @@
 # SPEC_LANGFUSE_INSTRUMENTATION.md
 ## Langfuse Instrumentation — cv-tailor + Job Radar
 
-**Status:** **Phase A (cv-tailor) ✅ built 2026-06-12** — see §9 build notes + Findings Log F-53.
-Phase B (Job Radar) pending.
+**Status:** **Phase A (cv-tailor) ✅ built + verified live 2026-06-12** — full trace tree renders in
+the cv-tailor project (§6). Build notes §9; debug toolkit + ops runbook §10–§11; Findings F-53/F-54.
+Phase B (Job Radar) pending — **replicate the §11 debug toolkit when building it**.
 **Prerequisite:** `SPEC_LANGFUSE_DEPLOYMENT.md` — the self-hosted server. ⚠ On the first live test the
 ingest API returned 200 but the server logged `Failed to upload JSON to S3`: the trace-blob storage
 **bucket was never created**. Created server-side 2026-06-12; "complete and healthy ✅" was premature.
@@ -679,3 +680,64 @@ run path — ENTER / root-span-created / attach_scores-flushed — which showed 
 but never the third *for a completed run*. Now trimmed to a single kept confirmation —
 `Langfuse trace created: run_id=… trace_id=…` (WARNING, so it shows; one line per run to correlate
 a run with its trace) — the other two downgraded to DEBUG.
+
+---
+
+## 11. Debug instrumentation toolkit — replicate on every traced service
+
+cv-tailor's "no traces" hunt (§10) cost hours, almost all of it server/config/runtime that the
+SDK swallows silently. The reusable payoff is a small, **project-agnostic toolkit** that turns any
+future "no traces" into a 5-second triage **at zero token cost**. **Replicate all of this on Job
+Radar (Phase B)** — the patterns are independent of what's being traced.
+
+### 11.1 The five pieces to port
+
+1. **One `telemetry` module — the only SDK importer.** Wrap every trace/span/score/flush behind
+   it. Two invariants: a **clean no-op when `LANGFUSE_PUBLIC_KEY` is unset** (so tests/CLI run
+   untraced — `is_enabled()`), and **never let observability raise** into the business path (guard
+   + swallow). cv-tailor: `tailor/telemetry.py`; Job Radar: `cli/telemetry.py`.
+
+2. **A zero-cost debug endpoint / command** — the single most valuable tool. Create a minimal
+   trace + score with **no model call** ($0), flush, and **return the verdict as data**:
+   `{trace_id, enabled, host, auth_check, error}`. Run it from inside the container. It collapses
+   "enabled? reachable? authenticated? which project?" into one call. cv-tailor exposes it as
+   `GET /api/debug/trace` (FastAPI); Job Radar (a CLI, no web server) should expose the same as a
+   subcommand, e.g. `python -m cli.telemetry debug-trace`, printing the same dict.
+
+3. **`auth_check()` belongs in the debug probe, not startup.** It's the decisive check (host
+   reachable AND keys valid), but it's a synchronous, no-timeout network call — running it in a
+   web app's startup hook can hang the bind (§10.3). Put it in the on-demand probe and return its
+   result. (In a batch/CLI tool there's no "startup bind" to wedge, but keep it in the probe for
+   uniformity and so it can't slow a real run.)
+
+4. **Diagnostics ride in the RESPONSE, because logs are nearly invisible.** App-logger `INFO`
+   propagates to the root last-resort handler (WARNING+ only) under uvicorn, so `grep` finds
+   nothing even when tracing works (§10.3). So: the debug probe returns its findings as data, and
+   any always-on per-run confirmation is **WARNING** level (one concise line correlating the
+   business id → `trace_id`). Don't rely on `INFO` showing in `docker logs`.
+
+5. **Flush after the producing scope *closes*, not while it's open.** A span isn't exported until
+   it's **ended**; if the producing thread/process is about to exit, an open root span misses the
+   flush and dies before the periodic exporter fires (§10.6). cv-tailor flushes in `run_trace`'s
+   `finally`. **Job Radar maps to this directly:** the Batch API is async, so spans are created
+   *post-hoc* after results arrive (§3.3) — create the batch span, end it, **then `flush()`** (the
+   CLI process exits immediately after, so there's no periodic exporter to fall back on).
+
+### 11.2 Deployment / networking checklist (per service)
+
+- **Internal host, not the public URL.** A container can't hairpin to its own Cloudflare URL; set
+  `LANGFUSE_BASE_URL=http://<langfuse-web-container>:3000` and put the service on the shared
+  network. Precedence: `LANGFUSE_BASE_URL` → `LANGFUSE_HOST` → cloud default (10.2).
+- **Each service uses its OWN project's keys.** Shared `pk-lf`/`sk-lf` → `auth_check:true` but
+  traces land in the *other* project's dashboard (10.4). One project per app (§2.1 / §3.1).
+- **Server prerequisite:** the trace-blob **S3/MinIO bucket must exist** — a "healthy" check must
+  persist a span end-to-end, not just probe API liveness (§9).
+
+### 11.3 The triage, in order (zero cost until the last step)
+
+1. Hit the debug endpoint/command → read `enabled` → `auth_check` → `trace_id`.
+   `enabled:false` ⇒ key not in env; `auth_check:false`+`error` ⇒ host/keys; both true ⇒ next.
+2. Confirm that `trace_id` in the UI **in the right project** (10.4). Appears ⇒ path works.
+3. Only now run one **real** job (the sole token-spending step) and confirm its `run_id → trace_id`
+   WARNING line + the trace tree in the UI. If the debug trace lands but a real run doesn't, it's a
+   run-path bug (flush/scope, §10.6), not config.
