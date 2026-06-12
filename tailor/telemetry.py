@@ -72,17 +72,15 @@ def init_langfuse() -> None:
         return
     try:
         from langfuse import Langfuse
-        client = Langfuse()
+        Langfuse()                                     # construct the singleton + OTel exporter
         _INITIALIZED = True
-        # auth_check() is the decisive probe: it confirms the SDK can reach the host AND the
-        # keys authenticate. A True here but empty UI ⇒ wrong project/host; a False/raise ⇒
-        # bad keys or unreachable host (the real cause of silent "no traces").
-        try:
-            ok = client.auth_check()
-            log.info("Langfuse init OK: host=%s auth_check=%s", _resolved_host(), ok)
-        except Exception as exc:
-            log.warning("Langfuse init: auth_check FAILED against host=%s (%s) — traces won't land",
-                        _resolved_host(), exc)
+        # IMPORTANT: do NOT call auth_check() here. This runs in the FastAPI lifespan, and uvicorn
+        # only starts accepting connections AFTER startup completes — a synchronous, no-timeout
+        # network probe to the Langfuse host can hang startup and leave the backend refusing
+        # connections on :8000 if the host is slow during a redeploy. The probe lives in the
+        # on-demand /api/debug/trace endpoint instead (request-time, can't wedge boot).
+        log.info("Langfuse init OK: host=%s (auth_check deferred to /api/debug/trace)",
+                 _resolved_host())
     except Exception:                                  # observability must not break startup
         log.exception("Langfuse init failed; tracing disabled")
 
