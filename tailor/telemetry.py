@@ -173,11 +173,20 @@ def run_trace(run_id: str, *, mode: str, job_radar_source: dict | None = None):
     """Open the per-run root trace (`cv_tailor_run`) — wrap the WHOLE pipeline on its
     run thread. Sets trace-level metadata (`run_id` is the cross-system lookup key) and
     claims a deterministic trace id derived from `run_id` so `attach_scores` can match it."""
+    # DEBUG (F-54): WARNING so it survives uvicorn's INFO-dropping — confirms run_trace is reached
+    # on the run's worker thread and reports the tracing state there (vs the request thread, which
+    # the /api/debug/trace endpoint exercises). Drop back to debug once the run path is confirmed.
+    log.warning("run_trace ENTER: run_id=%s enabled=%s initialized=%s host=%s",
+                run_id, is_enabled(), _INITIALIZED, _resolved_host())
+    # Defensive: the singleton is normally created at app startup, but this thread must not depend
+    # on that having happened (idempotent + non-blocking). Rules out "uninitialised in the run path".
+    init_langfuse()
+
     def obs_factory():
         from langfuse import Langfuse, get_client
         tid = Langfuse.create_trace_id(seed=run_id)
-        log.info("Langfuse: creating root trace 'cv_tailor_run' run_id=%s trace_id=%s host=%s",
-                 run_id, tid, _resolved_host())
+        log.warning("run_trace: creating root span 'cv_tailor_run' run_id=%s trace_id=%s host=%s",
+                    run_id, tid, _resolved_host())
         return get_client().start_as_current_observation(
             as_type="span", name="cv_tailor_run", trace_context={"trace_id": tid})
 
@@ -186,8 +195,15 @@ def run_trace(run_id: str, *, mode: str, job_radar_source: dict | None = None):
         return propagate_attributes(
             trace_name="cv_tailor_run", metadata=_trace_meta(run_id, mode, job_radar_source))
 
-    with _entered(obs_factory, attr_factory) as obs:
-        yield obs
+    try:
+        with _entered(obs_factory, attr_factory) as obs:
+            yield obs
+    finally:
+        # The root span has now CLOSED. attach_scores() flushed earlier, but while the root was
+        # still open (it runs inside this `with` in api/runner), so the root span itself wasn't
+        # in that batch — and the run thread is about to end, so don't wait for the periodic
+        # exporter. Flush here so the completed root span (and any tail spans) export promptly.
+        flush()
 
 
 @contextlib.contextmanager
@@ -298,8 +314,11 @@ def attach_scores(run_id: str, metrics: dict | None, job_radar_source: dict | No
         for name, value in scores:
             lf.create_score(name=name, value=value, trace_id=tid, data_type="NUMERIC")
         lf.flush()                                     # force the batch out — the run thread is ending
-        log.info("Langfuse: attached %d score(s) for run %s (trace %s) and flushed",
-                 len(scores), run_id, tid)
+        # WARNING (F-54 debug): confirms the end-of-run flush ran on the worker thread and the
+        # spans/scores for this trace were pushed. If this logs but the trace is absent in MinIO,
+        # the problem is downstream (ingestion/project), not the run path.
+        log.warning("run_trace: attach_scores flushed %d score(s) for run %s (trace %s)",
+                    len(scores), run_id, tid)
     except Exception:
         log.exception("langfuse attach_scores failed for run %s", run_id)
 
