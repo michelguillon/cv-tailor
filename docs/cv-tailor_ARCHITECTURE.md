@@ -474,6 +474,17 @@ git pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
+**Observability — Langfuse tracing (opt-in, F-53):** when `LANGFUSE_PUBLIC_KEY` /
+`LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` are set, each run emits one Langfuse v4 trace
+(`cv_tailor_run`): a span per phase, a span per Phase-3 iteration, a generation per LLM call
+with token counts, and `fit_score`/`coverage_score`/`cv_quality_score`/`job_radar_fit_score`
+as trace scores. `run_id`+`job_id` ride in metadata as cross-system join keys (to Job Radar
+traces). Unset key ⇒ a clean no-op (the CLI and tests run untraced). `tailor/telemetry.py` is
+the only SDK importer; the root trace is opened on the run's worker thread (`api/runner`, not
+`launch_run` — OTel context is thread-local), with generations captured at the
+`claude_complete`/`gpt_complete` chokepoint. Full design + the self-hosted-server prerequisite
+(the trace-blob S3 bucket must exist) in `docs/SPEC_LANGFUSE_INSTRUMENTATION.md`.
+
 ---
 
 ## 11. Key architectural decisions
