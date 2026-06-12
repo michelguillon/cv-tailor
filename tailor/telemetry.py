@@ -321,24 +321,34 @@ def debug_trace(name: str = "debug_trace") -> dict:
     """Create one minimal trace + score with NO LLM call and flush it — exercises the whole
     export path (init → trace → score → flush → server) at zero cost, for diagnosing silent
     "no traces" (F-53). Returns {trace_id, enabled, host}; trace_id is None when disabled/failed."""
-    info: dict = {"trace_id": None, "enabled": is_enabled(), "host": _resolved_host()}
+    # auth_check + error ride in the RESPONSE (not just the log): under uvicorn, app-logger
+    # INFO is dropped by the root last-resort handler, so the JSON is the only visible signal.
+    info: dict = {"trace_id": None, "enabled": is_enabled(), "host": _resolved_host(),
+                  "auth_check": None, "error": None}
     if not is_enabled():
         return info
     try:
         import time
         from langfuse import Langfuse, get_client
         init_langfuse()                                  # ensure the singleton exists (idempotent)
+        lf = get_client()
+        # The decisive probe: does the SDK reach the host AND do the keys authenticate?
+        try:
+            info["auth_check"] = bool(lf.auth_check())
+        except Exception as exc:
+            info["auth_check"] = False
+            info["error"] = f"auth_check: {type(exc).__name__}: {exc}"
         seed = f"{name}_{int(time.time() * 1000)}"       # unique per call → a fresh trace each hit
         tid = Langfuse.create_trace_id(seed=seed)
         info["trace_id"] = tid
-        lf = get_client()
         with lf.start_as_current_observation(as_type="span", name=name,
                                              trace_context={"trace_id": tid}):
             pass                                         # empty root span — no children, no LLM call
         lf.create_score(name="debug_score", value=1.0, trace_id=tid, data_type="NUMERIC")
         lf.flush()
-        log.info("Langfuse: debug trace created name=%s trace_id=%s host=%s",
-                 name, tid, _resolved_host())
-    except Exception:
+        log.info("Langfuse: debug trace created name=%s trace_id=%s host=%s auth_check=%s",
+                 name, tid, _resolved_host(), info["auth_check"])
+    except Exception as exc:
+        info["error"] = f"{type(exc).__name__}: {exc}"
         log.exception("Langfuse debug_trace failed")
     return info
