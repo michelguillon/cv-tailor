@@ -241,6 +241,10 @@ async def stream_run(run_id: str, request: Request):
         raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
 
     async def generator():
+        # Emit one event immediately so the reverse-proxy chain (Cloudflare edge + tunnel +
+        # Caddy) sees bytes on the wire right away — Phase 0 (Mistral) can take longer than
+        # Cloudflare's ~100s time-to-first-byte window, which would otherwise 524 the stream.
+        yield {"event": "connected", "data": json.dumps({"type": "connected", "run_id": run_id})}
         seq = 0
         while True:
             if await request.is_disconnected():
@@ -249,8 +253,13 @@ async def stream_run(run_id: str, request: Request):
             events = await asyncio.to_thread(session.events_since, seq, timeout=5.0)
             for event in events:
                 seq = event["seq"] + 1
-                yield {"event": event.get("type", "message"), "data": json.dumps(event)}
+                # `id:` sets Last-Event-ID on the browser so a reconnect carries a resume
+                # marker; the client also seq-dedupes the buffer replay (RunPage.tsx).
+                yield {"id": str(event["seq"]), "event": event.get("type", "message"),
+                       "data": json.dumps(event)}
             if session.status in TERMINAL and seq >= len(session.events):
                 break
 
-    return EventSourceResponse(generator())
+    # ping=10: send a keepalive comment every 10s (down from the 15s default) for more margin
+    # under proxy/tunnel idle timeouts during long phases or HITL waits.
+    return EventSourceResponse(generator(), ping=10)

@@ -65,10 +65,16 @@ export function RunPage() {
   const [hitl, setHitl] = useState<HitlReady | null>(null);
   const [hitlBusy, setHitlBusy] = useState(false);
   const [hitlLog, setHitlLog] = useState<string[]>([]);
+  // Transient state: EventSource is auto-retrying a dropped connection (proxy/tunnel blip).
+  // Shown as a badge; NOT an error — the backend replays the event buffer on reconnect.
+  const [reconnecting, setReconnecting] = useState(false);
 
   const runIdRef = useRef<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const doneRef = useRef(false);
+  // Highest event seq already applied. On reconnect the backend replays from seq 0, so we
+  // skip anything <= this to avoid double-appending timeline rows / re-firing HITL panels.
+  const lastSeqRef = useRef(-1);
   const jobRadarRef = useRef<{ source: string; job_id: string } | null>(null);
   const linkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -137,11 +143,13 @@ export function RunPage() {
     setHitlBusy(false);
     setHitlLog([]);
     setJobLink(null);
+    setReconnecting(false);
     if (linkTimerRef.current) {
       clearTimeout(linkTimerRef.current);
       linkTimerRef.current = null;
     }
     doneRef.current = false;
+    lastSeqRef.current = -1;
   }
 
   function closeStream() {
@@ -174,6 +182,15 @@ export function RunPage() {
   }
 
   function handleEvent(ev: RunEvent) {
+    // Drop replays after a reconnect: the backend re-streams the whole buffer from seq 0,
+    // so anything we've already applied (seq <= lastSeq) must be ignored. Events without a
+    // seq (e.g. the `connected` keepalive) bypass this and are handled by the switch below.
+    if (typeof ev.seq === "number") {
+      if (ev.seq <= lastSeqRef.current) return;
+      lastSeqRef.current = ev.seq;
+    }
+    // Receiving any event means the stream is healthy again.
+    if (reconnecting) setReconnecting(false);
     switch (ev.type) {
       case "phase_start":
         setPhaseStatus((p) => ({ ...p, [ev.phase as string]: "running" }));
@@ -268,10 +285,20 @@ export function RunPage() {
       for (const t of RUN_EVENT_TYPES) {
         es.addEventListener(t, (e) => handleEvent(JSON.parse((e as MessageEvent).data) as RunEvent));
       }
+      // A (re)opened connection is healthy — clear any "Reconnecting…" badge.
+      es.onopen = () => setReconnecting(false);
       es.onerror = () => {
-        if (!doneRef.current) {
+        if (doneRef.current) return;            // run already finished — a normal close, ignore
+        // EventSource auto-reconnects on a transient drop (proxy/tunnel blip): readyState is
+        // CONNECTING (0) while it retries. Let it heal — just show a transient badge. Only when
+        // it gives up (CLOSED = 2) do we surface a hard error. The backend replays the event
+        // buffer on reconnect, so the run continues seamlessly (seq-dedup drops the replay).
+        if (es.readyState === EventSource.CLOSED) {
+          setReconnecting(false);
           setError("Lost connection to the run stream.");
           finish();
+        } else {
+          setReconnecting(true);
         }
       };
     } catch (e) {
@@ -384,6 +411,11 @@ export function RunPage() {
           {error && (
             <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertTriangle className="h-4 w-4" /> {error}
+            </div>
+          )}
+          {reconnecting && !error && (
+            <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Reconnecting… (the run continues in the background)
             </div>
           )}
         </CardContent>
