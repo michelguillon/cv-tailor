@@ -412,6 +412,43 @@ what changed (if anything).*
 
 ---
 
+### F-56 — "Rendering bug" was the writers flattening structure into prose; fixed at the writer, not phase6
+
+**What.** A CV (run_20260613_111401) rendered as walls of text: experience sections showed as
+prose paragraphs instead of bullets, and the "Core Skills" section — a "·"-delimited skill-term
+list in the source — was rewritten as prose sentences ("skills literal instead of being skills").
+The report was assumed buggy in `phase6_output._md_to_html` (naive `<p>` wrapping). **It was not.**
+`_md_to_html` and `assemble_markdown` are correct and emit `<ul><li>` whenever the section text
+has `- ` bullets (verified against three runs' `cv_final.html`, line-by-line). The defect was
+**upstream**: the dual-writer flattened the SOURCE's list structure into prose, *inconsistently*
+(in this run Utiq flattened at v0, Microsoft survived as bullets at v0 then flattened at v1, one
+"Solution Consultant" block kept its bullets). The rendering faithfully showed prose because the
+section files *contained* prose. The reported "duplicate company name" (Bug 2) did not reproduce
+at all. **Lesson: reproduce against the real artefact before trusting the stated cause** — the fix
+location in the brief (phase6/_md_to_html) would have changed nothing.
+
+**Why it happened.** The only guard was the last line of `TRUTHFULNESS_RULES` — *"Preserve the
+source's structure: if it uses bullet points, return bullet points."* Buried as a truthfulness
+footnote, it was ignored, covered only bullets (not the skills "·"-list), and — unlike
+truthfulness, which has the verifier gate — **nothing enforced it**. A prompt rule with no
+deterministic backstop is Goodhart-adjacent: the writers optimise wording and silently drop format.
+
+**Fix (affects D-28 dual-writer; mirrors D-14 deterministic length items).**
+- `writer_common.STRUCTURE_RULES` — a dedicated, prominent block (covering both the bullet list and
+  the "·"-delimited skills list) placed in **both** writer system prompts *before* the content
+  guidance, not as a truthfulness footnote. The buried line was removed from `TRUTHFULNESS_RULES`.
+- `writer_common.structure_preserved(source, draft)` — a **deterministic** check that counts list
+  markers (source bullets vs draft bullets; "·"-delimited list in vs out). Code decides, the model
+  never self-reports it. New `WriterDraft.structure_preserved: bool` field; both writers set it
+  post-write.
+- The orchestrator is given each draft's `structure_preserved` flag and treats `False` as a hard
+  **selection disqualifier** (and, when both drafts lost structure, a freeze blocker with a
+  direction to restore the bullet/list format). So a flattened draft can't be selected or frozen.
+- Regression tests use the actual Utiq experience section + the skills list from this run as
+  fixtures (`tests/test_writers.py`); `_md_to_html`'s correct bullet handling was already covered.
+
+---
+
 ### F-55 — SSE reconnect resilience: a transient proxy/tunnel drop is now a self-healing blip, not a fatal error
 
 **What.** The run-progress SSE stream (`/api/runs/{id}/stream`) traverses three proxies on the

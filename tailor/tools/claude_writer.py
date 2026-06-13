@@ -21,10 +21,12 @@ from tailor.models import CritiqueItem, WriterDraft
 from tailor.tools.writer_common import (
     SEVERITIES,
     SEVERITY_DEFS,
+    STRUCTURE_RULES,
     TRUTHFULNESS_RULES,
     jd_rubric_block,
     length_items,
     section_user_prompt,
+    structure_preserved,
 )
 
 __all__ = ["write_section", "pushback", "WriterError"]
@@ -38,8 +40,12 @@ class WriterError(RuntimeError):
 
 _SYSTEM = f"""\
 You are a precise, evidence-led CV writer. You tailor ONE section to a specific \
-role so it surfaces what matters for THIS job — truthfully. Lead with the \
-strongest real evidence; cut filler; make every line earn its place.
+role so it surfaces what matters for THIS job — truthfully.
+
+{STRUCTURE_RULES}
+
+Within that structure: lead with the strongest real evidence; cut filler; make \
+every line earn its place.
 
 {TRUTHFULNESS_RULES}
 
@@ -122,12 +128,16 @@ def write_section(
     if data is None:
         raise WriterError(f"claude_writer produced no valid draft for {section_id} ({model})")
 
+    text = data["text"].strip()
     items = [CritiqueItem(section=section_id, severity=it["severity"], issue=it["issue"],
                           suggestion=it["suggestion"], source_writer=WRITER)
              for it in (data.get("items") or [])]
-    items += length_items(section_id, data["text"], budget, WRITER)
-    return WriterDraft(writer=WRITER, section_id=section_id, text=data["text"].strip(),
-                       version=version, pushback=None, items=items)
+    items += length_items(section_id, text, budget, WRITER)
+    # Deterministic structure check — counts source vs draft list markers, never trusts the
+    # model to self-report it (F-56). The orchestrator disqualifies a flattened draft.
+    return WriterDraft(writer=WRITER, section_id=section_id, text=text,
+                       version=version, pushback=None, items=items,
+                       structure_preserved=structure_preserved(section_text, text))
 
 
 def pushback(section_id, decision, my_draft, jd, *, model, client=None) -> str | None:

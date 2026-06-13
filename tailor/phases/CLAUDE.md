@@ -31,6 +31,15 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   source evidences it, so an inserted-but-unsupported keyword earns *zero* coverage —
   the optimisation target no longer rewards the very thing the rules forbid. Prompt
   rules + orchestrator gate + verifier + honest metric all point the same way.
+- **The drafter must preserve the source's structure (F-56).** Tailoring changes
+  wording, never format: a bulleted experience section stays bullets, a `·`-delimited
+  skills list stays a list. The rule lives in `tools/writer_common.STRUCTURE_RULES`
+  (prominent, ahead of the content guidance in both writer prompts) and is *enforced*
+  deterministically — `structure_preserved(source, draft)` counts list markers in code
+  (not the model's self-report) and sets `WriterDraft.structure_preserved`; the
+  orchestrator disqualifies a flattened draft. Same lesson as the keyword Goodhart fix:
+  a prompt rule with no deterministic backstop gets silently optimised away (here the
+  writers flattened sections into prose, making the rendered CV a wall of text).
 - **HITL is preview-before-apply** (Phases 1, 4, 5): show what changes, then ask.
 
 ## phase3_refinement.py — the dual-writer agentic loop (D-28, D-01, D-05, D-12)

@@ -128,3 +128,74 @@ def test_gpt_writer_pushback():
     assert gpt_writer.pushback("profile", dec, draft, jd(), client=fake_gpt(pushback="metrics aren't in source")) \
         == "metrics aren't in source"
     assert gpt_writer.pushback("profile", dec, draft, jd(), client=fake_gpt()) is None
+
+
+# -- structure preservation (F-56) ------------------------------------------ #
+#
+# The real "rendering bug": the writers flattened bulleted experience and the
+# "·"-delimited skills list into prose, so the CV tab rendered walls of text.
+# `structure_preserved()` catches it deterministically (list markers, not the
+# model's self-report); the writers set the flag on every WriterDraft.
+
+# The Utiq experience section from run_20260613_111401 — a bulleted SOURCE the
+# writer flattened into one prose paragraph at v0 (the observed defect).
+UTIQ_SOURCE = (
+    "- Joined at a pre-commercial stage to define and establish the UK solutions consulting "
+    "function, including operating model, engagement approach, and integration frameworks "
+    "across publishers, platforms, and CTV partners.\n"
+    "- Worked directly with C-level clients and senior stakeholders to shape go-to-market "
+    "strategy, while leading the design of Utiq's identity graph solution.\n"
+    "- Activated initial pilot campaigns across multiple publisher partners, achieving 40% "
+    "incremental audience reach and informing the broader commercialisation roadmap.\n"
+    "- Designed and deployed an AI-powered RFI response platform: a production-ready RAG "
+    "pipeline using Mistral and ChromaDB with hybrid retrieval and reranking."
+)
+UTIQ_FLATTENED = (
+    "Joined at pre-commercial stage to define and establish the UK solutions consulting "
+    "function across publishers, platforms, and CTV partners. Worked directly with C-level "
+    "clients to shape go-to-market strategy while leading the design of Utiq's identity graph "
+    "solution. Activated initial pilot campaigns achieving 40% incremental audience reach. "
+    "Designed and deployed an AI-powered RFI response platform using Mistral and ChromaDB."
+)
+SKILLS_SOURCE = ("Solutions Engineering Leadership · Technical Pre-Sales · Solution Architecture · "
+                 "Executive Engagement · API & Platform Integrations · GTM Strategy")
+
+
+def test_structure_preserved_flags_flattened_bullets():
+    """A bulleted source flattened to a prose paragraph fails the check (the Utiq defect)."""
+    from tailor.tools.writer_common import structure_preserved
+    assert structure_preserved(UTIQ_SOURCE, UTIQ_FLATTENED) is False
+    # the same source kept as bullets passes
+    kept = "\n".join("- " + ln.lstrip("- ") for ln in UTIQ_SOURCE.splitlines())
+    assert structure_preserved(UTIQ_SOURCE, kept) is True
+
+
+def test_structure_preserved_flags_skills_list_turned_to_prose():
+    """A "·"-delimited skills list rewritten as sentences fails ("skills literal" defect)."""
+    from tailor.tools.writer_common import structure_preserved
+    prose = "Solutions architecture and technical pre-sales across enterprise deals."
+    assert structure_preserved(SKILLS_SOURCE, prose) is False
+    reordered = "Solution Architecture · Technical Pre-Sales · GTM Strategy · Executive Engagement"
+    assert structure_preserved(SKILLS_SOURCE, reordered) is True
+
+
+def test_structure_preserved_prose_source_unconstrained():
+    """A prose source imposes no structure constraint — prose in, prose out is fine."""
+    from tailor.tools.writer_common import structure_preserved
+    assert structure_preserved("A prose profile paragraph with no lists.", "Another prose paragraph.") is True
+
+
+def test_claude_writer_sets_structure_preserved_false_on_flatten():
+    """The writer records structure_preserved on the draft from the deterministic check —
+    a flattened bulleted source ⇒ False (claude_writer, F-56)."""
+    d = claude_writer.write_section("experience_utiq", UTIQ_SOURCE, jd(), rubric(), budget(),
+                                    version=1, model="m", client=fake_claude(UTIQ_FLATTENED, []))
+    assert d.structure_preserved is False
+
+
+def test_gpt_writer_sets_structure_preserved_true_when_bullets_kept():
+    """Bullets in, bullets out ⇒ structure_preserved True (gpt_writer, F-56)."""
+    bulleted = "- Drove 20% YoY growth across Tier 1 accounts.\n- Co-built a Chrome extension retaining $500k."
+    d = gpt_writer.write_section("experience_utiq", UTIQ_SOURCE, jd(), rubric(), budget(),
+                                 version=1, client=fake_gpt(bulleted, []))
+    assert d.structure_preserved is True

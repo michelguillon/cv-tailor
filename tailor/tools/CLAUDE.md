@@ -21,9 +21,19 @@ Week 2 agent called SQL queries (D-02). Read `tailor/CLAUDE.md` first.
 
 Two independent writers + one orchestrator replace the old single critique tool.
 `writer_common.py` holds what must stay calibrated between the two writers:
-truthfulness rules, the two severity definitions (D-11), the source-anchored word
+truthfulness rules (`TRUTHFULNESS_RULES`), structure-preservation rules
+(`STRUCTURE_RULES`), the two severity definitions (D-11), the source-anchored word
 target (D-27/F-13), and the deterministic length-budget items (D-14) — applied to
 **both** writers' drafts (F-17), code counts words, the model judges content.
+
+- **Structure preservation is a deterministic gate, not a prompt hope (F-56).**
+  `STRUCTURE_RULES` (a top-level block placed BEFORE the content guidance in both writer
+  system prompts) tells the writers to match the source's list shape — bulleted experience
+  stays bullets, a `·`-delimited skills list stays a list. `structure_preserved(source,
+  draft)` then **counts list markers in code** (never the model's self-report) and the writer
+  stamps the result on `WriterDraft.structure_preserved`. Buried inside `TRUTHFULNESS_RULES`
+  the rule was ignored and the writers flattened sections into prose (walls of text in the CV
+  tab) — keep the rule prominent and the check enforced.
 
 - **`claude_writer.py`** — Claude as the precise, evidence-led writer. Forced
   `submit_draft` tool → `{text, items}`; `pushback()` → `str | None` (D-29).
@@ -34,7 +44,10 @@ target (D-27/F-13), and the deterministic length-budget items (D-14) — applied
   **synthesises**, sets `direction`, judges `converged`. It is given the **SOURCE
   section** (`source_text`, the text the writers tailored from) and judges
   truthfulness FIRST — fabrication (invented title/sector/identity, or an unsupported
-  JD keyword) caps a draft at 4/10 and blocks `converged` (F-34). The source rides in
+  JD keyword) caps a draft at 4/10 and blocks `converged` (F-34). It also sees each draft's
+  `structure_preserved` flag and treats **False as a selection disqualifier** (a draft
+  flattened to prose can't be the base; both-flattened forces `converged=False` with a
+  restore-format direction, F-56). The source rides in
   the user message, not the cache prefix (it varies per section, D-31). `adjudicate()` returns
   `(OrchestratorDecision, selected_text)` — the decision is a summary (no draft
   text; drafts live on disk, D-07 #3), `selected_text` is what the loop

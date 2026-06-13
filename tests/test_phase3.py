@@ -51,7 +51,7 @@ def fake_claude(cfg, rubric_decisions=()):
             sid = re.search(r"SECTION TYPE: (\S+)", p).group(1)
             inp = {"text": f"{sid} alpha beta", "items": cfg[sid].get("claude_items", [])}
         elif name == "submit_decision":
-            sid = re.search(r"--- CLAUDE DRAFT ---\s*(\S+)", p).group(1)
+            sid = re.search(r"--- CLAUDE DRAFT[^\n]*---\s*(\S+)", p).group(1)
             inp = cfg[sid]["decision"]
         elif name == "submit_pushback":
             inp = {"disagree": False, "reasoning": ""}

@@ -146,6 +146,7 @@ def make_writer_draft():
                 source_writer="gpt",
             )
         ],
+        structure_preserved=False,
     )
 
 
@@ -319,9 +320,10 @@ def test_d28_writer_draft_carries_items():
     """WriterDraft holds the writer's self-flagged items — the canonical source
     for the zero-major soft-stop / freeze check (D-28)."""
     names = _field_names(WriterDraft)
-    assert {"writer", "text", "version", "pushback", "items"} <= names
+    assert {"writer", "text", "version", "pushback", "items", "structure_preserved"} <= names
     wd = WriterDraft.from_dict(make_writer_draft().to_dict())
     assert isinstance(wd.items[0], CritiqueItem)
+    assert wd.structure_preserved is False        # round-trips (F-56)
 
 
 def test_d07_rubric_additions_are_typed():

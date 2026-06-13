@@ -154,16 +154,22 @@ section simultaneously. One orchestrator adjudicates. Writers can push back.
 Per active section, per iteration:
 
 Step 1 — Dual write
-  Claude (writer role)   →  WriterDraft { text, items[], pushback }
-  GPT-4o-mini (writer)   →  WriterDraft { text, items[], pushback }
+  Claude (writer role)   →  WriterDraft { text, items[], pushback, structure_preserved }
+  GPT-4o-mini (writer)   →  WriterDraft { text, items[], pushback, structure_preserved }
   Both receive: section text · JD + rubric · word budget · LoopMemory
                 orchestrator direction (None on iter 1) · CVCM (optional)
                 is_final_iteration flag
+  STRUCTURE_RULES (ahead of the content guidance): match the source's list shape —
+    bulleted experience stays bullets; a "·"-delimited skills list stays a list.
+    structure_preserved is set in CODE (marker count, not self-report) — F-56.
 
 Step 2 — Orchestrator adjudication (Claude Sonnet, orchestrator role)
-  Sees: both drafts + rubric
+  Sees: both drafts (+ each draft's structure_preserved flag) + rubric
   Produces OrchestratorDecision:
     selected_base ("claude"|"gpt"|"synthesis")
+      — a draft with structure_preserved=False (flattened to prose) is disqualified;
+        if both lost structure, converged is forced False with a restore-format
+        direction (F-56)
     synthesis_notes (if synthesis)
     direction for next iteration
     claude_quality + gpt_quality (0–10, anchored scale)
@@ -211,7 +217,8 @@ Key types (full definitions in `tailor/models.py`):
 
 ```python
 # Writer output
-WriterDraft { writer, section_id, text, version, pushback, items: list[CritiqueItem] }
+WriterDraft { writer, section_id, text, version, pushback, items: list[CritiqueItem],
+              structure_preserved: bool }   # F-56: did the draft keep the source's list shape
 CritiqueItem { section, severity ("major"|"minor"), issue, suggestion, source_writer }
 
 # Orchestrator output

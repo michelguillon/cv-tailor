@@ -301,6 +301,10 @@ class WriterDraft(Serializable):
                                   #   direction; None on iteration 1 (no prior direction)
     # Issues the writer flags in its own draft — soft-stop/freeze read majors from here (D-28).
     items: list[CritiqueItem] = field(default_factory=list)
+    # Deterministic structure check (F-56): False when the draft flattened a bulleted /
+    # "·"-delimited-skills source into prose. Set in code by the writer (not self-reported);
+    # the orchestrator treats False as a selection disqualifier and freeze blocker.
+    structure_preserved: bool = True
 
 
 @dataclass

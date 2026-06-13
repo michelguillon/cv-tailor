@@ -524,6 +524,12 @@ class WriterDraft:
     items: list[CritiqueItem]    # issues the writer flags in its own draft
                                  # soft-stop and freeze depend on zero major items across
                                  # both writers — these are the canonical source for that check
+    structure_preserved: bool    # F-56: did the draft keep the SOURCE's list shape (bulleted
+                                 # experience stays bullets; a "·"-delimited skills list stays a
+                                 # list)? Set in CODE by the writer (deterministic marker count,
+                                 # not model self-report); the orchestrator treats False as a
+                                 # selection disqualifier so a draft flattened to prose can't be
+                                 # chosen or frozen. Defaults True (prose sources are unconstrained)
 
 @dataclass
 class OrchestratorDecision:
@@ -699,9 +705,17 @@ Step 1 — Dual write
     - is_final_iteration: bool ("definitive version" prompt on last pass)
     - CVCM content (optional; passed when candidate/value_creation_model.md present)
   Each writer self-assesses and returns CritiqueItems in WriterDraft.items
+  Each writer also sets WriterDraft.structure_preserved (F-56): a deterministic,
+    code-side check that the draft kept the source's list shape (bulleted experience
+    stays bullets; a "·"-delimited skills list stays a list). Writers are told to
+    match the source's structure (STRUCTURE_RULES, ahead of the content guidance in
+    both system prompts); the flag is the enforcement, not the model's word.
 
 Step 2 — Orchestrator adjudication (Claude Sonnet, orchestrator role)
-  Sees: both WriterDrafts (text + items), rubric, keyword scores
+  Sees: both WriterDrafts (text + items + structure_preserved), rubric, keyword scores
+  A draft with structure_preserved=False (flattened the source to prose) is
+    DISQUALIFIED as the selected base; if both lost structure, converged is forced
+    False with a direction to restore the bullet/list format (F-56)
   Produces OrchestratorDecision per section:
     selected_base ("claude"|"gpt"|"synthesis"),
     synthesis_notes (what to take from each, if synthesis),

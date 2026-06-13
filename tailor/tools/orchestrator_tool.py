@@ -61,6 +61,14 @@ source gives no evidence. A draft that fabricates scores at most 4/10 however we
 fits the JD, must NOT be marked converged, and its direction must be to CUT the \
 unsupported content.
 
+STRUCTURE (a hard selection rule): each draft is labelled structure_preserved=true/false — \
+a deterministic check of whether it kept the SOURCE's list shape (bulleted experience stays \
+bullets; a "·"-delimited skills list stays a delimited list). A draft with \
+structure_preserved=false has flattened the source into prose and is DISQUALIFIED as the \
+base: never select it when the other draft preserved structure. If BOTH are false, pick the \
+stronger content but you MUST set converged=false and make the direction "restore the \
+source's bullet/list format — one bullet per achievement, do not write a prose paragraph".
+
 {SCORE_ANCHORS}
 
 Then decide:
@@ -157,8 +165,10 @@ def adjudicate(
         cvcm_block +
         f"SOURCE SECTION (ground truth — every claim in a draft must trace to here):\n"
         f"{source_text or '(source unavailable — judge truthfulness conservatively)'}\n\n"
-        f"--- CLAUDE DRAFT ---\n{claude_draft.text}\n\n"
-        f"--- GPT DRAFT ---\n{gpt_draft.text}\n\n"
+        f"--- CLAUDE DRAFT (structure_preserved={getattr(claude_draft, 'structure_preserved', True)}) ---\n"
+        f"{claude_draft.text}\n\n"
+        f"--- GPT DRAFT (structure_preserved={getattr(gpt_draft, 'structure_preserved', True)}) ---\n"
+        f"{gpt_draft.text}\n\n"
         f"Adjudicate this section.{final_note}"
     )
     data, problems = None, []

@@ -16,9 +16,11 @@ from tailor.models import CritiqueItem
 __all__ = [
     "SEVERITIES",
     "TRUTHFULNESS_RULES",
+    "STRUCTURE_RULES",
     "SEVERITY_DEFS",
     "word_target",
     "length_items",
+    "structure_preserved",
     "jd_rubric_block",
     "section_user_prompt",
 ]
@@ -44,8 +46,24 @@ recast adtech, identity, ad-platform, or semiconductor work as "fintech", "payme
 - Use a JD or rubric keyword ONLY where the source already demonstrates that exact thing, \
 in your own grounded words. Inserting an unsupported term — or bolting a JD phrase onto a \
 real achievement ("…through executive communication with C-level stakeholders") when the \
-source doesn't show it — is FABRICATION, not coverage. When in doubt, leave it out.
-- Preserve the source's structure: if it uses bullet points, return bullet points."""
+source doesn't show it — is FABRICATION, not coverage. When in doubt, leave it out."""
+
+# Structure preservation is its OWN top-level rule, not a truthfulness footnote (F-56):
+# buried as the last line of TRUTHFULNESS_RULES it was ignored, and the writers flattened
+# bulleted experience and the "·"-delimited skills list into prose paragraphs — which made
+# the rendered CV a wall of text. This block sits BEFORE the content guidance in both writer
+# system prompts, and a deterministic `structure_preserved()` check (below) backs it up so the
+# rule is enforced, not merely stated.
+STRUCTURE_RULES = """\
+STRUCTURE — match the SOURCE section's shape EXACTLY. Tailoring changes wording, never format:
+- If the source is a BULLETED list (lines beginning "- "), return a bulleted list: keep each \
+achievement on its own "- " line. NEVER merge the bullets into a flowing prose paragraph. You \
+may reorder, sharpen, or drop a bullet, but the result must stay bullets.
+- If the source is a SKILLS list (short terms separated by "·"), return the SAME "·"-delimited \
+list of terms. Reorder or swap terms for relevance, but NEVER expand it into sentences — a \
+skills list rewritten as prose is wrong.
+- If the source is a prose paragraph, return prose. Do not invent bullets it didn't have.
+Mismatching the source's structure is a defect on its own, independent of the wording quality."""
 
 SEVERITY_DEFS = """\
 When you self-assess, flag issues with exactly two severity levels:
@@ -90,6 +108,34 @@ def length_items(section_id: str, text: str, budget, writer: str) -> list[Critiq
             source_writer=writer,
         )]
     return []
+
+
+def _bullet_lines(text: str) -> int:
+    """Count markdown bullet lines ("- "/"* ") in `text`."""
+    return sum(1 for ln in text.splitlines() if ln.lstrip().startswith(("- ", "* ")))
+
+
+def _is_delimited_list(text: str) -> bool:
+    """True for a one-line "skills list" — short terms joined by "·"/"•" separators
+    (≥2 separators ⇒ ≥3 terms). This is the skills-section shape (skills_source.md)."""
+    return any(ln.count("·") >= 2 or ln.count("•") >= 2 for ln in text.splitlines())
+
+
+def structure_preserved(source_text: str, draft_text: str) -> bool:
+    """Deterministic check (NOT the model's self-report) that a tailored draft kept the
+    SOURCE section's list shape (F-56). The writers otherwise flatten bulleted experience
+    and the "·"-delimited skills list into prose, turning the rendered CV into walls of
+    text. Code counts list markers, mirroring how `length_items` counts words (D-14):
+      - bulleted source (≥2 bullets) → the draft must stay bulleted (≥2 bullets);
+      - "·"-delimited skills list    → the draft must stay a delimited list;
+      - prose source                 → no structural constraint (always True).
+    The writers set this on every WriterDraft; the orchestrator treats False as a
+    selection disqualifier and a freeze blocker."""
+    if _bullet_lines(source_text) >= 2:
+        return _bullet_lines(draft_text) >= 2
+    if _is_delimited_list(source_text):
+        return _is_delimited_list(draft_text)
+    return True
 
 
 def jd_rubric_block(jd, rubric) -> str:
