@@ -2,9 +2,9 @@
 ## Consolidated Technical and Functional Reference
 
 **Repository:** cv-tailor  
-**Status:** Complete — pipeline (Steps 0–9) + web UI + security gates deployed  
+**Status:** Complete — pipeline + UI + security gates + Langfuse tracing + SSE resilience deployed  
 **Deployment:** M720q home server · Docker Compose · FastAPI + React  
-**Last updated:** post-UI (D-38/D-39/D-40)
+**Last updated:** June 2026 — project closed
 
 ---
 

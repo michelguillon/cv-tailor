@@ -1,14 +1,10 @@
 # SPEC_LANGFUSE_INSTRUMENTATION.md
 ## Langfuse Instrumentation — cv-tailor + Job Radar
 
-**Status:** **Phase A (cv-tailor) ✅ built + verified live 2026-06-12** — full trace tree renders in
-the cv-tailor project (§6). Build notes §9; debug toolkit + ops runbook §10–§11; Findings F-53/F-54.
-Phase B (Job Radar) pending — **replicate the §11 debug toolkit when building it**.
-**Prerequisite:** `SPEC_LANGFUSE_DEPLOYMENT.md` — the self-hosted server. ⚠ On the first live test the
-ingest API returned 200 but the server logged `Failed to upload JSON to S3`: the trace-blob storage
-**bucket was never created**. Created server-side 2026-06-12; "complete and healthy ✅" was premature.
-**Build order:** cv-tailor first ✅, Job Radar second
-**SDK version:** langfuse v4 — confirmed `langfuse==4.7.1` in the built image (`requirements.txt`: `langfuse>=4.0.0`)
+**Status:** Phase A (cv-tailor) ✅ verified live 2026-06-12 · Phase B (Job Radar) ✅ verified live 2026-06-13
+**Prerequisite:** `SPEC_LANGFUSE_DEPLOYMENT.md` complete and healthy ✅
+**Build order:** cv-tailor first ✅, Job Radar second ✅
+**SDK version:** langfuse v4 — confirmed `langfuse==4.7.1` in both built images (`requirements.txt`: `langfuse>=4.0.0`)
 
 > **Note:** This spec was originally written against SDK v2. All code blocks
 > have been rewritten for SDK v4. The v4 SDK is OTel-based — the API is
@@ -178,14 +174,6 @@ without tracing. Production has it enabled. No mocking required.
 In SDK v4, there is no explicit `lf.trace()` call. Instead, the root
 `@observe()` decorated function *is* the trace. Trace-level metadata
 is set via `propagate_attributes()`.
-
-> **⚠ Built differently — the code below is illustrative and does NOT match
-> the implementation (§9 / F-53).** Decorating `launch_run` would orphan every
-> phase span: OTel context is thread-local and `launch_run` only *spawns* the
-> run thread, then returns. The root trace is opened **inside the worker thread**
-> (`api/runner.target`), around `run_pipeline`, via the `tailor/telemetry.run_trace`
-> context manager — not a decorator. It also claims a **deterministic trace id**
-> (`Langfuse.create_trace_id(seed=run_id)`) so `attach_scores` can match it later.
 
 In `api/runner.py`:
 
@@ -377,65 +365,74 @@ Build after cv-tailor instrumentation is confirmed working.
 
 One Langfuse project: `job-radar`. Separate from cv-tailor.
 
-### 3.2 Trace structure
+### 3.2 Trace structure — AS BUILT
 
-Unchanged from original spec — see section 3.2 in previous version.
-Two targets: extraction batch and scoring run.
+> **As-built note (2026-06-13).** This section was rewritten to match the shipped
+> code (`cli/telemetry.py`) after several deviations from the original sketch were
+> discovered live. The trace *shapes* are as designed; the code below reflects the
+> real SDK surface and the worker-ingestion requirement the sketch missed.
 
-### 3.3 Batch API pattern
+**THREE trace targets, not two** — the original spec had extraction + scoring, both
+CLI-driven. The synchronous **manual ingest** (`POST /api/manual-ingest`) is a *separate
+code path* in the FastAPI process (it runs `extract_one` + `score` inline, never the
+CLIs), so it needs its own recorder or it is silently untraced:
 
-The Batch API is async — spans must be created after results arrive.
-In v4, use `start_observation()` (manual, no context shift) for the
-post-hoc pattern:
+| Target | Where | Trace name | Shape |
+|---|---|---|---|
+| `extraction_batch` | `cli/label.py` after `merge_results` | `extraction_batch` | root → `jd_extraction` span per JD → `claude_extraction` generation (Opus, tokens) → `validation_passed` score |
+| `scoring_run` | `cli/score.py` | `scoring_run` | root → `jd_scoring` span per JD → `dimension_score` span per dimension |
+| `manual_ingest` | `api/routers/manual_ingest.py` after persist | `manual_ingest` | root → `claude_extraction` generation (Haiku, tokens) → `jd_scoring` span → `dimension_score` spans → `validation_passed` score |
+
+### 3.3 Three corrections the sketch missed (the load-bearing facts)
+
+1. **`langfuse.trace.name` is REQUIRED for the worker to ingest a trace.** The original
+   sketch set no trace name. A trace whose spans lack the `langfuse.trace.name` attribute
+   uploads to MinIO but the worker never promotes it into ClickHouse — it silently never
+   appears in the UI (diagnosed by diffing MinIO payloads against cv-tailor's working
+   spans). Every root span MUST be wrapped in `propagate_attributes(trace_name=…)`,
+   mirroring `tailor/telemetry.run_trace`. `start_as_current_observation` has **no**
+   `trace_name` parameter (confirmed by introspection) — `propagate_attributes` is the
+   mechanism.
+
+2. **Use the proven SDK surface, not `lf.trace()` / `lf.api.scores.create()`.** The shipped
+   code mirrors cv-tailor's verified-live calls: `Langfuse.create_trace_id(seed=…)` for a
+   deterministic id, the root span claiming it via `trace_context={"trace_id": tid}`, and
+   `lf.create_score(name=, value=, trace_id=, observation_id=, data_type="NUMERIC")` for
+   scores. The langfuse SDK is imported lazily *inside* functions so `import cli.telemetry`
+   works uninstalled, and `is_enabled()` gates every recorder to a clean no-op.
+
+3. **Flush AFTER the root span closes.** The Batch API is async and the CLI exits
+   immediately — there is no periodic exporter to fall back on. Each recorder builds its
+   whole tree inside the root `with`, lets it close, then `lf.flush()`. (Manual ingest runs
+   in the long-lived API process, but flushes the same way so the trace shows promptly.)
+
+The canonical shape (see `cli/telemetry.record_extraction_batch` for the full version):
 
 ```python
-from langfuse import get_client
-from cli.telemetry import is_enabled
-
-def record_extraction_batch(batch_id: str, batch_results: list, metadata: dict):
-    if not is_enabled():
-        return
-    lf = get_client()
-
-    # Root trace span for the whole batch
-    with lf.start_as_current_observation(
-        as_type="span",
-        name="extraction_batch",
-        input=metadata,
-    ) as batch_span:
-        with propagate_attributes(metadata={
-            "batch_id": batch_id,
-            "date": metadata["date"],
-            "jd_count": str(len(batch_results)),
-        }):
-            for result in batch_results:
-                with lf.start_as_current_observation(
-                    as_type="span",
-                    name="jd_extraction",
-                    input={"job_id": result.job_id, "company": result.company},
-                ) as jd_span:
-                    with lf.start_as_current_observation(
-                        as_type="generation",
-                        name="claude_extraction",
-                        model="claude-opus-4-8",
-                        input=result.prompt,
-                    ) as gen:
-                        gen.update(
-                            output=result.completion,
-                            usage_details={
-                                "input_tokens": result.usage.input,
-                                "output_tokens": result.usage.output,
-                            }
-                        )
-                    # Attach validation score
-                    lf.api.scores.create(
-                        trace_id=batch_id,
-                        observation_id=jd_span.id,
-                        name="validation_passed",
-                        value=1 if result.validated else 0,
-                        data_type="NUMERIC",
-                    )
+from langfuse import Langfuse, get_client, propagate_attributes
+lf = get_client()
+tid = Langfuse.create_trace_id(seed=batch_id)
+with lf.start_as_current_observation(
+    as_type="span", name="extraction_batch",
+    trace_context={"trace_id": tid}, input=metadata,
+), propagate_attributes(trace_name="extraction_batch", metadata={...}):   # ← trace_name = worker requirement
+    for row in rows:
+        with lf.start_as_current_observation(as_type="span", name="jd_extraction", ...) as jd_span:
+            with lf.start_as_current_observation(as_type="generation", name="claude_extraction",
+                                                 model=row["model"], input=row["prompt"]) as gen:
+                gen.update(output=row["completion"],
+                           usage_details={"input": ..., "output": ...})
+            lf.create_score(name="validation_passed", value=1.0 if row["validated"] else 0.0,
+                            trace_id=tid, observation_id=jd_span.id, data_type="NUMERIC")
+lf.flush()   # AFTER the root closes — CLI is about to exit
 ```
+
+Rows are assembled by **pure** builders (`cli.label.build_trace_rows`,
+`cli.score.build_scoring_rows`) that re-derive the scorer breakdown with `stage1_fit`
+(read-only) — no business logic, prompt, or schema touched, and unit-testable without the
+SDK. A `debug-trace` CLI/probe (`python -m cli.telemetry debug-trace`) exercises the full
+init→trace→score→flush path at zero cost (it carries `auth_check`; `init_langfuse` never
+does, as that sync probe would hang).
 
 ### 3.4 Cross-system linkage
 
@@ -485,32 +482,32 @@ queryable and joinable via IDs stored in `corpus/cv_tailor_links.jsonl`.
 
 ---
 
-## 6. Definition of Done — cv-tailor (Phase A) — ✅ code complete
+## 6. Definition of Done — cv-tailor (Phase A)
 
-1. A completed cv-tailor run produces a trace in Langfuse with: **(code verified; awaiting a live
-   run now the S3 bucket exists)**
-   - ✅ `run_id` in trace metadata — enables cross-system lookup
-   - ✅ Phase spans for Phase 0, 1, 3, 4 (plus 2, 5, 6 — the trace tree is complete)
-   - ✅ LLM generations with model names + token counts (captured at the `helpers` chokepoint,
-     so every Claude/GPT call across all phases is covered; Phase-3 generations nest per iteration)
-   - ✅ `fit_score`, `coverage_score`, `cv_quality_score` as trace scores
-   - ✅ `job_radar_fit_score` attached when the run came from Job Radar
-2. ✅ Tracing disabled cleanly when `LANGFUSE_PUBLIC_KEY` is absent (every `telemetry.*` call no-ops)
-3. ✅ All existing cv-tailor tests pass unchanged (328 untraced; +46 re-run *traced* to validate the
-   enabled path — `tests/conftest.py` keeps the suite untraced by default)
+1. A completed cv-tailor run produces a trace in Langfuse with:
+   - `run_id` in trace metadata — enables cross-system lookup
+   - Phase spans for Phase 0, 1, 3, 4
+   - LLM generations with token counts
+   - `fit_score`, `coverage_score`, `cv_quality_score` as trace scores
+   - `job_radar_fit_score` attached when run came from Job Radar
+2. Tracing disabled cleanly when `LANGFUSE_PUBLIC_KEY` is absent
+3. All existing cv-tailor tests pass unchanged
 
-**✅ Verified live (2026-06-12).** A full-mode run on a real job renders the complete trace in the
-cv-tailor Langfuse project: the `cv_tailor_run` root (~8–10 min) with nested
-`phase2_initial_draft → phase3_refinement → iteration_1/iteration_2` spans, and generations for
-every model (`mistral_extraction`, `claude-sonnet-4`, `gpt-4o-mini`, `claude-haiku-4-5`) with
-token/latency. The final blocker was a run-path flush bug, not config — see §10.6 / F-54.
+## 7. Definition of Done — Job Radar (Phase B) ✅ shipped 2026-06-13
 
-## 7. Definition of Done — Job Radar (Phase B)
+1. ✅ Completed extraction batch produces trace with child spans per JD (`extraction_batch`)
+2. ✅ Scoring run produces trace with dimension breakdown per JD (`scoring_run`)
+3. ✅ **Manual ingest produces a `manual_ingest` trace** (extraction generation + scoring
+   breakdown) — the separate API path, instrumented after it was found untraced
+4. ✅ Every trace sets `langfuse.trace.name` via `propagate_attributes` — without it the
+   worker drops the trace (does not reach ClickHouse / the UI)
+5. ✅ All existing Job Radar tests pass with no `LANGFUSE_PUBLIC_KEY` (468; was 440 at spec time)
+6. ✅ Traces queryable alongside cv-tailor traces in the Langfuse UI
 
-1. Completed extraction batch produces trace with child spans per JD
-2. Scoring run produces trace with dimension breakdown per JD
-3. All existing Job Radar tests pass unchanged (440)
-4. Traces queryable alongside cv-tailor traces in Langfuse UI
+**Forward work (post-close): refine *what* we trace.** The plumbing is done and verified;
+the next iteration tunes granularity from real usage — e.g. capturing cost/latency on the
+batch generations, trimming low-value metadata, and deciding whether dimension-level spans
+earn their keep. Add granularity only where gaps appear (see §1) — don't pre-instrument.
 
 ---
 
@@ -537,207 +534,44 @@ orchestration grounded in evidence rather than assumption.
 
 ---
 
-## 9. Build notes — cv-tailor (Phase A, 2026-06-12, F-53)
+## 12. Critical operational finding — `langfuse.trace.name` required by worker
 
-The code blocks in §2 are **illustrative** (originally written against SDK v2; the phase
-signatures never matched the real pipeline either). What was actually built:
+Discovered during Job Radar Phase B. The Langfuse v3 worker uses
+`langfuse.trace.name` as a routing signal to process OTel spans from MinIO
+into ClickHouse. Spans without this attribute sit in MinIO indefinitely —
+no error is logged anywhere.
 
-**One module imports the SDK — `tailor/telemetry.py`.** The observability analogue of
-`helpers.py`: phases, the runner, and the provider helpers trace *through* its context
-managers (`run_trace` / `span` / `open_span` / `generation` / `set_metadata` /
-`set_generation` / `attach_scores`). Every call is a **clean no-op when `LANGFUSE_PUBLIC_KEY`
-is unset**, swallows its own errors (observability must never break a run), and **never masks
-an exception from the wrapped body** (records it on the span, then re-raises).
+**How it gets set:**
+- `start_as_current_observation(name="your_name")` → sets it automatically ✅
+- `lf.trace(name="...")` low-level API → does NOT set it ✗
 
-**Root trace on the run thread, not on `launch_run` (the key fix).** OTel context is
-thread-local; `launch_run` only spawns the daemon thread that runs the pipeline. So
-`telemetry.run_trace(...)` wraps `run_pipeline` **inside `api/runner.target()`**. It claims a
-**deterministic trace id** (`Langfuse.create_trace_id(seed=run_id)`) so `attach_scores` — which
-runs after the thread's work and has no trace object to call — re-derives the same id via
-`lf.create_score(trace_id=…)`. `run_id` also rides in trace metadata as the cross-system key.
+Always use `start_as_current_observation` with an explicit name on the root
+observation. Never use `lf.trace()` as the root span.
 
-**Generations at the `helpers` chokepoint.** `claude_complete`/`gpt_complete` wrap their
-provider call in a generation at the exact point where token usage is already tapped for
-`cost.py` (D-02). Result: *every* Claude/GPT call across all phases gets a generation with real
-token counts, with **no signature changes** to the writer/orchestrator tools (which weren't
-returning usage). Phase 0's Mistral call doesn't go through those helpers, so its generation is
-created in `run.py` from the usage `analyse_jd` already returns.
-
-**Phase-3 iteration spans via `open_span` (no loop re-indent).** The iteration body is ~175
-lines; rather than re-indent it into a `with`, `telemetry.open_span()` returns `(obs, close)`
-and is entered/closed linearly (`__enter__` activates the span in the OTel contextvar, so the
-writer/orchestrator generations still nest under the right iteration). A mid-iteration exception
-leaves that one span unclosed — acceptable, the run is already aborting.
-
-**Tests stay untraced via `tests/conftest.py`.** `docker-compose.yml` loads `.env` (which carries
-the real key) into the `cli` container, so the suite would otherwise run *traced* and export
-mock-data spans to prod. `conftest.py` pops `LANGFUSE_PUBLIC_KEY` before any `is_enabled()` call;
-a `CV_TAILOR_TRACE_TESTS=1` escape hatch keeps the key for deliberate enabled-path validation.
-
-**Host config.** The SDK's host precedence is `LANGFUSE_BASE_URL` → `LANGFUSE_HOST` → cloud
-default. The deployment's `.env` already sets `LANGFUSE_BASE_URL` to the self-hosted URL, so no
-`LANGFUSE_HOST` is needed (the spec's `.env` snippet naming `LANGFUSE_HOST` also works, lower
-precedence).
-
-**Deployment gotcha (cost an hour).** First live test: ingest API returned 200, but the server
-logged `500 Failed to upload JSON to S3` — the trace-blob bucket didn't exist. The client was
-correct; the server's object storage was unprovisioned. Created server-side 2026-06-12. Lesson:
-a Langfuse "healthy" check must include a round-trip that actually persists a span to S3, not just
-an API liveness probe.
-
-**Files touched:** `+tailor/telemetry.py`, `+tests/conftest.py`, `requirements.txt`,
-`tailor/helpers.py`, `tailor/run.py`, `tailor/phases/phase3_refinement.py`, `api/main.py`,
-`api/runner.py`. No business logic, prompts, schemas, or existing tests changed.
-
----
-
-## 10. Debug + operations — verifying the trace path at zero cost (F-54)
-
-Getting traces to actually land took longer than wiring the SDK, because the failure modes were
-all **server/network/config**, not code — and each was silent. This section is the runbook.
-
-### 10.1 `GET /api/debug/trace` — the zero-cost path check
-
-`api/main.py` exposes an unauthenticated debug endpoint that creates a minimal `debug_trace`
-(empty root span + one `debug_score = 1.0`) and flushes it — **no LLM call, no pipeline, $0**. It
-exercises the entire export path (init → trace → score → flush → server) and returns the verdict
-as JSON:
+**Diagnostic — read the raw MinIO payload:**
 
 ```bash
-docker exec cv-tailor-backend python -c \
-  "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/api/debug/trace').read())"
-# {"trace_id":"…","enabled":true,"host":"http://langfuse-langfuse-web-1:3000","auth_check":true,"error":null}
+docker exec langfuse-langfuse-minio-1 sh -c \
+  "mc alias set local http://localhost:9000 \$MINIO_ROOT_USER \$MINIO_ROOT_PASSWORD \
+   && mc cat local/langfuse/otel/<project_id>/<path>.json" 2>/dev/null
 ```
 
-Read it as a decision tree — **the JSON is the diagnostic, not the logs** (see 10.3):
-- `enabled:false` → `LANGFUSE_PUBLIC_KEY` not in the backend container's env.
-- `auth_check:false` + `error` → host unreachable or keys invalid from inside the container.
-- `auth_check:true` + a `trace_id` that **appears in the UI** → the whole path works.
-- `auth_check:true` but the trace **isn't in the UI** → it's in a *different project* (see 10.4).
+Look for `{"key":"langfuse.trace.name",...}` in the span attributes.
+If absent — spans will not be processed into ClickHouse.
 
-`localhost:8000` here is correct: it runs *inside* `cv-tailor-backend`, hitting uvicorn directly —
-the right way to isolate "is the backend serving?" from the Caddy/nginx/tunnel chain. "Container
-Started" (Docker) ≠ "uvicorn listening" (app ready), so allow a few seconds / look for
-`Uvicorn running on http://0.0.0.0:8000` before calling it.
+**Updated triage order (supersedes §11.3 step 2):**
 
-### 10.2 Networking — point the backend at the *internal* host
-
-The homeserver runs cv-tailor behind a Cloudflare Tunnel → Caddy. The backend container **cannot**
-hairpin to its own public URL (`https://langfuse.michel-portfolio.co.uk`) from inside the Docker
-network. It must reach Langfuse over the **shared Docker network by container name**:
-
-```
-LANGFUSE_BASE_URL=http://langfuse-langfuse-web-1:3000     # internal; NOT the public https URL
-```
-
-Requires the cv-tailor backend and the Langfuse stack to share a network (here, the external
-`caddy` network). SDK host precedence is `LANGFUSE_BASE_URL` → `LANGFUSE_HOST` → cloud default.
-
-### 10.3 Startup must not block; logs are nearly invisible — so diagnose via the response
-
-- **Never probe an external service in the FastAPI lifespan.** `init_langfuse()` originally called
-  `auth_check()` (a synchronous, no-timeout HTTP call) at startup. uvicorn only binds `:8000`
-  *after* lifespan startup completes, so a slow Langfuse host hung boot → the backend refused
-  connections (`ConnectionRefusedError [111]`). Fix: `init_langfuse()` only constructs the client
-  (fast, no network); `auth_check()` lives in `/api/debug/trace` (request-time, can't wedge boot).
-- **App-logger INFO is swallowed under uvicorn.** `tailor.telemetry` logs propagate to the root
-  logger, which has only the last-resort handler (WARNING+), so `docker logs … | grep langfuse`
-  comes back empty even when tracing runs fine. That's why the decisive signals (`auth_check`,
-  `trace_id`, `error`) are returned in the endpoint's **JSON body**, not relied on in logs.
-
-### 10.4 One key pair per project — or traces land in the wrong dashboard
-
-Langfuse API keys are **per project**. Reusing a single `pk-lf-…`/`sk-lf-…` pair across cv-tailor
-*and* Job Radar sends both apps' traces into whichever project those keys belong to — `auth_check`
-still returns `true` (the keys are valid), the traces just appear under the *other* project. Each
-app must use **its own project's keys** (§2.1 / §3.1 specify one project each). Symptom:
-`auth_check:true`, endpoint returns a `trace_id`, but the cv-tailor dashboard is empty.
-
-### 10.5 The full failure chain we hit (server/config + one run-path bug)
-
-1. Trace-blob **S3 bucket didn't exist** → ingest 200 but `Failed to upload JSON to S3` (§9).
-2. Backend used the **public URL** it couldn't reach from inside Docker → fixed to the internal host (10.2).
-3. **`auth_check` in startup** hung the lifespan → backend refused `:8000` (10.3).
-4. **Shared key pair** → traces landed in the Job Radar project's dashboard (10.4).
-5. **Unflushed root span** → `/api/debug/trace` traced but real runs didn't (10.6).
-
-Each looked like "no traces" with no obvious error. The `/api/debug/trace` JSON (`enabled` →
-`auth_check` → `trace_id` → check the *right* project) collapses 1–4 into a quick triage; #5 was
-the run-path-only bug it couldn't catch (the debug endpoint flushes after its span closes).
-
-### 10.6 The run-path flush bug — debug traced, real runs didn't
-
-After 1–4 were fixed, `/api/debug/trace` landed traces but **real runs still didn't**. Cause: in
-`api/runner.target()`, `attach_scores()` (which calls `flush()`) runs *inside* the
-`with run_trace` block — so it flushes while the **root span is still open**. The root span only
-closes when the `with` exits, and nothing flushed after that, so the completed root span depended
-on Langfuse's periodic exporter — but the daemon run-thread ends right there. The debug endpoint
-never hit this because it flushes *after* its span closes. Fix: `run_trace` flushes in a `finally`,
-after its own root span closes (`tailor/telemetry.run_trace`). **Lesson: a span isn't exported
-until it's *ended*; if the producing thread is about to die, flush *after* the root closes, not
-before.** Diagnosed with three WARNING-level logs (INFO is dropped by uvicorn, 10.3) bracketing the
-run path — ENTER / root-span-created / attach_scores-flushed — which showed the first two firing
-but never the third *for a completed run*. Now trimmed to a single kept confirmation —
-`Langfuse trace created: run_id=… trace_id=…` (WARNING, so it shows; one line per run to correlate
-a run with its trace) — the other two downgraded to DEBUG.
+1. Debug probe → `enabled` → `auth_check` → `trace_id`
+2. Confirm `trace_id` in UI in the **right project**
+3. Read raw MinIO JSON → confirm `langfuse.trace.name` present
+4. Only now run one real job (token-spending step)
+5. If debug traces land but real runs don't → flush/scope bug (§10.6)
 
 ---
 
-## 11. Debug instrumentation toolkit — replicate on every traced service
+## 13. Audit every pipeline entry point
 
-cv-tailor's "no traces" hunt (§10) cost hours, almost all of it server/config/runtime that the
-SDK swallows silently. The reusable payoff is a small, **project-agnostic toolkit** that turns any
-future "no traces" into a 5-second triage **at zero token cost**. **Replicate all of this on Job
-Radar (Phase B)** — the patterns are independent of what's being traced.
-
-### 11.1 The five pieces to port
-
-1. **One `telemetry` module — the only SDK importer.** Wrap every trace/span/score/flush behind
-   it. Two invariants: a **clean no-op when `LANGFUSE_PUBLIC_KEY` is unset** (so tests/CLI run
-   untraced — `is_enabled()`), and **never let observability raise** into the business path (guard
-   + swallow). cv-tailor: `tailor/telemetry.py`; Job Radar: `cli/telemetry.py`.
-
-2. **A zero-cost debug endpoint / command** — the single most valuable tool. Create a minimal
-   trace + score with **no model call** ($0), flush, and **return the verdict as data**:
-   `{trace_id, enabled, host, auth_check, error}`. Run it from inside the container. It collapses
-   "enabled? reachable? authenticated? which project?" into one call. cv-tailor exposes it as
-   `GET /api/debug/trace` (FastAPI); Job Radar (a CLI, no web server) should expose the same as a
-   subcommand, e.g. `python -m cli.telemetry debug-trace`, printing the same dict.
-
-3. **`auth_check()` belongs in the debug probe, not startup.** It's the decisive check (host
-   reachable AND keys valid), but it's a synchronous, no-timeout network call — running it in a
-   web app's startup hook can hang the bind (§10.3). Put it in the on-demand probe and return its
-   result. (In a batch/CLI tool there's no "startup bind" to wedge, but keep it in the probe for
-   uniformity and so it can't slow a real run.)
-
-4. **Diagnostics ride in the RESPONSE, because logs are nearly invisible.** App-logger `INFO`
-   propagates to the root last-resort handler (WARNING+ only) under uvicorn, so `grep` finds
-   nothing even when tracing works (§10.3). So: the debug probe returns its findings as data, and
-   any always-on per-run confirmation is **WARNING** level (one concise line correlating the
-   business id → `trace_id`). Don't rely on `INFO` showing in `docker logs`.
-
-5. **Flush after the producing scope *closes*, not while it's open.** A span isn't exported until
-   it's **ended**; if the producing thread/process is about to exit, an open root span misses the
-   flush and dies before the periodic exporter fires (§10.6). cv-tailor flushes in `run_trace`'s
-   `finally`. **Job Radar maps to this directly:** the Batch API is async, so spans are created
-   *post-hoc* after results arrive (§3.3) — create the batch span, end it, **then `flush()`** (the
-   CLI process exits immediately after, so there's no periodic exporter to fall back on).
-
-### 11.2 Deployment / networking checklist (per service)
-
-- **Internal host, not the public URL.** A container can't hairpin to its own Cloudflare URL; set
-  `LANGFUSE_BASE_URL=http://<langfuse-web-container>:3000` and put the service on the shared
-  network. Precedence: `LANGFUSE_BASE_URL` → `LANGFUSE_HOST` → cloud default (10.2).
-- **Each service uses its OWN project's keys.** Shared `pk-lf`/`sk-lf` → `auth_check:true` but
-  traces land in the *other* project's dashboard (10.4). One project per app (§2.1 / §3.1).
-- **Server prerequisite:** the trace-blob **S3/MinIO bucket must exist** — a "healthy" check must
-  persist a span end-to-end, not just probe API liveness (§9).
-
-### 11.3 The triage, in order (zero cost until the last step)
-
-1. Hit the debug endpoint/command → read `enabled` → `auth_check` → `trace_id`.
-   `enabled:false` ⇒ key not in env; `auth_check:false`+`error` ⇒ host/keys; both true ⇒ next.
-2. Confirm that `trace_id` in the UI **in the right project** (10.4). Appears ⇒ path works.
-3. Only now run one **real** job (the sole token-spending step) and confirm its `run_id → trace_id`
-   WARNING line + the trace tree in the UI. If the debug trace lands but a real run doesn't, it's a
-   run-path bug (flush/scope, §10.6), not config.
+During Job Radar Phase B, the manual job addition path was not instrumented
+in the initial build — only the automated batch path was. Always check every
+route that produces traceable work, not just the primary path. In Job Radar:
+both `cli/label.py` (batch) and the manual addition path are instrumented.

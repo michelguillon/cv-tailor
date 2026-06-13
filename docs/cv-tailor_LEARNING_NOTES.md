@@ -3,7 +3,7 @@
 
 **Project:** Week 3 Portfolio — Multi-Model Orchestration  
 **Repository:** cv-tailor
-**Status:** Complete — pipeline + UI + security gates + grounding check + CVCM deployed  
+**Status:** Complete — pipeline + UI + security gates + grounding check + CVCM + Langfuse tracing deployed  
 **Last updated:** June 2026 — project closed
 
 ---
@@ -3314,3 +3314,37 @@ startup (only when the env var is set) or via an owner-only `POST /api/runs/clea
 **Reuse:** capability detection reuses `verify_token` + `full_mode_configured` + `FULL_COOKIE`;
 mutations reuse the `require_unlocked` dependency (D-39); the summary fields reuse `archive.
 _summary` + `summary_card` (F-43). Only the sidecar + filter/cleanup logic are new.
+
+---
+
+### D-41 — Docker networking: dedicated `tracing` network rather than adding backend to `caddy`
+
+**What was decided:**
+The backend is NOT on the `caddy` network — and deliberately so. Caddy only needs
+to reach the frontend (`cv-tailor-frontend:3000`); the frontend's nginx proxies
+`/api/*` to the backend over the per-app `default` network. Adding the backend
+to `caddy` would work but would put it on a network named after a reverse proxy
+for a reason unrelated to reverse proxying.
+
+For Langfuse connectivity (backend → `langfuse-langfuse-web-1`), a dedicated
+`tracing` external network is created and shared between `cv-tailor-backend` and
+the Langfuse compose stack. Backend joins `[default, tracing]`; frontend joins
+`[default, caddy]`.
+
+**Alternatives rejected:**
+- *Add backend to `caddy` network* — works, but pollutes a network named for
+  ingress with an observability concern. Confusing six months later.
+- *Host IP (`LANGFUSE_BASE_URL=http://host-ip:3000`)* — works, but trace traffic
+  leaves Docker's network stack unnecessarily and breaks if the host IP changes.
+
+**Networks setup (one-time on homeserver):**
+```bash
+docker network create caddy    # if not already exists
+docker network create tracing  # shared with Langfuse compose stack
+```
+
+**What this teaches:**
+Docker network membership should reflect the actual communication concern, not
+just "does it need to talk to X." A network named `caddy` should contain things
+Caddy needs to reach. A network named `tracing` should contain things that
+exchange traces. Explicit naming makes the topology self-documenting.

@@ -11,8 +11,8 @@
 
 **Project:** Week 3 Portfolio — Multi-Model Orchestration  
 **Repository:** cv-tailor
-**Status:** Complete — pipeline + UI built and deployed  
-**Last updated:** post-UI (D-38/D-39/D-40, full mode gate + run management)  
+**Status:** Complete — pipeline + UI + Langfuse tracing + SSE resilience deployed  
+**Last updated:** June 2026 — project closed (F-55 SSE reconnect; F-53/F-54 Langfuse; F-52 Job Radar callback)  
 **Deployment target:** CLI tool + web UI, M720q home server
 
 ---
@@ -1056,8 +1056,15 @@ services:
     restart: unless-stopped
     ports: !override []             # Caddy reaches :3000 over the shared caddy network
     networks: [default, caddy]      # default = reach the backend; caddy = ingress
+
+  backend:
+    networks: [default, tracing]    # tracing = reach langfuse-langfuse-web-1 directly
+                                    # NOT on caddy: Caddy only needs the frontend (D-41)
+
 networks:
-  caddy: { external: true }         # one-time: `docker network create caddy`
+  caddy:   { external: true }       # one-time: docker network create caddy
+  tracing: { external: true }       # one-time: docker network create tracing
+                                    # shared with langfuse compose stack
   default: {}
 ```
 
@@ -1070,11 +1077,16 @@ TLS-less reverse proxy. Full step-by-step in **`DEPLOY-cv-tailor.md`** (caddy-st
 **Deployment to homeserver (M720q):**
 
 ```bash
-# 1. Clone repo on server (network `caddy` already exists: docker network create caddy)
+# 1. Clone repo on server (networks must exist: docker network create caddy && docker network create tracing)
 git clone <repo> /opt/apps/cv-tailor && cd /opt/apps/cv-tailor
 
-# 2. Set API keys (MISTRAL = embeddings/ingest; ANTHROPIC + OPENAI = runs; FULL_MODE_KEY optional)
+# 2. Set API keys and optional Langfuse config
 cp .env.example .env && $EDITOR .env
+# Required: MISTRAL_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, FULL_MODE_KEY
+# Optional Langfuse tracing (leave blank to disable cleanly):
+#   LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+#   LANGFUSE_BASE_URL=http://langfuse-langfuse-web-1:3000  ← internal Docker addr, not public URL
+#   Also: docker network create tracing (if Langfuse is deployed)
 
 # 3. Seed the corpus WITHOUT git: scp the source CVs (+ .yaml sidecars) from the dev box,
 #    then re-embed on the server (data/chroma + budgets.yaml are written there, persisted
