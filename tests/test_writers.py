@@ -199,3 +199,44 @@ def test_gpt_writer_sets_structure_preserved_true_when_bullets_kept():
     d = gpt_writer.write_section("experience_utiq", UTIQ_SOURCE, jd(), rubric(), budget(),
                                  version=1, client=fake_gpt(bulleted, []))
     assert d.structure_preserved is True
+
+
+# -- deterministic structure BACKSTOP (F-56) -------------------------------- #
+#
+# When BOTH writers flatten a bulleted source (the Haiku/demo case the prompt rule
+# can't fix), enforce_source_structure rebuilds the bullets from the prose — pure
+# reformatting, no wording change. Fixture is the real flattened Microsoft section
+# from run_20260613_125435 (4 source bullets → one prose paragraph in both drafts).
+
+MICROSOFT_FLATTENED = (
+    "Initiated cross-device graph offering redesign, achieving an 8x increase in audience "
+    "expansions into CTV and reducing infrastructure costs by $300k annually. Scoped and "
+    "delivered Real-Time Data Provider capability as part of a cross-functional product team, "
+    "contributing to $5M in secured revenue. Partnered with engineering to restructure identity "
+    "processing architecture, migrating to owned data centres to reduce cost and operational "
+    "risk while enabling new product capabilities. Took ownership of a stalled publisher "
+    "identity management feature, leading a full redesign of the API and UI to align with "
+    "evolving client privacy and control requirements."
+)
+
+
+def test_enforce_source_structure_rebuilds_bullets_without_changing_words():
+    """A flattened bulleted source is split back into bullets; no word is added or dropped."""
+    from tailor.tools.writer_common import enforce_source_structure
+    out = enforce_source_structure(UTIQ_SOURCE, MICROSOFT_FLATTENED)
+    lines = out.splitlines()
+    assert len(lines) == 4 and all(ln.startswith("- ") for ln in lines)   # 4 source bullets recovered
+    # the backstop only inserts "- " + newlines — words are identical to the prose
+    assert " ".join(ln[2:] for ln in lines).split() == MICROSOFT_FLATTENED.split()
+    # $300k / $5M / API / UI did not cause spurious splits
+    assert any("$5M in secured revenue." in ln for ln in lines)
+
+
+def test_enforce_source_structure_leaves_good_input_untouched():
+    """No-op when the draft already has bullets, the source is prose, or it's a skills list."""
+    from tailor.tools.writer_common import enforce_source_structure
+    already = "- one\n- two"
+    assert enforce_source_structure(UTIQ_SOURCE, already) == already        # already bulleted
+    assert enforce_source_structure("Prose source.", "Prose draft.") == "Prose draft."  # prose source
+    # a "·"-skills list flattened to prose is NOT reconstructable → left for the model path
+    assert enforce_source_structure(SKILLS_SOURCE, "Skills as a sentence.") == "Skills as a sentence."

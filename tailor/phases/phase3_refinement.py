@@ -47,6 +47,7 @@ from tailor.tools import claude_writer, gpt_writer, orchestrator_tool
 from tailor.tools.gpt_writer import WriterError
 from tailor.tools.rubric import validate_rubric_additions
 from tailor.tools.scorer import keyword_coverage, union_coverage
+from tailor.tools.writer_common import enforce_source_structure
 
 __all__ = ["refine", "RefinementResult", "LoopMemory"]
 
@@ -240,8 +241,9 @@ def refine(
             #    RAW corpus source (F-35), not the evolving draft, so fabrication that
             #    originated in Phase 2 or drifted in earlier iterations is still caught.
             prior = section_scores.get(sid)
+            raw_src = _raw_source(ctx, sid, current)
             decision, selected_text = orchestrator_tool.adjudicate(
-                sid, cd, gd, rubric, jd, source_text=_raw_source(ctx, sid, current),
+                sid, cd, gd, rubric, jd, source_text=raw_src,
                 cvcm=cvcm, prior_score=prior, is_final=is_final, model=model, client=claude_client)
             if degraded:
                 # Only one writer really drafted — use its text verbatim (the orchestrator
@@ -250,6 +252,12 @@ def refine(
                 survivor_base = "gpt" if degraded == "claude" else "claude"
                 selected_text = (gd if degraded == "claude" else cd).text
                 decision = replace(decision, selected_base=survivor_base)
+            # Deterministic structure backstop (F-56): if a bulleted source got flattened to
+            # prose and NEITHER writer kept the bullets (common on Haiku/demo), rebuild them
+            # from the selected text — pure reformatting, no wording change. The prompt rule +
+            # orchestrator disqualifier handle the case where one draft is structured; this
+            # guarantees the output regardless of what both models produced.
+            selected_text = enforce_source_structure(raw_src, selected_text)
             ctx.write_section(sid, selected_text, version=n)
             manifest[sid]["version"] = n
             manifest[sid]["word_count"] = len(selected_text.split())

@@ -178,6 +178,10 @@ Step 2 — Orchestrator adjudication (Claude Sonnet, orchestrator role)
     rubric_additions (max 2, JD-validated — guard is load-bearing: F-28
                       showed Sonnet proposes 30+ per run; all rejected)
   Selected text written to disk: <section_id>_v<n>.md
+    — first passed through enforce_source_structure() (F-56): a bulleted source
+      flattened to prose by BOTH writers is rebuilt into bullets (deterministic
+      reformat, no word change). Backstop for the Haiku/demo both-flatten case the
+      structure_preserved disqualifier can't cover; also runs on Phase 2 v0.
   Per-writer drafts also written: <section_id>_<writer>_v<n>.md
   CVCM tiebreak: when |claude_quality − gpt_quality| < 1.0, CVCM
                  used as secondary selection factor (D-33)

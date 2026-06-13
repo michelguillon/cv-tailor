@@ -10,6 +10,8 @@ two-draft comparison meaningful.
 
 from __future__ import annotations
 
+import re
+
 from tailor.candidate import CVCM_FRAMING_NOTE
 from tailor.models import CritiqueItem
 
@@ -21,6 +23,7 @@ __all__ = [
     "word_target",
     "length_items",
     "structure_preserved",
+    "enforce_source_structure",
     "jd_rubric_block",
     "section_user_prompt",
 ]
@@ -136,6 +139,35 @@ def structure_preserved(source_text: str, draft_text: str) -> bool:
     if _is_delimited_list(source_text):
         return _is_delimited_list(draft_text)
     return True
+
+
+# Sentence boundary: ".!?" + space + a capital/quote/digit start, suppressed after a single
+# capital initial and the common CV abbreviations so "$5M.", "API.", "U.S." don't mis-split.
+# All lookbehinds are fixed-width (Python re requirement).
+_SENTENCE_SPLIT = re.compile(
+    r'(?<!\b[A-Z])(?<!\be\.g)(?<!\bi\.e)(?<!\bvs)(?<!\betc)(?<!\bInc)(?<!\bLtd)'
+    r'(?<!\bNo)(?<!\bU\.S)(?<!\bU\.K)(?<=[.!?])\s+(?=[A-Z0-9"\'])'
+)
+
+
+def enforce_source_structure(source_text: str, draft_text: str) -> str:
+    """Deterministic structure BACKSTOP (F-56). When the SOURCE is a bulleted list but the
+    draft flattened it to a prose paragraph, split the prose back into bullets. The writers
+    preserve the content and only drop the line breaks, so splitting on sentence boundaries
+    recovers the original bullets WITHOUT changing any wording — it only inserts "- " and
+    newlines, so it cannot fabricate. This guarantees bulleted experience renders as bullets
+    even when BOTH writers flatten (the Haiku/demo case the prompt rule + structure_preserved
+    disqualifier can't cover, since neither draft is structured to select).
+
+    Only the reconstructable bullet case is handled. A "·"-delimited skills list flattened to
+    prose can't be rebuilt deterministically (the terms are dissolved into sentences), so that
+    is left to STRUCTURE_RULES + the structure_preserved disqualifier (which recover it when at
+    least one writer/iteration emits the list)."""
+    if _bullet_lines(source_text) >= 2 and _bullet_lines(draft_text) == 0:
+        sentences = [s.strip() for s in _SENTENCE_SPLIT.split(draft_text.strip()) if s.strip()]
+        if len(sentences) >= 2:
+            return "\n".join(f"- {s}" for s in sentences)
+    return draft_text
 
 
 def jd_rubric_block(jd, rubric) -> str:

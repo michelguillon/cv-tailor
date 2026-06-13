@@ -19,7 +19,11 @@ from __future__ import annotations
 
 from tailor.candidate import CVCM_FRAMING_NOTE
 from tailor.helpers import claude_complete
-from tailor.tools.writer_common import TRUTHFULNESS_RULES
+from tailor.tools.writer_common import (
+    STRUCTURE_RULES,
+    TRUTHFULNESS_RULES,
+    enforce_source_structure,
+)
 
 __all__ = ["draft_sections", "DraftError"]
 
@@ -35,6 +39,8 @@ _SYSTEM = f"""\
 You tailor ONE CV section to a specific job, truthfully. Rewrite the SOURCE \
 section so it emphasises what matters for THIS role and surfaces the listed \
 keywords ONLY where they are genuinely supported by the source content.
+
+{STRUCTURE_RULES}
 
 {TRUTHFULNESS_RULES}
 - Aim for about {{target}} words — stay close to the SOURCE length. Do NOT pad a \
@@ -170,6 +176,10 @@ def draft_sections(fit, jd, rubric, sections, budgets, ctx, *, model, client=Non
         ctx.write_section(section_id, source_doc, source=True)
         text = _draft_one(jd, rubric, section_type, target, source_doc,
                           model=model, client=client, cvcm=cvcm)
+        # Deterministic structure backstop (F-56): a bulleted source flattened to prose is
+        # rebuilt into bullets (pure reformatting). Keeps v0 structurally faithful so the
+        # loop and the rendered CV start from bullets, not a wall of text.
+        text = enforce_source_structure(source_doc, text)
         path = ctx.write_section(section_id, text, version=0)
         wc = len(text.split())
         audit.log_event("phase2_draft", "section_drafted",

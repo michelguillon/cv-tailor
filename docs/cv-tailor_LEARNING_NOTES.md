@@ -447,6 +447,32 @@ deterministic backstop is Goodhart-adjacent: the writers optimise wording and si
 - Regression tests use the actual Utiq experience section + the skills list from this run as
   fixtures (`tests/test_writers.py`); `_md_to_html`'s correct bullet handling was already covered.
 
+**Prompt + flag wasn't enough on Haiku — needed a deterministic backstop (2nd pass).** The demo
+run after the first fix (run_20260613_125435, Haiku) was *better but still mixed*: Utiq picked
+GPT's bullets and Skills recovered to a "·"-list (the disqualifier worked), but Microsoft, both
+Appnexus blocks, and Senior Customer Engineer shipped as prose. Cause: **both** Haiku writers
+flattened those sections, so there was no structured draft to select, and with a single iteration
+the "restore format next time" direction never ran. The orchestrator's own reasoning sometimes
+*preferred* the prose ("reads as a narrative, not a checklist"). A prompt rule, even prominent and
+flagged, can't guarantee output a weak model won't produce.
+- `writer_common.enforce_source_structure(source, draft)` — when a bulleted source (≥2 bullets)
+  was flattened to a prose paragraph (0 bullets), it splits the prose back into bullets on
+  sentence boundaries. **Pure reformatting: it only inserts `- ` and newlines, never changes a
+  word** (truthfulness-safe — the writers preserve content and only drop the line breaks). The
+  splitter suppresses splits after single-capital initials and common abbreviations so `$5M.` /
+  `API.` / `U.S.` don't mis-split; verified to reconstruct the exact source bullets on the real
+  flattened Microsoft/Appnexus sections. A "·"-skills list flattened to prose is **not**
+  reconstructable (terms are dissolved into sentences) so it's left to the prompt+disqualifier
+  path, which recovers it when any writer/iteration emits the list.
+- Applied at both checkpoints where text is persisted: Phase 2's v0 initial draft and Phase 3's
+  selected text per iteration. In full mode (Sonnet) the writers usually keep structure, so the
+  backstop is a no-op; in demo (Haiku) it's the guarantee. `STRUCTURE_RULES` was also added to the
+  Phase-2 system prompt (it had its own, structure-silent prompt).
+- **Layering:** prompt (`STRUCTURE_RULES`) → honest flag (`structure_preserved`) → orchestrator
+  disqualifier (prefers a natively-structured draft) → `enforce_source_structure` (guarantees the
+  output when none was). Same philosophy as the keyword Goodhart fix (F-38): never trust a prompt
+  alone for something a deterministic check can guarantee.
+
 ---
 
 ### F-55 — SSE reconnect resilience: a transient proxy/tunnel drop is now a self-healing blip, not a fatal error

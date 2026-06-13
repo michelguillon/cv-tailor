@@ -37,9 +37,13 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   (prominent, ahead of the content guidance in both writer prompts) and is *enforced*
   deterministically — `structure_preserved(source, draft)` counts list markers in code
   (not the model's self-report) and sets `WriterDraft.structure_preserved`; the
-  orchestrator disqualifies a flattened draft. Same lesson as the keyword Goodhart fix:
-  a prompt rule with no deterministic backstop gets silently optimised away (here the
-  writers flattened sections into prose, making the rendered CV a wall of text).
+  orchestrator disqualifies a flattened draft; and `enforce_source_structure(source, text)`
+  is a **deterministic backstop** applied wherever section text is persisted (Phase 2 v0,
+  Phase 3 selected text) — when a bulleted source was flattened to prose it rebuilds the
+  bullets by sentence split (pure reformatting, no word change). The backstop exists because
+  prompt+flag alone failed on Haiku: both writers flattened the same section and a single
+  iteration never recovered (F-56). Same lesson as the keyword Goodhart fix — a prompt rule
+  with no deterministic backstop gets silently optimised away.
 - **HITL is preview-before-apply** (Phases 1, 4, 5): show what changes, then ask.
 
 ## phase3_refinement.py — the dual-writer agentic loop (D-28, D-01, D-05, D-12)

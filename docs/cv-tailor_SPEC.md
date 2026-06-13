@@ -727,6 +727,10 @@ Step 2 — Orchestrator adjudication (Claude Sonnet, orchestrator role)
   When |claude_quality - gpt_quality| < 1.0 AND CVCM present:
     CVCM used as secondary tiebreaker — preference to draft that better
     articulates candidate's authentic value creation model (D-33).
+  Before write: enforce_source_structure() — deterministic backstop (F-56). If a
+    bulleted source was flattened to prose and NEITHER draft kept bullets (the Haiku
+    case the disqualifier can't cover), the prose is split back into bullets (pure
+    reformatting, no word change). Also runs on Phase 2's v0. No-op in full mode.
   Selected/synthesised text written to disk as: <section_id>_v<n>.md
   Per-writer drafts also written for inspection: <section_id>_<writer>_v<n>.md
 

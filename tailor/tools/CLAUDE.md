@@ -26,14 +26,23 @@ truthfulness rules (`TRUTHFULNESS_RULES`), structure-preservation rules
 target (D-27/F-13), and the deterministic length-budget items (D-14) — applied to
 **both** writers' drafts (F-17), code counts words, the model judges content.
 
-- **Structure preservation is a deterministic gate, not a prompt hope (F-56).**
-  `STRUCTURE_RULES` (a top-level block placed BEFORE the content guidance in both writer
-  system prompts) tells the writers to match the source's list shape — bulleted experience
-  stays bullets, a `·`-delimited skills list stays a list. `structure_preserved(source,
-  draft)` then **counts list markers in code** (never the model's self-report) and the writer
-  stamps the result on `WriterDraft.structure_preserved`. Buried inside `TRUTHFULNESS_RULES`
-  the rule was ignored and the writers flattened sections into prose (walls of text in the CV
-  tab) — keep the rule prominent and the check enforced.
+- **Structure preservation is a deterministic gate, not a prompt hope (F-56).** Four layers,
+  weakest-model-proof:
+  1. `STRUCTURE_RULES` — a top-level block placed BEFORE the content guidance in both writer
+     prompts (and the Phase-2 prompt): match the source's list shape (bulleted experience stays
+     bullets, a `·`-delimited skills list stays a list).
+  2. `structure_preserved(source, draft)` — **counts list markers in code** (never the model's
+     self-report); the writer stamps it on `WriterDraft.structure_preserved`.
+  3. The orchestrator disqualifies a `structure_preserved=False` draft (see below).
+  4. `enforce_source_structure(source, text)` — the **backstop**: when a bulleted source was
+     flattened to prose and NO draft kept it (common on Haiku/demo, where both writers flatten
+     and a single iteration never recovers), it splits the prose back into bullets on sentence
+     boundaries. **Pure reformatting — inserts only `- ` + newlines, changes no words**, so it's
+     truthfulness-safe. Applied at both persist points (Phase 2 v0, Phase 3 selected text); a
+     no-op in full mode where the writers keep structure. A `·`-skills list flattened to prose
+     is NOT deterministically reconstructable, so that case relies on layers 1–3.
+  Don't trust a prompt alone for what a deterministic check can guarantee (cf. the F-38 keyword
+  Goodhart fix).
 
 - **`claude_writer.py`** — Claude as the precise, evidence-led writer. Forced
   `submit_draft` tool → `{text, items}`; `pushback()` → `str | None` (D-29).
