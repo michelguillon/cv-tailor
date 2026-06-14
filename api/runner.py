@@ -269,13 +269,16 @@ def _link_back_to_job_radar(session, summary: dict, output_dir: str) -> None:
     single `job_radar_linked` SSE event ({ok}) so the timeline can show ✓/⚠. Never raises — a
     failed callback must not affect run completion (`run_complete` has already fired)."""
     run_dir = Path(output_dir) / session.run_id
-    jr = read_meta(run_dir).get("job_radar_source")
+    meta = read_meta(run_dir)
+    jr = meta.get("job_radar_source")
     if not jr or not jr.get("job_id") or not service_key():
         return                                            # Phase-2 behaviour: no callback, no event
     metrics = _callback_metrics(run_dir, summary)
     ok = post_results_to_job_radar(                       # never raises; False on any failure
         jr["job_id"], session.run_id,
-        output_link=f"{cv_tailor_base_url()}/runs/{session.run_id}", **metrics)
+        output_link=f"{cv_tailor_base_url()}/runs/{session.run_id}",
+        rerun_of=meta.get("rerun_of"),                    # lineage for a re-run (SPEC_RERUN §5)
+        **metrics)
     session.add_event({"type": "job_radar_linked", "ok": ok})
 
 

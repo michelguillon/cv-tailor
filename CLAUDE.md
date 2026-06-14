@@ -9,10 +9,13 @@ full audit trail and an HTML reasoning trace.
 - **`docs/cv-tailor_ARCHITECTURE.md`** — *what the deployed system does*. The current
   implementation reference (web UI, security gates, run management, dual-writer loop,
   section-granular ingestion, CVCM, and later refinements).
-- **`docs/cv-tailor_SPEC.md`** — the *original* design intent, agreed before the build.
-  **Historical** (the product evolved past it) but still the reference for schemas (§4),
-  phases (§5), CLI (§6), structure (§7), Docker (§7.5); code docstrings cite its section
-  numbers.
+- **`docs/cv-tailor_SPEC.md`** — the architecture spec. §1–§11 are the *original* design intent
+  agreed before the build (historical where the product moved past it, e.g. §3.10), but still the
+  reference for schemas (§4), phases (§5), CLI (§6), structure (§7), Docker (§7.5); code docstrings
+  cite its section numbers. **It is also kept living for post-build features:** each one is appended
+  as a §12.x subsection with a `(built, D-xx / F-xx)` status marker (see §12.7–§12.11), so the SPEC
+  tracks the app's full history — same convention as job-radar's `job_radar_SPEC.md`. When you ship
+  a feature that postdates §1–§11, add its §12.x entry here (and the `F-xx` in the learning notes).
 - **`docs/cv-tailor_LEARNING_NOTES.md`** — *why*. Decision log (`D-xx`), reuse analysis
   (`R-xx`), and the Findings Log (`F-xx`, added during build).
 

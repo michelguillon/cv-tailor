@@ -52,7 +52,12 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
   case). Tradeoff: timestamped run ids are guessable, so the grant is id-holder-wide during that
   window — fine for the demo; upgrade to a per-run view token if it ever matters. Mutations
   `PATCH /{id}/meta` (company_name/keep/public_demo), `DELETE /{id}`,
-  `POST /cleanup` are `require_unlocked` (403). Visibility/retention flags live in a **mutable
+  `POST /cleanup`, and `POST /{id}/rerun` are `require_unlocked` (403). **Re-run (SPEC_RERUN):**
+  `POST /{id}/rerun` creates a *new* run pre-populated with the original's JD (read from its durable
+  `jd_raw.txt`, **not** the sidecar — large immutable content stays out of `run_meta.json`),
+  carries `job_radar_source` forward (so the Phase-3 callback fires as for a fresh run, §5), and
+  records `rerun_of` (write-once in the sidecar, like `job_radar_source`; absent ⇒ None via `.get`,
+  so it stays out of `default_meta`). Visibility/retention flags live in a **mutable
   sidecar** `outputs/<run_id>/run_meta.json` (`api/run_meta.py`) — never in the append-only
   `run_log.jsonl` (audit ≠ context). Retention helpers in `api/archive.py` (`cleanup_runs` ages
   by the run-id timestamp, not mtime); auto-cleanup runs on startup (`main.py` lifespan) **only

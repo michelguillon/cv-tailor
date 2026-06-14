@@ -22,7 +22,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from api import archive
 from api.job_radar import JobRadarError, fetch_job, job_radar_source
-from api.run_meta import write_meta
+from api.run_meta import read_meta, write_meta
 from api.runner import launch_run
 from api.security import FULL_COOKIE, full_mode_configured, require_unlocked, verify_token
 from api.session import TERMINAL, SessionError
@@ -75,6 +75,12 @@ class RunMetaPatch(BaseModel):
     company_name: str | None = None
     keep: bool | None = None
     public_demo: bool | None = None
+
+
+class RerunRequest(BaseModel):
+    """Re-run an existing run (SPEC_RERUN §3.1): same JD, Job Radar lineage carried forward.
+    Default `full` — the usual reason to re-run is to upgrade a demo run to full quality (§4.1)."""
+    mode: str = "full"
 
 
 @router.get("")
@@ -168,6 +174,65 @@ def delete_run(run_id: str, request: Request) -> dict:
     if not deleted:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
     return {"deleted": run_id}
+
+
+@router.post("/{original_run_id}/rerun", status_code=201, dependencies=[Depends(require_unlocked)])
+def rerun_run(original_run_id: str, body: RerunRequest, request: Request) -> dict:
+    """Re-run an existing run (SPEC_RERUN §3): create a NEW run pre-populated with the original's
+    JD, carry its Job Radar reference forward (so the Phase-3 callback fires on completion exactly
+    as a fresh run would, §5), and record `rerun_of` for the audit trail. Owner-gated. Returns the
+    new run_id; the client redirects to its SSE stream (same as POST /api/runs).
+
+    The JD is read from the original's durable `jd_raw.txt` (tailor/run.py persists it per run —
+    the same text the report's JD tab renders), NOT the sidecar: it is large immutable content, so
+    it stays out of the mutable visibility/retention `run_meta.json` (D-40). A run from before
+    jd_raw was stored can't be re-run → 400."""
+    orig_dir = archive.run_dir_if_exists(OUTPUT_DIR, original_run_id)
+    if orig_dir is None:                                       # unknown (or non-existent) run
+        raise HTTPException(status_code=404, detail=f"no run {original_run_id!r}")
+    jd_file = orig_dir / "jd_raw.txt"
+    jd_text = jd_file.read_text(encoding="utf-8") if jd_file.exists() else ""
+    if not jd_text.strip():
+        raise HTTPException(status_code=400,
+                            detail="Original run has no stored JD — re-run not possible")
+    orig_meta = read_meta(orig_dir)
+    jr_source = orig_meta.get("job_radar_source")              # carried forward → §5 callback lineage
+    company_name = orig_meta.get("company_name")
+
+    # Full-mode gating mirrors start_run (D-38). The endpoint is already `require_unlocked`, so a
+    # valid owner cookie is proven; full mode additionally needs a server key — fail closed (403)
+    # if unset. Validate the resolved config synchronously so a bad config fails the POST.
+    key = None
+    if body.mode == "full":
+        if not full_mode_configured():
+            raise HTTPException(status_code=403, detail="full mode is not available on this server")
+        key = os.environ["FULL_MODE_KEY"]
+    try:
+        resolve_run_config(load_config(), mode=body.mode, key=key)
+    except ConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    store = request.app.state.sessions
+    run_id = new_run_id()
+    for suffix in range(1, 100):                               # avoid same-second id collisions
+        try:
+            session = store.create(run_id, mode=body.mode)
+            break
+        except SessionError:
+            run_id = f"{new_run_id()}_{suffix}"
+    else:
+        raise HTTPException(status_code=500, detail="could not allocate a run id")
+
+    # Persist the new run's sidecar up front: carry the company label + Job Radar reference forward
+    # and record the lineage (`rerun_of`, write-once like job_radar_source). The pipeline writes the
+    # JD to jd_raw.txt itself when it runs.
+    run_dir = Path(OUTPUT_DIR) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    write_meta(run_dir, company_name=company_name, job_radar_source=jr_source,
+               rerun_of=original_run_id)
+
+    launch_run(store, session, jd_text, mode=body.mode, key=key, output_dir=OUTPUT_DIR)
+    return {"run_id": run_id}
 
 
 @router.post("", status_code=201)

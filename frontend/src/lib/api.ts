@@ -188,6 +188,8 @@ export interface ArchiveRun {
   // Run visibility & retention (D-40/§12.9): orthogonal to `mode`.
   keep: boolean;
   public_demo: boolean;
+  // SPEC_RERUN §3.2: the original run id when this run is a re-run; null/absent otherwise.
+  rerun_of?: string | null;
   has_md: boolean;
   has_html: boolean;
 }
@@ -276,6 +278,9 @@ export const api = {
     ),
   deleteRun: (runId: string) =>
     del<{ deleted: string }>(`/runs/${encodeURIComponent(runId)}`),
+  // Re-run an existing run (SPEC_RERUN §3): owner-only; returns the new run id to stream.
+  rerun: (runId: string, mode: string) =>
+    post<{ run_id: string }>(`/runs/${encodeURIComponent(runId)}/rerun`, { mode }),
   cleanupRuns: () => post<{ removed: string[]; count: number; max_age_days: number }>("/runs/cleanup", {}),
   runDetail: (runId: string) => get<RunDetail>(`/runs/${encodeURIComponent(runId)}/detail`),
   reportUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/report`,

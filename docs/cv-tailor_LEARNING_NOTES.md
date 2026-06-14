@@ -412,6 +412,42 @@ what changed (if anything).*
 
 ---
 
+### F-57 — Re-run from an existing run (SPEC_RERUN): JD comes from jd_raw.txt, not the sidecar; rerun_of is write-once
+
+**What.** Built the re-run feature: `POST /api/runs/{original}/rerun` (owner-gated) creates a new
+run pre-populated with the original's JD, carries `job_radar_source` forward (so the Phase-3
+callback fires on completion exactly as a fresh run, §5), and records `rerun_of` for the audit
+trail. UI: a Re-run button + mode modal (default full) on the run detail page (`OutputPanel`), and
+a provenance badge ("Re-run of …") linking to the original.
+
+**Two ambiguities the spec's illustrative JSON left open, resolved against the actual architecture:**
+
+1. **`jd_raw` lives in `outputs/<run_id>/jd_raw.txt`, not `run_meta.json`.** SPEC_RERUN §3.1 shows
+   `jd_raw` as a field inside the new `run_meta.json`. But `run_meta.json` is the *mutable*
+   visibility/retention sidecar (D-40) — large immutable content doesn't belong there. The raw JD is
+   already persisted per run as `jd_raw.txt` (tailor/run.py, F-40), the same text the report's JD tab
+   renders. So the endpoint reads the JD from there; "very old run with no stored JD" → 400 maps
+   cleanly to "no jd_raw.txt". No schema bloat, single source of truth.
+
+2. **`rerun_of` added to `_FIELDS` but deliberately NOT to `default_meta()`.** SPEC_RERUN §3.2 says
+   "add `rerun_of: str | None` to the schema; None for original runs." Adding it to `default_meta()`
+   would have broken the unchanged-test gate (`test_run_meta_defaults_and_roundtrip` asserts the exact
+   default dict). Instead it's a persisted, write-once key (like `job_radar_source`, no PATCH field);
+   an original run simply has no key and every consumer reads it via `.get("rerun_of")` → None. This
+   keeps the sidecar-less baseline (and the default-roundtrip contract) intact while still persisting
+   on a re-run. **Affects D-40.** All existing tests pass unchanged; 5 new tests added.
+
+**Callback (§5).** `post_results_to_job_radar` gained a `rerun_of` payload field (null for fresh
+runs); `runner._link_back_to_job_radar` reads it from the sidecar. Job Radar can display lineage or
+ignore it — no Job Radar change needed (it already keys latest-per-job by `ts`).
+
+**Frontend nav.** The app is tab-based (no router). Re-run lifts an `attachRunId` into `App`: the
+Runs page POSTs the re-run, then jumps to the Tailor tab and `RunPage` *attaches* to the
+already-started run's SSE stream (factored `openStream` out of `start`) rather than starting a new
+one. The SSE replay-from-seq-0 buffer means the attached view misses no earlier event.
+
+---
+
 ### F-56 — "Rendering bug" was the writers flattening structure into prose; fixed at the writer, not phase6
 
 **What.** A CV (run_20260613_111401) rendered as walls of text: experience sections showed as

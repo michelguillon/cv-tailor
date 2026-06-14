@@ -90,7 +90,8 @@ def cv_tailor_base_url() -> str:
 
 def post_results_to_job_radar(job_id: str, run_id: str, *, fit_score, coverage_score,
                               cv_quality_score, cvcm_enabled: bool, tailoring_mode,
-                              output_link: str, timeout: float = 5.0) -> bool:
+                              output_link: str, rerun_of: str | None = None,
+                              timeout: float = 5.0) -> bool:
     """POST completed-run metrics back to Job Radar (Integration §6.2). Fire-and-forget:
     **never raises** — Job Radar is not in cv-tailor's critical path. Returns True iff Job Radar
     accepted (2xx); False on a missing key, network error, timeout, or non-2xx (logged).
@@ -112,6 +113,9 @@ def post_results_to_job_radar(job_id: str, run_id: str, *, fit_score, coverage_s
         "tailoring_mode": tailoring_mode,
         "output_link": output_link,
         "source": "cv_tailor_api",
+        # Lineage (SPEC_RERUN §5): null for a fresh run, the original run_id for a re-run. Optional
+        # — Job Radar can display it to show a re-tailoring, or ignore it without breaking.
+        "rerun_of": rerun_of,
     }
     url = f"{api_url()}/api/cv-tailor-results"
     try:

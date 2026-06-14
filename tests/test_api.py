@@ -822,6 +822,86 @@ def test_callback_failure_does_not_break_run(client, run_store, runs_disk, monke
     assert any(e.get("type") == "job_radar_linked" and e.get("ok") is False for e in sess.events)
 
 
+# --------------------------------------------------------------------------- #
+# Re-run from an existing run (SPEC_RERUN) — owner-gated, lineage carried       #
+# --------------------------------------------------------------------------- #
+
+def _make_rerunnable(out, run_id, *, jd="Tailor my CV for this role.", meta=None):
+    """An original run that can be re-run: a normal run on disk + the durable jd_raw.txt."""
+    rd = _make_run(out, run_id, meta=meta)
+    (rd / "jd_raw.txt").write_text(jd, encoding="utf-8")
+    return rd
+
+
+@pytest.fixture
+def rerun_env(client, run_store, runs_disk, unlocked, monkeypatch):
+    """Owner-unlocked client + mocked pipeline/new_run_id; yields (post_rerun, output_dir)."""
+    import api.runner as runner
+    monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(runs_router, "new_run_id", lambda: "run_20260614_140000")
+
+    def go(original_run_id, *, mode="demo"):
+        return client.post(f"/api/runs/{original_run_id}/rerun", json={"mode": mode})
+
+    return go, runs_disk
+
+
+def test_rerun_creates_new_run_with_lineage(rerun_env, run_store):
+    go, out = rerun_env
+    _make_rerunnable(out, "run_20260601_080000", jd="Principal PM JD text",
+                     meta={"company_name": "Elastic",
+                           "job_radar_source": {"job_id": "sha256:abc", "company": "Elastic"}})
+    r = go("run_20260601_080000", mode="demo")
+    assert r.status_code == 201
+    new_id = r.json()["run_id"]
+    m = run_meta.read_meta(out / new_id)
+    assert m["rerun_of"] == "run_20260601_080000"                 # audit trail (§3.2)
+    assert m["job_radar_source"]["company"] == "Elastic"          # lineage carried forward (§2)
+    assert m["company_name"] == "Elastic"
+    # the original's stored JD became the new run's JD (written to the session tmp dir)
+    jd = (run_store.base_dir / new_id / "jd.txt").read_text(encoding="utf-8")
+    assert jd == "Principal PM JD text"
+
+
+def test_rerun_unknown_run_404(rerun_env):
+    go, _ = rerun_env
+    assert go("run_does_not_exist").status_code == 404
+
+
+def test_rerun_400_when_no_stored_jd(rerun_env):
+    go, out = rerun_env
+    _make_run(out, "run_20260601_090000")                         # a run with no jd_raw.txt
+    r = go("run_20260601_090000")
+    assert r.status_code == 400 and "no stored JD" in r.json()["detail"]
+
+
+def test_rerun_requires_unlock(client, run_store, runs_disk, monkeypatch):
+    """Owner-gated (§3.1): configured but locked (no capability cookie) → 403."""
+    _make_rerunnable(runs_disk, "run_20260601_080000")
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    r = client.post("/api/runs/run_20260601_080000/rerun", json={"mode": "demo"})
+    assert r.status_code == 403
+
+
+def test_rerun_callback_carries_rerun_of(client, run_store, runs_disk, unlocked, monkeypatch):
+    """A re-run of a Job Radar run fires the Phase-3 callback with `rerun_of` set (§5)."""
+    import api.runner as runner_mod
+    calls = []
+    monkeypatch.setattr(runner_mod, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(runs_router, "new_run_id", lambda: "run_20260614_150000")
+    monkeypatch.setattr(runner_mod, "post_results_to_job_radar",
+                        lambda *a, **k: (calls.append((a, k)), True)[1])
+    monkeypatch.setenv("JOB_RADAR_SERVICE_KEY", "secret")
+    _make_rerunnable(runs_disk, "run_20260601_080000", jd="JD",
+                     meta={"job_radar_source": {"job_id": "sha256:abc", "company": "Elastic"}})
+    rid = client.post("/api/runs/run_20260601_080000/rerun",
+                      json={"mode": "demo"}).json()["run_id"]
+    _await_terminal(client, rid)
+    assert len(calls) == 1
+    _args, kw = calls[0]
+    assert kw["rerun_of"] == "run_20260601_080000"
+
+
 def test_corpus_delete_removes_sections(client, monkeypatch, unlocked):
     class FakeCollection:
         def __init__(self):

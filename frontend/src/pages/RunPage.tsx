@@ -36,7 +36,15 @@ interface Summary {
   cost?: number;
 }
 
-export function RunPage() {
+export function RunPage({
+  attachRunId,
+  onAttached,
+}: {
+  // Re-run handoff (SPEC_RERUN §4.1): when set, attach the progress view to an already-started
+  // run's SSE stream instead of starting a new one from the form.
+  attachRunId?: string | null;
+  onAttached?: () => void;
+} = {}) {
   const [jd, setJd] = useState("");
   const [company, setCompany] = useState(""); // optional run label (§12.9) → run metadata
   const [mode, setMode] = useState<"demo" | "full">("demo");
@@ -273,39 +281,60 @@ export function RunPage() {
     }
   }
 
+  // Open the SSE stream for a run id and wire the event listeners. Shared by start() (a fresh
+  // run) and attach() (a re-run already started server-side, SPEC_RERUN §4.1).
+  function openStream(run_id: string) {
+    setRunId(run_id);
+    runIdRef.current = run_id;
+    const es = new EventSource(api.runStreamUrl(run_id));
+    esRef.current = es;
+    for (const t of RUN_EVENT_TYPES) {
+      es.addEventListener(t, (e) => handleEvent(JSON.parse((e as MessageEvent).data) as RunEvent));
+    }
+    // A (re)opened connection is healthy — clear any "Reconnecting…" badge.
+    es.onopen = () => setReconnecting(false);
+    es.onerror = () => {
+      if (doneRef.current) return;            // run already finished — a normal close, ignore
+      // EventSource auto-reconnects on a transient drop (proxy/tunnel blip): readyState is
+      // CONNECTING (0) while it retries. Let it heal — just show a transient badge. Only when
+      // it gives up (CLOSED = 2) do we surface a hard error. The backend replays the event
+      // buffer on reconnect, so the run continues seamlessly (seq-dedup drops the replay).
+      if (es.readyState === EventSource.CLOSED) {
+        setReconnecting(false);
+        setError("Lost connection to the run stream.");
+        finish();
+      } else {
+        setReconnecting(true);
+      }
+    };
+  }
+
   async function start() {
     reset();
     setRunning(true);
     try {
       const { run_id } = await api.startRun(jd, mode, auto, company.trim() || null, jobRadar);
-      setRunId(run_id);
-      runIdRef.current = run_id;
-      const es = new EventSource(api.runStreamUrl(run_id));
-      esRef.current = es;
-      for (const t of RUN_EVENT_TYPES) {
-        es.addEventListener(t, (e) => handleEvent(JSON.parse((e as MessageEvent).data) as RunEvent));
-      }
-      // A (re)opened connection is healthy — clear any "Reconnecting…" badge.
-      es.onopen = () => setReconnecting(false);
-      es.onerror = () => {
-        if (doneRef.current) return;            // run already finished — a normal close, ignore
-        // EventSource auto-reconnects on a transient drop (proxy/tunnel blip): readyState is
-        // CONNECTING (0) while it retries. Let it heal — just show a transient badge. Only when
-        // it gives up (CLOSED = 2) do we surface a hard error. The backend replays the event
-        // buffer on reconnect, so the run continues seamlessly (seq-dedup drops the replay).
-        if (es.readyState === EventSource.CLOSED) {
-          setReconnecting(false);
-          setError("Lost connection to the run stream.");
-          finish();
-        } else {
-          setReconnecting(true);
-        }
-      };
+      openStream(run_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRunning(false);
     }
   }
+
+  // Attach to an already-started re-run (SPEC_RERUN §4.1): the backend created it and started the
+  // pipeline; we just stream its progress. The SSE buffer replays from seq 0, so a freshly-attached
+  // view catches every event already emitted. We don't know locally whether this run carries a Job
+  // Radar link, so flag it so run_complete keeps the stream open briefly for a trailing
+  // job_radar_linked event (the 8s grace closes it if none arrives).
+  useEffect(() => {
+    if (!attachRunId) return;
+    reset();
+    setRunning(true);
+    jobRadarRef.current = { source: "rerun", job_id: "" };
+    openStream(attachRunId);
+    onAttached?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachRunId]);
 
   return (
     <div className="space-y-6">

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Download, ExternalLink } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, RotateCcw, Loader2 } from "lucide-react";
 import { api, type RunDetail } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog } from "@/components/ui/dialog";
+import { useUnlock } from "@/components/UnlockProvider";
 
 const FIT_BAND_VARIANT: Record<string, "success" | "secondary" | "destructive"> = {
   strong: "success",
@@ -13,10 +15,24 @@ const FIT_BAND_VARIANT: Record<string, "success" | "secondary" | "destructive"> 
 
 /** View one completed run: the D-34 summary card, downloads, and the full Phase-6 report
  *  (Fit / CV / Grounding / Changes / Scores / Reasoning / JD) embedded inline. Works for
- *  live and demo runs. */
-export function OutputPanel({ runId, onBack }: { runId: string; onBack: () => void }) {
+ *  live and demo runs. Owner can Re-run it (SPEC_RERUN §4) and follow re-run lineage. */
+export function OutputPanel({
+  runId,
+  onBack,
+  onOpenRun,
+  onRerun,
+}: {
+  runId: string;
+  onBack: () => void;
+  // Follow re-run lineage (SPEC_RERUN §4.2): open the original run this one was re-run from.
+  onOpenRun?: (runId: string) => void;
+  // Start a re-run (SPEC_RERUN §4.1): hands the new run id back so the app can stream it.
+  onRerun?: (runId: string) => void;
+}) {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rerunOpen, setRerunOpen] = useState(false);
+  const { unlocked } = useUnlock();
 
   useEffect(() => {
     let active = true;
@@ -57,6 +73,24 @@ export function OutputPanel({ runId, onBack }: { runId: string; onBack: () => vo
                   </span>
                 )}
               </div>
+              {/* Re-run provenance (SPEC_RERUN §4.2): links to the original run this was re-run
+                  from. Absent (null) on a fresh run → no badge. */}
+              {detail.rerun_of && (
+                <div className="text-xs text-muted-foreground">
+                  Re-run of{" "}
+                  {onOpenRun ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenRun(detail.rerun_of as string)}
+                      className="font-medium text-foreground underline-offset-2 hover:underline"
+                    >
+                      {detail.rerun_of}
+                    </button>
+                  ) : (
+                    <span className="font-medium text-foreground">{detail.rerun_of}</span>
+                  )}
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
                 <span>
                   ✓ Grounded coverage:{" "}
@@ -122,7 +156,26 @@ export function OutputPanel({ runId, onBack }: { runId: string; onBack: () => vo
                 </Button>
               </a>
             )}
+            {/* Re-run (SPEC_RERUN §4.1): owner-only — hidden unless unlocked. */}
+            {unlocked && onRerun && (
+              <Button variant="outline" size="sm" className="ml-auto" onClick={() => setRerunOpen(true)}>
+                <RotateCcw className="h-4 w-4" /> Re-run
+              </Button>
+            )}
           </div>
+
+          {rerunOpen && onRerun && (
+            <RerunDialog
+              runId={runId}
+              roleTitle={detail.role_title ?? detail.company_name ?? detail.run_id}
+              onClose={() => setRerunOpen(false)}
+              onStarted={(newRunId) => {
+                setRerunOpen(false);
+                onRerun(newRunId);
+              }}
+              onError={(m) => setError(m)}
+            />
+          )}
 
           {detail.has_html ? (
             <iframe
@@ -143,5 +196,76 @@ export function OutputPanel({ runId, onBack }: { runId: string; onBack: () => vo
         </>
       )}
     </div>
+  );
+}
+
+/** Re-run mode picker (SPEC_RERUN §4.1): a small modal — JD label + Demo/Full radio (default
+ *  full). On confirm, POST the re-run and hand the new run id back so the app streams it. */
+function RerunDialog({
+  runId,
+  roleTitle,
+  onClose,
+  onStarted,
+  onError,
+}: {
+  runId: string;
+  roleTitle: string;
+  onClose: () => void;
+  onStarted: (newRunId: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [mode, setMode] = useState<"demo" | "full">("full");
+  const [busy, setBusy] = useState(false);
+
+  async function start() {
+    setBusy(true);
+    try {
+      const { run_id } = await api.rerun(runId, mode);
+      onStarted(run_id);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="Re-run this tailoring"
+      description="Starts a fresh run with the same job description and Job Radar link."
+      className="max-w-md"
+    >
+      <div className="space-y-4 text-sm">
+        <div>
+          <span className="text-muted-foreground">JD: </span>
+          <span className="font-medium">{roleTitle}</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-muted-foreground">Mode:</span>
+          {(["demo", "full"] as const).map((m) => (
+            <label key={m} className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="rerun-mode"
+                value={m}
+                checked={mode === m}
+                onChange={() => setMode(m)}
+                className="h-4 w-4"
+              />
+              {m === "demo" ? "Demo" : "Full"}
+            </label>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button disabled={busy} onClick={() => void start()}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Start Re-run
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }

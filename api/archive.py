@@ -95,6 +95,7 @@ def _summary(run_dir: Path) -> dict:
         "keep": meta["keep"],
         "public_demo": meta["public_demo"],
         "job_radar_source": meta.get("job_radar_source"),   # Integration §5.2 (owner-only, redacted)
+        "rerun_of": meta.get("rerun_of"),                   # SPEC_RERUN §3.2 — original run id, or None
         "has_md": (run_dir / "cv_final.md").exists(),
         "has_html": (run_dir / "cv_final.html").exists(),
     }

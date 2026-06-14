@@ -12,7 +12,7 @@ import { useUnlock } from "@/components/UnlockProvider";
 
 const FIT_LABEL: Record<string, string> = { strong: "Strong", partial: "Partial", low: "No fit" };
 
-export function RunsPage() {
+export function RunsPage({ onRerun }: { onRerun?: (runId: string) => void } = {}) {
   const [runs, setRuns] = useState<ArchiveRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,7 +85,15 @@ export function RunsPage() {
     }
   }
 
-  if (selected) return <OutputPanel runId={selected} onBack={() => setSelected(null)} />;
+  if (selected)
+    return (
+      <OutputPanel
+        runId={selected}
+        onBack={() => setSelected(null)}
+        onOpenRun={(id) => setSelected(id)}
+        onRerun={onRerun}
+      />
+    );
 
   return (
     <div className="space-y-6">

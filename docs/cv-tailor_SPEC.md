@@ -2017,3 +2017,38 @@ locked request (even a public-demo run or a live-session viewer). The owner sees
   in the run summary as *✓ Linked back to Job Radar* / *⚠ Could not link back to Job Radar — add
   metrics manually*. Because the browser closes its stream on `run_complete`, the Run page keeps the
   EventSource open briefly (grace window) for a Job Radar run to catch this trailing event.
+
+### 12.11 — Re-run from an existing run (built, SPEC_RERUN / F-57)
+
+A **Re-run** button on the run detail page creates a *new* run pre-populated with the same JD,
+carries the originating `job_radar_source` forward, and lets the owner pick demo/full. On completion
+the Phase-3 callback (§12.10) fires to Job Radar exactly as a fresh run would — appending an updated
+`cv_tailor_links` record so the latest-per-job logic picks up the new scores. The pipeline, HITL,
+auth, and output formats are unchanged; this is an entry path plus a lineage field. Full design:
+`docs/SPEC_RERUN.md`.
+
+**Endpoint.** `POST /api/runs/{original_run_id}/rerun` (owner-gated, `require_unlocked`, D-39), body
+`{mode: "demo"|"full"}`. It loads the original run, reads its JD, copies `job_radar_source` +
+`company_name` forward, sets `rerun_of`, allocates a new run id, and starts the pipeline on a worker
+thread (same as `POST /api/runs`) — returning `{run_id}` immediately so the client streams it.
+- **404** if the original run doesn't exist; **400** `Original run has no stored JD — re-run not
+  possible` if it predates stored JDs; full-mode gating mirrors `start_run` (**403** if unset/locked).
+
+**JD source — `jd_raw.txt`, not the sidecar (F-57).** SPEC_RERUN's illustrative JSON showed `jd_raw`
+inside `run_meta.json`, but that sidecar is the *mutable* visibility/retention record (§12.9, D-40) —
+large immutable content stays out of it. The raw JD already persists per run as
+`outputs/<run_id>/jd_raw.txt` (the report's JD-tab source, F-40), so the endpoint reads it from there;
+"no stored JD → 400" maps to a missing `jd_raw.txt`.
+
+**`rerun_of` — write-once sidecar field (F-57).** `run_meta.json` gains `rerun_of: str | None`
+(`api/run_meta.py`): the original run id on a re-run, absent on a fresh run. It's write-once like
+`job_radar_source` (no PATCH field) and is **deliberately not in `default_meta()`** — consumers read
+`.get("rerun_of") → None`, which keeps the sidecar-less default contract (and its roundtrip test)
+unchanged. It rides in `GET /api/runs/{id}/detail` and `/archive`, and in the Phase-3 callback payload
+(null for a fresh run; Job Radar can display the lineage or ignore it).
+
+**UI (run detail page = output panel).** Owner-only **Re-run** button → a small modal (JD role title +
+Demo/Full radio, **default full** — the usual reason to re-run is to upgrade a demo). Confirm →
+`POST …/rerun` → the app switches to the Tailor tab and *attaches* the progress view to the
+already-started run's SSE stream (replay-from-seq-0 means no events are missed). The new run's detail
+page shows a **provenance badge** *Re-run of <original_run_id>* linking back to the original.

@@ -21,10 +21,13 @@ __all__ = ["META_FILE", "default_meta", "read_meta", "write_meta", "created_at_f
 
 META_FILE = "run_meta.json"
 
-# Persisted keys; anything else in a PATCH body is ignored. `job_radar_source` is write-once
-# at run creation (Integration §5.2) — it has no PATCH field, so an edit to the others (which
-# read-merge-write through here) leaves it untouched.
-_FIELDS = ("company_name", "keep", "public_demo", "job_radar_source")
+# Persisted keys; anything else in a PATCH body is ignored. `job_radar_source` and `rerun_of`
+# are both write-once at run creation (Integration §5.2 / SPEC_RERUN §3.2) — neither has a PATCH
+# field, so an edit to the mutable ones (which read-merge-write through here) leaves them
+# untouched. `rerun_of` is deliberately absent from `default_meta()`: an original run simply has
+# no key (consumers read it with `.get("rerun_of")` → None), which keeps the sidecar-less baseline
+# — and the default-roundtrip contract — unchanged while still persisting on a re-run.
+_FIELDS = ("company_name", "keep", "public_demo", "job_radar_source", "rerun_of")
 
 
 def default_meta() -> dict:

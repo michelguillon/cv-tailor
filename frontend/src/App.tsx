@@ -15,6 +15,14 @@ const TABS = [
 
 export default function App() {
   const [tab, setTab] = useState<string>("run");
+  // Re-run handoff (SPEC_RERUN §4.1): the Runs page POSTs the re-run, then asks us to jump to
+  // the Tailor tab and attach the progress view to the already-started new run's SSE stream.
+  const [attachRunId, setAttachRunId] = useState<string | null>(null);
+
+  function openRunStream(runId: string) {
+    setAttachRunId(runId);
+    setTab("run");
+  }
 
   return (
     <UnlockProvider>
@@ -46,8 +54,10 @@ export default function App() {
 
       <main className="mx-auto max-w-5xl px-6 py-8">
         {tab === "corpus" && <CorpusPage />}
-        {tab === "run" && <RunPage />}
-        {tab === "runs" && <RunsPage />}
+        {tab === "run" && (
+          <RunPage attachRunId={attachRunId} onAttached={() => setAttachRunId(null)} />
+        )}
+        {tab === "runs" && <RunsPage onRerun={openRunStream} />}
       </main>
     </div>
     </UnlockProvider>

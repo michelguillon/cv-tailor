@@ -400,6 +400,13 @@ Six tabs:
 - **Reasoning** — collapsible ReasoningEntry audit trail by phase
 - **JD** — raw job description verbatim (traceability)
 
+**Re-run (owner-only, SPEC_RERUN / F-57).** A `Re-run` button + mode modal (default full)
+starts a fresh run with the same JD (read from the original's `jd_raw.txt`) and its
+`job_radar_source` carried forward — so the Phase-3 callback fires again, appending an updated
+record to Job Radar's `cv_tailor_links`. The new run records `rerun_of` (write-once sidecar key)
+and shows a provenance badge linking back to the original. `POST /api/runs/{id}/rerun` → redirect
+to the new run's SSE progress view.
+
 ### Architecture
 ```
 frontend:3000 (React + Vite + shadcn) — nginx-alpine in prod
