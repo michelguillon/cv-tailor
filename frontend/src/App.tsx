@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CorpusPage } from "@/pages/CorpusPage";
 import { RunPage } from "@/pages/RunPage";
 import { RunsPage } from "@/pages/RunsPage";
@@ -23,6 +23,19 @@ export default function App() {
     setAttachRunId(runId);
     setTab("run");
   }
+
+  // Deep-link from the standalone report's Re-run button (SPEC_RERUN §12.11): it POSTs the re-run,
+  // then bounces here with ?attach=<new_run_id>. Read it once on mount, strip it (replaceState, so a
+  // refresh doesn't re-trigger), and attach the Tailor tab's progress view to that live run's stream.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const attach = params.get("attach");
+    if (!attach) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("attach");
+    window.history.replaceState({}, "", url.toString());
+    openRunStream(attach);
+  }, []);
 
   return (
     <UnlockProvider>

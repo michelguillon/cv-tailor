@@ -2052,3 +2052,13 @@ Demo/Full radio, **default full** — the usual reason to re-run is to upgrade a
 `POST …/rerun` → the app switches to the Tailor tab and *attaches* the progress view to the
 already-started run's SSE stream (replay-from-seq-0 means no events are missed). The new run's detail
 page shows a **provenance badge** *Re-run of <original_run_id>* linking back to the original.
+
+**Also on the standalone report** (`templates/output.html`, served at `GET /api/runs/{id}/report`).
+The report is a self-contained artifact written at Phase 6, so the control is plain HTML/JS in the
+template: on load it calls `GET /api/capabilities` and reveals an owner-only **↻ Re-run** button only
+when `full_unlocked` (the capability cookie rides along same-origin). The button opens the same
+Demo/Full modal, POSTs `…/rerun`, and bounces to the SPA progress view at `/?attach=<new_run_id>`
+(read once on mount in `App.tsx` → attaches to the new run's stream). It is **hidden when the report
+is embedded in the app's iframe** (`window.self !== window.top`) so the React chrome's button isn't
+duplicated. Because the report is static, the button appears only on reports generated *after* this
+shipped — older reports gain it once re-run (a re-run produces a fresh report).

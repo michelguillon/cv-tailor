@@ -446,6 +446,17 @@ Runs page POSTs the re-run, then jumps to the Tailor tab and `RunPage` *attaches
 already-started run's SSE stream (factored `openStream` out of `start`) rather than starting a new
 one. The SSE replay-from-seq-0 buffer means the attached view misses no earlier event.
 
+**Follow-up — Re-run on the standalone report (§12.11).** The button initially lived only in the
+React chrome around the report. The report (`/api/runs/{id}/report`) is a self-contained
+`cv_final.html` served from disk, so the affordance had to be plain HTML/JS in `templates/output.html`:
+on load it calls `GET /api/capabilities` and reveals an owner-only button only when `full_unlocked`
+(the HttpOnly capability cookie can't be read by JS, but rides along same-origin to both
+`/capabilities` and `/rerun`). POST → bounce to `/?attach=<new_run_id>`, which `App.tsx` reads on
+mount → attaches (reusing the `attachRunId` path). **Two load-bearing details:** (1) the button is
+skipped when `window.self !== window.top`, so it never double-renders inside the app's iframe view;
+(2) the report is a *static artifact* — the button appears only on reports generated after this
+shipped (a re-run regenerates a fresh report, so it's self-healing for anything actually re-run).
+
 ---
 
 ### F-56 — "Rendering bug" was the writers flattening structure into prose; fixed at the writer, not phase6

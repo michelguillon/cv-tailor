@@ -63,10 +63,30 @@
   .fit-cols ul { margin:0; padding-left:18px; font-size:13px; }
   .gap-major { color:var(--del); }
   .gap-min { color:var(--muted); }
+  /* Re-run control (SPEC_RERUN §12.11) — owner-only, standalone report only (hidden in the app iframe). */
+  .rerun-btn { position: absolute; top: 14px; right: 28px; border: 1px solid var(--accent);
+               background: #fff; color: var(--accent); border-radius: 6px; padding: 6px 12px;
+               font: inherit; font-size: 13px; cursor: pointer; }
+  .rerun-btn:hover { background: var(--accent); color: #fff; }
+  .rr-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex;
+                align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 10; }
+  .rr-modal { background: #fff; border-radius: 8px; padding: 20px 22px; width: 380px; max-width: 92vw;
+              box-shadow: 0 10px 30px rgba(0,0,0,.2); }
+  .rr-modal h2 { margin: 0 0 4px; font-size: 16px; }
+  .rr-modal p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  .rr-modes { display: flex; gap: 16px; margin-bottom: 16px; font-size: 14px; }
+  .rr-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .rr-actions button { font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer; }
+  .rr-cancel { background: #fff; border: 1px solid var(--line); }
+  .rr-start { background: var(--accent); border: 1px solid var(--accent); color: #fff; }
+  .rr-start:disabled { opacity: .6; cursor: default; }
+  .rr-err { color: var(--del); font-size: 13px; margin-top: 10px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header>
+  <button id="rerun-btn" class="rerun-btn" data-run-id="{{ run_id }}" hidden>↻ Re-run</button>
   <h1>{{ role_title }}</h1>
   <div class="summary">
     <span class="fit {{ summary_card.fit_band }}">Fit: {{ summary_card.fit_label }}{% if summary_card.fit_pct is not none %} ({{ summary_card.fit_pct }}%){% endif %}</span>
@@ -204,6 +224,25 @@
     {% endif %}
   </section>
 </main>
+
+<!-- Re-run mode picker (SPEC_RERUN §12.11) — revealed only for an unlocked owner viewing the
+     standalone report; the app's iframe view uses its own React button instead. -->
+<div id="rr-overlay" class="rr-overlay" hidden>
+  <div class="rr-modal" role="dialog" aria-modal="true">
+    <h2>Re-run this tailoring</h2>
+    <p>JD: {{ role_title }}</p>
+    <div class="rr-modes">
+      <label><input type="radio" name="rr-mode" value="demo"> Demo</label>
+      <label><input type="radio" name="rr-mode" value="full" checked> Full</label>
+    </div>
+    <div class="rr-actions">
+      <button class="rr-cancel" id="rr-cancel">Cancel</button>
+      <button class="rr-start" id="rr-start">Start Re-run</button>
+    </div>
+    <div class="rr-err" id="rr-err" hidden></div>
+  </div>
+</div>
+
 <script>
   document.querySelectorAll('.tab-btn').forEach(function (b) {
     b.addEventListener('click', function () {
@@ -213,6 +252,46 @@
       document.getElementById(b.dataset.tab).classList.add('active');
     });
   });
+
+  // Re-run (SPEC_RERUN §12.11). Only on the standalone report (skipped when embedded in the app's
+  // iframe, which carries its own button). The owner capability cookie rides along same-origin;
+  // /api/capabilities reveals the button only when unlocked. On start, POST the re-run and bounce
+  // to the app's progress view (/?attach=<new_id>), which attaches to the new run's SSE stream.
+  (function () {
+    if (window.self !== window.top) return;             // embedded in the SPA iframe — app has the button
+    var btn = document.getElementById('rerun-btn');
+    if (!btn) return;
+    var runId = btn.dataset.runId;
+    var overlay = document.getElementById('rr-overlay');
+    var errEl = document.getElementById('rr-err');
+    var startBtn = document.getElementById('rr-start');
+    fetch('/api/capabilities')
+      .then(function (r) { return r.json(); })
+      .then(function (caps) { if (caps && caps.full_unlocked) btn.hidden = false; })
+      .catch(function () {});
+    btn.addEventListener('click', function () { errEl.hidden = true; overlay.hidden = false; });
+    document.getElementById('rr-cancel').addEventListener('click', function () { overlay.hidden = true; });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.hidden = true; });
+    startBtn.addEventListener('click', function () {
+      var sel = document.querySelector('input[name="rr-mode"]:checked');
+      var mode = sel ? sel.value : 'full';
+      startBtn.disabled = true; startBtn.textContent = 'Starting…';
+      fetch('/api/runs/' + encodeURIComponent(runId) + '/rerun', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: mode })
+      }).then(function (r) {
+        if (!r.ok) return r.json().catch(function () { return {}; }).then(function (b) {
+          throw new Error(b.detail || ('HTTP ' + r.status));
+        });
+        return r.json();
+      }).then(function (data) {
+        window.location.href = '/?attach=' + encodeURIComponent(data.run_id);
+      }).catch(function (e) {
+        errEl.textContent = String((e && e.message) || e); errEl.hidden = false;
+        startBtn.disabled = false; startBtn.textContent = 'Start Re-run';
+      });
+    });
+  })();
 </script>
 </body>
 </html>
