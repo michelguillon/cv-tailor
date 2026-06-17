@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from api.job_radar import JobRadarError, fetch_job
+from api.job_radar import JobRadarError, fetch_job, job_radar_assessment
 
 router = APIRouter(prefix="/api/job-radar", tags=["job-radar"])
 
@@ -33,4 +33,8 @@ def prefill_job(job_id: str) -> dict:
         "source_url": job.get("source_url"),
         "fit_label": job.get("fit_label"),
         "fit_score": job.get("fit_score"),
+        # Owner's assessment context (SPEC §12.12), serialised — drives the RunPage collapsible
+        # panel (owner-unlocked only; the panel itself gates visibility). None when Job Radar
+        # omits it. `fetch_job` parses the typed model, so derive from the raw response dict.
+        "assessment": job_radar_assessment(job),
     }

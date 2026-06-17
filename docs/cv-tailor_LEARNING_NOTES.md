@@ -412,6 +412,40 @@ what changed (if anything).*
 
 ---
 
+### F-58 — Job Radar assessment context (Phase 4 Step 2): read/store/display, parsed from the raw response not the embedded dataclass
+
+**What.** Built Step 2 of the Job Radar Phase 4 integration (`../job-radar/docs/SPEC_INTEGRATION_PHASE4.md`):
+cv-tailor now reads Job Radar's structured `extraction` + the owner's `assessment` (fit overrides,
+gaps, blockers, annotations, notes, owner status) from the public `GET /api/jobs/{job_id}`, stores
+a snapshot write-once on `run_meta.json`, and shows it to the owner in a collapsible Run-page panel.
+**Step 3 (threading the context into the Phase 1 fit-assessment prompt) was deliberately NOT built** —
+it's gated on a calibration baseline (20+ full-mode runs with linked roles) so the before/after can
+be measured; no pipeline prompts changed. Affects the Integration spec; recorded as SPEC §12.12.
+
+**Ambiguity resolved (the parse seam).** The build prompt specified `fetch_job` returning embedded
+dataclass instances and `start_run` storing `asdict(job["assessment"])`. But the API tests
+monkeypatch `runs_router.fetch_job` to return a **raw dict** (`_JR_JOB`), so reading
+`job["assessment"]` there would see a plain dict (or nothing), and `asdict()` on it would raise.
+Resolution: keep `fetch_job` embedding the typed models (the documented contract + the
+`test_fetch_job_parses_*` tests), but have `start_run` derive the stored value from the **raw**
+response via `job_radar_assessment(data)` / `job_radar_extraction(data)` helpers — the exact shape of
+the established `job_radar_source(data)` helper (D-40/F-51). Both paths share `parse_assessment`. This
+is robust to the mock and consistent with the codebase; the prompt's literal code was an illustration,
+not a constraint.
+
+**Write-once, absent-by-default (reuse of the `rerun_of` pattern, F-57).** The two new sidecar keys
+are added to `run_meta._FIELDS` but **not** to `default_meta()` — consumers read `.get(...) → None`,
+which keeps the sidecar-less default-roundtrip contract (`test_run_meta_defaults_and_roundtrip`)
+unchanged. No PATCH field ⇒ later visibility/retention edits never mutate them; carried forward on a
+re-run (§12.11). **Owner-only:** both join `archive._REDACTED` and are blanked in `run_detail` for a
+locked request, same as `job_radar_source` (they expose the owner's private read of a role).
+
+**Takeaway.** When a build prompt's code conflicts with how the existing tests exercise a seam, follow
+the *established pattern in the code* (here: parse-from-raw-dict helpers) and record the divergence —
+the prompt describes intent, the codebase describes contract.
+
+---
+
 ### F-57 — Re-run from an existing run (SPEC_RERUN): JD comes from jd_raw.txt, not the sidecar; rerun_of is write-once
 
 **What.** Built the re-run feature: `POST /api/runs/{original}/rerun` (owner-gated) creates a new

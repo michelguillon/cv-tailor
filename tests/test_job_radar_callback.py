@@ -12,6 +12,100 @@ import pytest
 
 from api import job_radar, runner
 
+# --------------------------------------------------------------------------- #
+# Phase 4 Step 2 — assessment-context enrichment (SPEC §12.12)                  #
+# --------------------------------------------------------------------------- #
+
+_JR_ASSESSMENT = {
+    "fit_label": "strong_fit",
+    "fit_score": 10,
+    "priority_score": 9,
+    "blocking_constraints": [],
+    "requirement_gaps": ["formal management consulting background"],
+    "fit_override": {"label": "good_fit", "reason": "requires formal consulting track record"},
+    "owner_status": "shortlisted",
+    "annotations": [
+        {"type": "technical_depth_incorrect", "field": "technical_depth",
+         "reason": "role is more strategic than technical"},
+    ],
+    "notes": [{"ts": "2026-06-14T18:20:00Z", "text": "Strong culture fit but consulting a gap"}],
+}
+
+_JR_EXTRACTION = {
+    "role_type": ["AI Delivery"], "seniority": "director", "domain": ["AI Platform"],
+    "technical_depth": "hybrid", "delivery_motion": ["enterprise_platform"],
+    "required_technologies": ["python"], "required_competencies": ["leadership"],
+    "requirement_gaps": ["formal management consulting background"],
+    "an_unknown_future_field": "ignored",          # forward-compat: dropped, never raises
+}
+
+
+def _job(**overrides) -> dict:
+    job = {"job_id": "sha256:abc123", "company": "Writer", "raw_text": "JD body",
+           "assessment": dict(_JR_ASSESSMENT), "extraction": dict(_JR_EXTRACTION)}
+    job.update(overrides)
+    return job
+
+
+def _mock_get(monkeypatch, payload):
+    """Point job_radar.httpx.get at a 200 response carrying `payload` (no real network)."""
+    monkeypatch.setattr(job_radar.httpx, "get",
+                        lambda url, **k: httpx.Response(200, json=payload, request=httpx.Request("GET", url)))
+
+
+def test_fetch_job_parses_assessment(monkeypatch):
+    _mock_get(monkeypatch, _job())
+    a = job_radar.fetch_job("sha256:abc123")["assessment"]
+    assert isinstance(a, job_radar.JobRadarAssessment)
+    assert a.fit_label == "strong_fit" and a.fit_score == 10 and a.priority_score == 9
+    assert a.owner_status == "shortlisted"
+    assert a.requirement_gaps == ["formal management consulting background"]
+    assert len(a.annotations) == 1 and a.annotations[0].field == "technical_depth"
+    assert len(a.notes) == 1 and a.notes[0].text.startswith("Strong culture fit")
+
+
+def test_fetch_job_parses_fit_override(monkeypatch):
+    _mock_get(monkeypatch, _job())
+    a = job_radar.fetch_job("sha256:abc123")["assessment"]
+    assert isinstance(a.fit_override, job_radar.JobRadarFitOverride)
+    assert a.fit_override.label == "good_fit"
+    assert a.fit_override.reason == "requires formal consulting track record"
+
+
+def test_fetch_job_parses_extraction(monkeypatch):
+    _mock_get(monkeypatch, _job())
+    e = job_radar.fetch_job("sha256:abc123")["extraction"]
+    assert isinstance(e, job_radar.JobRadarExtraction)
+    assert e.seniority == "director" and e.technical_depth == "hybrid"
+    assert e.role_type == ["AI Delivery"]
+    assert not hasattr(e, "an_unknown_future_field")        # unknown keys dropped, no crash
+
+
+def test_fetch_job_no_assessment_returns_none(monkeypatch):
+    _mock_get(monkeypatch, _job(assessment=None, extraction=None))
+    job = job_radar.fetch_job("sha256:abc123")
+    assert job["assessment"] is None                         # absent → None, no exception
+    assert job["company"] == "Writer"                        # raw fields preserved
+
+
+def test_fetch_job_no_extraction_returns_none(monkeypatch):
+    # `extraction` key absent entirely (old Job Radar) → None, not a KeyError.
+    _mock_get(monkeypatch, {"job_id": "x", "company": "Writer", "raw_text": "JD"})
+    job = job_radar.fetch_job("x")
+    assert job["assessment"] is None and job["extraction"] is None
+
+
+def test_job_radar_assessment_serialises_to_plain_dict(monkeypatch):
+    """The run_meta helper takes the RAW response dict and returns a JSON-ready plain dict."""
+    d = job_radar.job_radar_assessment(_job())
+    assert isinstance(d, dict) and d["fit_label"] == "strong_fit"
+    assert d["fit_override"] == {"label": "good_fit",
+                                 "reason": "requires formal consulting track record"}
+    assert d["annotations"][0]["field"] == "technical_depth"
+    # round-trips through JSON (no dataclass instances leak into the sidecar)
+    assert json.loads(json.dumps(d))["owner_status"] == "shortlisted"
+    assert job_radar.job_radar_assessment({"company": "x"}) is None    # no assessment → None
+
 
 # --------------------------------------------------------------------------- #
 # post_results_to_job_radar — payload, auth, fail-soft                          #

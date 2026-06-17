@@ -157,6 +157,36 @@ export interface JobRadarSource {
   fit_score: number | null;
 }
 
+// Job Radar assessment-context enrichment (SPEC §12.12): the owner's manual review of a role,
+// shown to the owner in a collapsible RunPage panel. Owner-only (absent in the public view).
+export interface JobRadarFitOverride {
+  label: string;
+  reason: string | null;
+}
+
+export interface JobRadarAnnotation {
+  type: string;
+  field: string | null;
+  reason: string;
+}
+
+export interface JobRadarNote {
+  ts: string;
+  text: string;
+}
+
+export interface JobRadarAssessment {
+  fit_label: string | null;
+  fit_score: number | null;
+  priority_score: number | null;
+  blocking_constraints: string[];
+  requirement_gaps: string[];
+  fit_override: JobRadarFitOverride | null;
+  owner_status: string | null;
+  annotations: JobRadarAnnotation[];
+  notes: JobRadarNote[];
+}
+
 // Job Radar prefill (Integration §5.2): the proxied job detail the Run page pre-fills with.
 export interface JobRadarPrefill {
   job_id: string;
@@ -166,12 +196,15 @@ export interface JobRadarPrefill {
   source_url: string | null;
   fit_label: string | null;
   fit_score: number | null;
+  assessment?: JobRadarAssessment | null;   // owner's review (SPEC §12.12) — owner-only panel
 }
 
 export interface ArchiveRun {
   run_id: string;
   created_at: string | null;        // run-id timestamp (null in the redacted public view)
   job_radar_source?: JobRadarSource | null;   // Integration §5.2 (owner-only; redacted public)
+  job_radar_assessment?: JobRadarAssessment | null;   // SPEC §12.12 (owner-only; redacted public)
+  job_radar_extraction?: Record<string, unknown> | null;   // SPEC §12.12 (owner-only; redacted)
   company_name: string | null;      // editable label; UI shows "Unknown company" when null
   mode: string | null;
   role_title: string | null;

@@ -13,11 +13,16 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict, dataclass, field
 
 import httpx
 
 __all__ = ["JobRadarError", "api_url", "fetch_job", "job_radar_source",
-           "service_key", "cv_tailor_base_url", "post_results_to_job_radar"]
+           "service_key", "cv_tailor_base_url", "post_results_to_job_radar",
+           "JobRadarFitOverride", "JobRadarAnnotation", "JobRadarNote",
+           "JobRadarAssessment", "JobRadarExtraction",
+           "parse_assessment", "parse_extraction",
+           "job_radar_assessment", "job_radar_extraction"]
 
 log = logging.getLogger("cv_tailor.job_radar")
 
@@ -34,11 +39,113 @@ def api_url() -> str:
     return os.environ.get("JOB_RADAR_API_URL", DEFAULT_API_URL).strip().rstrip("/") or DEFAULT_API_URL
 
 
+# --------------------------------------------------------------------------- #
+# Assessment-context enrichment (Phase 4 Step 2, SPEC §12.12)                   #
+# --------------------------------------------------------------------------- #
+# Job Radar's `GET /api/jobs/{job_id}` now also returns two optional objects:    #
+# `extraction` (its structured JD analysis) and `assessment` (the owner's manual #
+# review — fit overrides, gaps, annotations, notes). cv-tailor reads them as     #
+# additional CONTEXT (never ground truth) and stores a snapshot on the run. Both #
+# are optional: an older Job Radar omits them → the parsers return None and the   #
+# pipeline behaves exactly as in Phase 2 (no regression).                         #
+
+
+@dataclass
+class JobRadarFitOverride:
+    """The owner's explicit override of the scorer's fit label, with a one-line reason."""
+    label: str
+    reason: str | None
+
+
+@dataclass
+class JobRadarAnnotation:
+    """An owner correction to one of Job Radar's extraction fields (more accurate than raw)."""
+    type: str
+    field: str | None
+    reason: str
+
+
+@dataclass
+class JobRadarNote:
+    """A free-text owner note on the role (qualitative read — informs tone/emphasis)."""
+    ts: str
+    text: str
+
+
+@dataclass
+class JobRadarAssessment:
+    """The owner's human review of a role from Job Radar (SPEC_INTEGRATION_PHASE4 §3)."""
+    fit_label: str | None = None
+    fit_score: int | None = None
+    priority_score: int | None = None
+    blocking_constraints: list[str] = field(default_factory=list)
+    requirement_gaps: list[str] = field(default_factory=list)
+    fit_override: JobRadarFitOverride | None = None
+    owner_status: str | None = None
+    annotations: list[JobRadarAnnotation] = field(default_factory=list)
+    notes: list[JobRadarNote] = field(default_factory=list)
+
+
+@dataclass
+class JobRadarExtraction:
+    """Job Radar's structured JD extraction — complementary to cv-tailor's Phase 0 (not a
+    replacement, SPEC_INTEGRATION_PHASE4 §2). Stored as context, used in Phase 1 (Step 3)."""
+    role_type: list[str] = field(default_factory=list)
+    seniority: str | None = None
+    domain: list[str] = field(default_factory=list)
+    technical_depth: str | None = None
+    delivery_motion: list[str] = field(default_factory=list)
+    required_technologies: list[str] = field(default_factory=list)
+    required_competencies: list[str] = field(default_factory=list)
+    nice_to_have_technologies: list[str] = field(default_factory=list)
+    nice_to_have_competencies: list[str] = field(default_factory=list)
+    requirement_gaps: list[str] = field(default_factory=list)
+
+
+def parse_assessment(data: dict) -> JobRadarAssessment | None:
+    """Map the raw `assessment` object (if any) into a typed model, or None when absent/empty.
+
+    Defensive: a missing nested key never raises — Job Radar may omit any field (no override,
+    no annotations, …). An old Job Radar without Phase 4 has no `assessment` at all → None."""
+    a = data.get("assessment")
+    if not a:
+        return None
+    fo = a.get("fit_override")
+    return JobRadarAssessment(
+        fit_label=a.get("fit_label"),
+        fit_score=a.get("fit_score"),
+        priority_score=a.get("priority_score"),
+        blocking_constraints=list(a.get("blocking_constraints") or []),
+        requirement_gaps=list(a.get("requirement_gaps") or []),
+        fit_override=JobRadarFitOverride(label=fo.get("label"), reason=fo.get("reason"))
+            if fo else None,
+        owner_status=a.get("owner_status"),
+        annotations=[JobRadarAnnotation(type=x.get("type"), field=x.get("field"),
+                                        reason=x.get("reason"))
+                     for x in (a.get("annotations") or [])],
+        notes=[JobRadarNote(ts=x.get("ts"), text=x.get("text"))
+               for x in (a.get("notes") or [])],
+    )
+
+
+def parse_extraction(data: dict) -> JobRadarExtraction | None:
+    """Map the raw `extraction` object (if any) into a typed model, or None when absent.
+
+    Unknown keys are dropped (Job Radar's schema may grow independently) so a forward-compatible
+    payload never breaks the parse."""
+    e = data.get("extraction")
+    if not e:
+        return None
+    return JobRadarExtraction(**{k: v for k, v in e.items()
+                                 if k in JobRadarExtraction.__dataclass_fields__})
+
+
 def fetch_job(job_id: str, *, timeout: float = 10.0) -> dict:
     """Fetch one job's detail from Job Radar's public endpoint, or raise `JobRadarError`.
 
     No auth — the endpoint is public (Integration §8). The returned dict is Job Radar's raw
-    JSON (company, title, source_url, fit_label, fit_score, raw_text, …)."""
+    JSON (company, title, source_url, fit_label, fit_score, raw_text, …) plus parsed
+    `assessment`/`extraction` typed models (None when Job Radar omits them — SPEC §12.12)."""
     url = f"{api_url()}/api/jobs/{job_id}"
     try:
         resp = httpx.get(url, timeout=timeout)
@@ -54,7 +161,7 @@ def fetch_job(job_id: str, *, timeout: float = 10.0) -> dict:
         raise JobRadarError("Job Radar returned a non-JSON response") from exc
     if not isinstance(data, dict):
         raise JobRadarError("Job Radar returned an unexpected payload")
-    return data
+    return {**data, "assessment": parse_assessment(data), "extraction": parse_extraction(data)}
 
 
 def job_radar_source(data: dict) -> dict:
@@ -68,6 +175,21 @@ def job_radar_source(data: dict) -> dict:
         "fit_label": data.get("fit_label"),
         "fit_score": data.get("fit_score"),
     }
+
+
+def job_radar_assessment(data: dict) -> dict | None:
+    """The owner's assessment serialised to a plain dict for `run_meta.json` (write-once), or
+    None when absent — mirrors `job_radar_source`. Takes the RAW response dict so it works on a
+    mocked `fetch_job` too (the typed parse lives in `parse_assessment`)."""
+    a = parse_assessment(data)
+    return asdict(a) if a is not None else None
+
+
+def job_radar_extraction(data: dict) -> dict | None:
+    """Job Radar's extraction serialised to a plain dict for `run_meta.json` (write-once), or
+    None when absent — counterpart to `job_radar_assessment`."""
+    e = parse_extraction(data)
+    return asdict(e) if e is not None else None
 
 
 # --------------------------------------------------------------------------- #

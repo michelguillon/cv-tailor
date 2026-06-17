@@ -2062,3 +2062,46 @@ Demo/Full modal, POSTs `…/rerun`, and bounces to the SPA progress view at `/?a
 is embedded in the app's iframe** (`window.self !== window.top`) so the React chrome's button isn't
 duplicated. Because the report is static, the button appears only on reports generated *after* this
 shipped — older reports gain it once re-run (a re-run produces a fresh report).
+
+### 12.12 — Job Radar assessment-context enrichment, Step 2: read/store/display (built, F-58)
+
+Phase 4 of the Job Radar ↔ cv-tailor integration enriches cv-tailor with Job Radar's structured
+JD `extraction` and the owner's manual `assessment` (fit overrides, requirement gaps, blockers,
+annotations, notes, owner status). Full design: `../job-radar/docs/SPEC_INTEGRATION_PHASE4.md`.
+This section is **Step 2 only** — *read, store, and display* the context. **Step 3 (threading it
+into the Phase 1 fit-assessment prompt) is deliberately out of scope** and gated on calibration
+data (20+ full-mode runs with linked roles); no pipeline phase prompts change here.
+
+**Fetch (`api/job_radar.py`).** Job Radar's public `GET /api/jobs/{job_id}` now also returns
+optional `extraction` and `assessment` objects. Typed models — `JobRadarAssessment`
+(+ nested `JobRadarFitOverride` / `JobRadarAnnotation` / `JobRadarNote`) and `JobRadarExtraction` —
+mirror the payload; `parse_assessment` / `parse_extraction` map the raw dict into them defensively
+(missing nested keys never raise; unknown extraction keys are dropped for forward-compat). `fetch_job`
+returns `{**data, "assessment": …, "extraction": …}` (both **None** when Job Radar omits them — an
+older Job Radar without Phase 4 → no regression).
+
+**Store — write-once on the sidecar (mirrors `job_radar_source`).** `run_meta.json` gains
+`job_radar_assessment` and `job_radar_extraction`, serialised to plain dicts via the
+`job_radar_assessment(data)` / `job_radar_extraction(data)` helpers (which take the **raw** response
+dict — same shape as `job_radar_source(data)` — so they work on a mocked `fetch_job` too, and no
+dataclass instances leak into JSON). Set once at run creation in `runs.py:start_run` (and carried
+forward on a re-run, §12.11); **deliberately absent from `default_meta()`** like `rerun_of` — consumers
+read `.get(...) → None`, keeping the sidecar-less default-roundtrip contract unchanged. No PATCH field,
+so later visibility/retention edits never touch them.
+
+**Display — owner-only.** Both fields ride in `GET /api/runs/{id}/detail` and `/archive` and are
+**owner-only**: added to `archive._REDACTED` (blanked in the redacted public list) and blanked in
+`run_detail` for a locked request (same treatment as `job_radar_source`, Integration §5.4 — they
+expose the owner's private read of a role). The Run page renders a **collapsed-by-default "Job Radar
+assessment" panel** (`JobRadarAssessmentPanel` in `RunPage.tsx`) below the existing "From Job Radar:
+…" prefill line, shown only when `useUnlock().unlocked` **and** an assessment is present — scorer label
+with the owner's override (`strong_fit → good_fit`), override reason, gaps, blockers, owner status,
+annotations, and notes. The prefill proxy (`routers/job_radar.py`) returns the serialised `assessment`
+so the panel has data at the start-a-run stage.
+
+**Design note (F-58).** The build prompt specified `start_run` reading `asdict(job["assessment"])`
+off `fetch_job`'s embedded dataclass. The existing tests monkeypatch `fetch_job` to return a **raw
+dict**, so `start_run` instead derives the stored value from the raw response via the
+`job_radar_assessment(data)` helper — consistent with the established `job_radar_source(data)` pattern
+and robust to the mock. `fetch_job` still embeds the typed models (the documented contract / the
+`test_fetch_job_parses_*` tests); the two paths share `parse_assessment`.

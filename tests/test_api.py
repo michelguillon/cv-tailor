@@ -656,6 +656,43 @@ def test_run_meta_has_job_radar_source(jr_run):
     assert run_meta.read_meta(run_dir)["job_radar_source"]["company"] == "Elastic"
 
 
+# --- assessment-context enrichment (SPEC §12.12, Phase 4 Step 2) --- #
+
+_JR_JOB_WITH_ASSESSMENT = {
+    **_JR_JOB,
+    "assessment": {"fit_label": "strong_fit", "fit_score": 10, "owner_status": "shortlisted",
+                   "requirement_gaps": ["consulting background"],
+                   "fit_override": {"label": "good_fit", "reason": "short on consulting"}},
+    "extraction": {"seniority": "principal", "technical_depth": "hybrid"},
+}
+
+
+def test_run_meta_stores_assessment(jr_run):
+    """A run sourced from Job Radar persists the serialised assessment + extraction (write-once)."""
+    _, run_dir = jr_run(job=_JR_JOB_WITH_ASSESSMENT)
+    meta = run_meta.read_meta(run_dir)
+    a = meta["job_radar_assessment"]
+    assert a["fit_label"] == "strong_fit" and a["owner_status"] == "shortlisted"
+    assert a["fit_override"] == {"label": "good_fit", "reason": "short on consulting"}
+    assert meta["job_radar_extraction"]["seniority"] == "principal"
+
+
+def test_run_meta_assessment_write_once(jr_run):
+    """A later sidecar edit (e.g. PATCH company/keep) never mutates the stored assessment."""
+    _, run_dir = jr_run(job=_JR_JOB_WITH_ASSESSMENT)
+    run_meta.write_meta(run_dir, keep=True)                         # an unrelated edit
+    a = run_meta.read_meta(run_dir)["job_radar_assessment"]
+    assert a["fit_label"] == "strong_fit"                          # unchanged
+
+
+def test_run_meta_no_assessment_when_absent(jr_run):
+    """An old Job Radar without Phase 4 (no assessment in the response) → no key, reads None."""
+    _, run_dir = jr_run()                                          # _JR_JOB has no assessment
+    meta = run_meta.read_meta(run_dir)
+    assert meta.get("job_radar_assessment") is None
+    assert meta.get("job_radar_extraction") is None
+
+
 def test_run_from_job_radar_is_private(jr_run):
     _, run_dir = jr_run()
     meta = run_meta.read_meta(run_dir)                              # default not overridden (§12.9)
@@ -763,6 +800,23 @@ def test_run_detail_redacts_job_radar_source_when_locked(client, runs_disk, monk
     client.post("/api/full-mode/unlock", json={"key": "pw"})
     owner = client.get("/api/runs/run_20260612_150000/detail").json()
     assert owner["job_radar_source"]["company"] == "Elastic"
+
+
+def test_run_detail_redacts_assessment_when_locked(client, runs_disk, monkeypatch):
+    """GET /runs/{id}/detail blanks the owner's assessment/extraction for a locked request,
+    even on a public-demo run; the owner sees them (SPEC §12.12)."""
+    monkeypatch.setenv("FULL_MODE_KEY", "pw")
+    out = runs_disk
+    _make_run(out, "run_20260612_160000",
+              meta={"public_demo": True,
+                    "job_radar_assessment": {"fit_label": "strong_fit", "owner_status": "shortlisted"},
+                    "job_radar_extraction": {"seniority": "director"}})
+    locked = client.get("/api/runs/run_20260612_160000/detail").json()  # public can open it
+    assert locked["job_radar_assessment"] is None and locked["job_radar_extraction"] is None
+    client.post("/api/full-mode/unlock", json={"key": "pw"})
+    owner = client.get("/api/runs/run_20260612_160000/detail").json()
+    assert owner["job_radar_assessment"]["fit_label"] == "strong_fit"
+    assert owner["job_radar_extraction"]["seniority"] == "director"
 
 
 # --------------------------------------------------------------------------- #

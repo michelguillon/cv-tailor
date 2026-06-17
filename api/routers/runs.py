@@ -21,7 +21,8 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from api import archive
-from api.job_radar import JobRadarError, fetch_job, job_radar_source
+from api.job_radar import (JobRadarError, fetch_job, job_radar_assessment,
+                           job_radar_extraction, job_radar_source)
 from api.run_meta import read_meta, write_meta
 from api.runner import launch_run
 from api.security import FULL_COOKIE, full_mode_configured, require_unlocked, verify_token
@@ -125,11 +126,14 @@ def run_detail(run_id: str, request: Request) -> dict:
     detail = archive.run_detail(OUTPUT_DIR, run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"no output for run {run_id!r}")
-    # The Job Radar reference links to a personal job-search tool — owner-only, even for a
-    # public-demo run or a live-session viewer (Integration §5.4). The archive list already
-    # redacts it; the detail endpoint isn't redacted, so blank it here when locked.
+    # The Job Radar reference + the owner's assessment/extraction context all link to a personal
+    # job-search tool — owner-only, even for a public-demo run or a live-session viewer
+    # (Integration §5.4 / SPEC §12.12). The archive list already redacts them; the detail endpoint
+    # isn't redacted, so blank them here when locked.
     if not _unlocked(request):
         detail["job_radar_source"] = None
+        detail["job_radar_assessment"] = None
+        detail["job_radar_extraction"] = None
     return detail
 
 
@@ -197,6 +201,8 @@ def rerun_run(original_run_id: str, body: RerunRequest, request: Request) -> dic
                             detail="Original run has no stored JD — re-run not possible")
     orig_meta = read_meta(orig_dir)
     jr_source = orig_meta.get("job_radar_source")              # carried forward → §5 callback lineage
+    jr_assessment = orig_meta.get("job_radar_assessment")      # carried forward (SPEC §12.12)
+    jr_extraction = orig_meta.get("job_radar_extraction")
     company_name = orig_meta.get("company_name")
 
     # Full-mode gating mirrors start_run (D-38). The endpoint is already `require_unlocked`, so a
@@ -229,6 +235,7 @@ def rerun_run(original_run_id: str, body: RerunRequest, request: Request) -> dic
     run_dir = Path(OUTPUT_DIR) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     write_meta(run_dir, company_name=company_name, job_radar_source=jr_source,
+               job_radar_assessment=jr_assessment, job_radar_extraction=jr_extraction,
                rerun_of=original_run_id)
 
     launch_run(store, session, jd_text, mode=body.mode, key=key, output_dir=OUTPUT_DIR)
@@ -244,6 +251,8 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
     jd_text = body.jd_text
     company_name = body.company_name
     jr_source = None
+    jr_assessment = None
+    jr_extraction = None
     if body.source == "job_radar" and body.job_id:
         try:
             job = fetch_job(body.job_id)
@@ -256,6 +265,11 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
         jd_text = job["raw_text"]
         company_name = job.get("company") or company_name
         jr_source = job_radar_source(job)
+        # Assessment-context enrichment (SPEC §12.12): snapshot the owner's review + Job Radar's
+        # extraction onto the run (write-once). Derived from the raw response so a mocked
+        # fetch_job works; None when Job Radar omits them → behaves exactly as a Phase-2 run.
+        jr_assessment = job_radar_assessment(job)
+        jr_extraction = job_radar_extraction(job)
 
     if not jd_text.strip():
         raise HTTPException(status_code=400, detail="jd_text is empty")
@@ -292,7 +306,8 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
     if company_name or jr_source:
         run_dir = Path(OUTPUT_DIR) / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        write_meta(run_dir, company_name=company_name, job_radar_source=jr_source)
+        write_meta(run_dir, company_name=company_name, job_radar_source=jr_source,
+                   job_radar_assessment=jr_assessment, job_radar_extraction=jr_extraction)
 
     launch_run(store, session, jd_text, mode=body.mode, key=key,
                max_iterations=body.max_iterations, auto=body.auto, output_dir=OUTPUT_DIR)

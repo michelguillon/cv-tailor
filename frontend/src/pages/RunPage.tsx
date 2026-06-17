@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink, Lock, LockOpen } from "lucide-react";
-import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision, type JobRadarPrefill } from "@/lib/api";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Loader2, Check, Circle, Play, AlertTriangle, Download, ExternalLink, Lock, LockOpen, ChevronRight, ChevronDown } from "lucide-react";
+import { api, RUN_EVENT_TYPES, type RunEvent, type HitlReady, type HitlDecision, type JobRadarPrefill, type JobRadarAssessment } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -61,7 +61,9 @@ export function RunPage({
 
   // Full mode is gated on the shared owner unlock (D-38/D-39); the capability state +
   // unlock dialog live in UnlockProvider so the Corpus page reuses the same one unlock.
-  const { configured, requestUnlock, lock } = useUnlock();
+  const { configured, unlocked, requestUnlock, lock } = useUnlock();
+  // Job Radar assessment context (SPEC §12.12) — owner-only, collapsed by default.
+  const [assessmentOpen, setAssessmentOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -376,6 +378,16 @@ export function RunPage({
               )}
             </div>
           )}
+          {/* Job Radar assessment context (SPEC §12.12): the owner's manual review of the role —
+              context, not primary info, so collapsed by default. Owner-only — hidden in the
+              public/demo view (the prefill proxy returns null assessment to non-owners anyway). */}
+          {unlocked && jobPrefill?.assessment && (
+            <JobRadarAssessmentPanel
+              assessment={jobPrefill.assessment}
+              open={assessmentOpen}
+              onToggle={() => setAssessmentOpen((v) => !v)}
+            />
+          )}
           <textarea
             value={jd}
             onChange={(e) => setJd(e.target.value)}
@@ -571,4 +583,86 @@ function PhaseIcon({ status }: { status: PhaseStatus }) {
   if (status === "running") return <Loader2 className="h-4 w-4 animate-spin text-primary" />;
   if (status === "done") return <Check className="h-4 w-4 text-success" />;
   return <Circle className="h-4 w-4 text-muted-foreground/40" />;
+}
+
+// The owner's Job Radar assessment of this role (SPEC §12.12) — a collapsible context panel.
+// Renders only the fields that are present; the scorer label and the owner's override are shown
+// together (`strong_fit → good_fit`) when an override exists. Owner-only — gated by the caller.
+function JobRadarAssessmentPanel({
+  assessment,
+  open,
+  onToggle,
+}: {
+  assessment: JobRadarAssessment;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const a = assessment;
+  const scorer =
+    a.fit_label != null
+      ? `${a.fit_label}${a.fit_score != null ? ` (${a.fit_score})` : ""}`
+      : null;
+  return (
+    <div className="rounded-md border border-border bg-muted/30 text-xs">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left font-medium text-foreground"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        Job Radar assessment
+      </button>
+      {open && (
+        <dl className="space-y-1.5 border-t border-border px-3 py-2 text-muted-foreground">
+          {scorer && (
+            <Row label="Scorer">
+              {scorer}
+              {a.fit_override && (
+                <span className="text-foreground"> → override: {a.fit_override.label}</span>
+              )}
+            </Row>
+          )}
+          {a.fit_override?.reason && <Row label="Override">“{a.fit_override.reason}”</Row>}
+          {a.requirement_gaps.length > 0 && <Row label="Gaps">{a.requirement_gaps.join(", ")}</Row>}
+          {a.blocking_constraints.length > 0 && (
+            <Row label="Blocked">
+              <span className="text-amber-600 dark:text-amber-500">
+                {a.blocking_constraints.join(", ")}
+              </span>
+            </Row>
+          )}
+          {a.owner_status && <Row label="Status">{a.owner_status}</Row>}
+          {a.annotations.length > 0 && (
+            <div className="pt-1">
+              <div className="font-medium text-foreground">Annotations</div>
+              {a.annotations.map((an, i) => (
+                <div key={i} className="pl-2">
+                  {an.field ?? an.type}: “{an.reason}”
+                </div>
+              ))}
+            </div>
+          )}
+          {a.notes.length > 0 && (
+            <div className="pt-1">
+              <div className="font-medium text-foreground">Notes</div>
+              {a.notes.map((n, i) => (
+                <div key={i} className="pl-2">
+                  {n.ts ? `${n.ts.slice(0, 10)}  ` : ""}“{n.text}”
+                </div>
+              ))}
+            </div>
+          )}
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex gap-2">
+      <dt className="w-20 shrink-0 font-medium text-foreground">{label}</dt>
+      <dd className="flex-1">{children}</dd>
+    </div>
+  );
 }

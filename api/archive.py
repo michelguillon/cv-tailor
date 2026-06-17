@@ -24,9 +24,10 @@ __all__ = ["list_runs", "run_detail", "run_file", "delete_run", "cleanup_runs",
 DOWNLOADABLE = {"cv_final.md", "cv_final.html"}
 
 # Owner-only fields blanked from the redacted public view (§12.9 — public ≠ full metadata).
-# job_radar_source is owner-only: it links to a personal job-search tool (Integration §5.4).
+# job_radar_source/_assessment/_extraction are owner-only: they link to a personal job-search
+# tool and the owner's private review of the role (Integration §5.4 / SPEC §12.12).
 _REDACTED = ("cost_estimated_usd", "cost_breakdown", "created_at", "unsupported_claims",
-             "job_radar_source")
+             "job_radar_source", "job_radar_assessment", "job_radar_extraction")
 
 
 def _run_dir(output_dir: str | Path, run_id: str) -> Path | None:
@@ -95,6 +96,9 @@ def _summary(run_dir: Path) -> dict:
         "keep": meta["keep"],
         "public_demo": meta["public_demo"],
         "job_radar_source": meta.get("job_radar_source"),   # Integration §5.2 (owner-only, redacted)
+        # Assessment-context enrichment (SPEC §12.12) — owner-only, redacted in the public view.
+        "job_radar_assessment": meta.get("job_radar_assessment"),
+        "job_radar_extraction": meta.get("job_radar_extraction"),
         "rerun_of": meta.get("rerun_of"),                   # SPEC_RERUN §3.2 — original run id, or None
         "has_md": (run_dir / "cv_final.md").exists(),
         "has_html": (run_dir / "cv_final.html").exists(),
