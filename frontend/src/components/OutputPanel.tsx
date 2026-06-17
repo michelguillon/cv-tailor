@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog } from "@/components/ui/dialog";
+import { JobRadarAssessmentPanel } from "@/components/JobRadarAssessmentPanel";
 import { useUnlock } from "@/components/UnlockProvider";
 
 const FIT_BAND_VARIANT: Record<string, "success" | "secondary" | "destructive"> = {
@@ -32,6 +33,7 @@ export function OutputPanel({
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rerunOpen, setRerunOpen] = useState(false);
+  const [assessmentOpen, setAssessmentOpen] = useState(false);   // Job Radar context (SPEC §12.12)
   const { unlocked } = useUnlock();
 
   useEffect(() => {
@@ -130,6 +132,16 @@ export function OutputPanel({
                     </a>
                   )}
                 </div>
+              )}
+              {/* Job Radar assessment context (SPEC §12.12): the owner's manual review of the
+                  role. Owner-only — the detail endpoint blanks it for a locked request, so its
+                  mere presence is the gate. Collapsed by default (context, not primary info). */}
+              {detail.job_radar_assessment && (
+                <JobRadarAssessmentPanel
+                  assessment={detail.job_radar_assessment}
+                  open={assessmentOpen}
+                  onToggle={() => setAssessmentOpen((v) => !v)}
+                />
               )}
             </CardContent>
           </Card>

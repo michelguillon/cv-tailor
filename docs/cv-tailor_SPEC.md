@@ -2089,15 +2089,21 @@ forward on a re-run, §12.11); **deliberately absent from `default_meta()`** lik
 read `.get(...) → None`, keeping the sidecar-less default-roundtrip contract unchanged. No PATCH field,
 so later visibility/retention edits never touch them.
 
-**Display — owner-only.** Both fields ride in `GET /api/runs/{id}/detail` and `/archive` and are
-**owner-only**: added to `archive._REDACTED` (blanked in the redacted public list) and blanked in
-`run_detail` for a locked request (same treatment as `job_radar_source`, Integration §5.4 — they
-expose the owner's private read of a role). The Run page renders a **collapsed-by-default "Job Radar
-assessment" panel** (`JobRadarAssessmentPanel` in `RunPage.tsx`) below the existing "From Job Radar:
-…" prefill line, shown only when `useUnlock().unlocked` **and** an assessment is present — scorer label
-with the owner's override (`strong_fit → good_fit`), override reason, gaps, blockers, owner status,
-annotations, and notes. The prefill proxy (`routers/job_radar.py`) returns the serialised `assessment`
-so the panel has data at the start-a-run stage.
+**Display — owner-only, two surfaces.** Both fields ride in `GET /api/runs/{id}/detail` and `/archive`
+and are **owner-only**: added to `archive._REDACTED` (blanked in the redacted public list) and blanked
+in `run_detail` for a locked request (same treatment as `job_radar_source`, Integration §5.4 — they
+expose the owner's private read of a role). A shared **collapsed-by-default "Job Radar assessment"
+panel** (`components/JobRadarAssessmentPanel.tsx`) renders the scorer label with the owner's override
+(`strong_fit → good_fit`), override reason, gaps, blockers, owner status, annotations, and notes —
+showing only the fields present. It appears in **two places**:
+- **`RunPage`** — below the "From Job Radar: …" prefill line at launch, gated on `useUnlock().unlocked`
+  **and** an assessment in the prefill. The prefill proxy (`routers/job_radar.py`) returns the
+  serialised `assessment` so the panel has data at the start-a-run stage.
+- **`OutputPanel`** (the Runs-tab detail view = the report panel) — below the "From Job Radar" provenance
+  line, from `detail.job_radar_assessment`. Since the detail endpoint blanks it for a locked request, its
+  mere presence is the owner gate. This is the **persistent** surface: the launch-time RunPage panel is
+  tied to the prefill and gone after a reload, whereas this one is available whenever the owner re-opens
+  the completed run. (The standalone `cv_final.html` report itself carries no Job Radar content.)
 
 **Design note (F-58).** The build prompt specified `start_run` reading `asdict(job["assessment"])`
 off `fetch_job`'s embedded dataclass. The existing tests monkeypatch `fetch_job` to return a **raw
