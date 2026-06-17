@@ -110,6 +110,8 @@ def parse_assessment(data: dict) -> JobRadarAssessment | None:
     a = data.get("assessment")
     if not a:
         return None
+    if isinstance(a, JobRadarAssessment):
+        return a                          # idempotent: `fetch_job` already embeds the parsed model
     fo = a.get("fit_override")
     return JobRadarAssessment(
         fit_label=a.get("fit_label"),
@@ -136,6 +138,8 @@ def parse_extraction(data: dict) -> JobRadarExtraction | None:
     e = data.get("extraction")
     if not e:
         return None
+    if isinstance(e, JobRadarExtraction):
+        return e                          # idempotent: `fetch_job` already embeds the parsed model
     return JobRadarExtraction(**{k: v for k, v in e.items()
                                  if k in JobRadarExtraction.__dataclass_fields__})
 

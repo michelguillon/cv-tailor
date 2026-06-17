@@ -107,6 +107,22 @@ def test_job_radar_assessment_serialises_to_plain_dict(monkeypatch):
     assert job_radar.job_radar_assessment({"company": "x"}) is None    # no assessment → None
 
 
+def test_serialise_helpers_idempotent_on_fetch_job_result(monkeypatch):
+    """Regression: `fetch_job` embeds parsed dataclasses, and both prefill + start_run call the
+    serialise helpers on that result. The helpers must tolerate an already-parsed instance — not
+    re-`.get()` a dataclass (which 500'd every Job Radar JD link)."""
+    _mock_get(monkeypatch, _job())
+    job = job_radar.fetch_job("sha256:abc123")                  # assessment/extraction are dataclasses
+    assert isinstance(job["assessment"], job_radar.JobRadarAssessment)
+    a = job_radar.job_radar_assessment(job)                     # the path that used to raise
+    assert isinstance(a, dict) and a["fit_label"] == "strong_fit"
+    e = job_radar.job_radar_extraction(job)
+    assert isinstance(e, dict) and e["seniority"] == "director"
+    # and parse_* themselves are idempotent (return the same instance, no double-parse)
+    assert job_radar.parse_assessment(job) is job["assessment"]
+    assert job_radar.parse_extraction(job) is job["extraction"]
+
+
 # --------------------------------------------------------------------------- #
 # post_results_to_job_radar — payload, auth, fail-soft                          #
 # --------------------------------------------------------------------------- #

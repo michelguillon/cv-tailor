@@ -444,6 +444,21 @@ locked request, same as `job_radar_source` (they expose the owner's private read
 the *established pattern in the code* (here: parse-from-raw-dict helpers) and record the divergence —
 the prompt describes intent, the codebase describes contract.
 
+**Regression caught in production (fix shipped same day).** Every Job Radar JD link failed with
+"Could not load job from Job Radar — paste the JD manually." Cause: a **double-parse**. `fetch_job`
+embeds parsed dataclasses (`{**data, "assessment": <JobRadarAssessment>, …}`), but both `start_run`
+and the prefill proxy then call `job_radar_assessment(job)` on that result — and `parse_assessment`
+did `data["assessment"].get("fit_label")`, i.e. `.get()` on a *dataclass instance* → AttributeError →
+HTTP 500 → the frontend's graceful fallback. Job Radar's real endpoint **always** returns an
+`assessment` block (a scored job always has a verdict), so the path 500'd on every link. **Why the
+tests missed it:** the API tests monkeypatch `fetch_job` to return a *raw dict*, so the real
+`fetch_job → helper` chain was never exercised — the embedded-dataclass shape only exists in
+production. Fix: made `parse_assessment`/`parse_extraction` **idempotent** (return the instance
+unchanged when already parsed) + a regression test that runs the *real* `fetch_job` then the serialise
+helper. Lesson: a function that returns a dict-with-embedded-typed-objects is a footgun for any
+consumer that treats it as raw data; when you mock the seam in tests, also keep one test that runs the
+seam for real (here: only `httpx.get` mocked, `fetch_job` real).
+
 ---
 
 ### F-57 — Re-run from an existing run (SPEC_RERUN): JD comes from jd_raw.txt, not the sidecar; rerun_of is write-once
