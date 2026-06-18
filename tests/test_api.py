@@ -67,9 +67,18 @@ def test_health_ok(client):
     assert body["status"] == "ok" and body["service"] == "cv-tailor"
 
 
-def test_list_runs_is_a_list(client):
+def test_list_runs_paginated_shape(client, tmp_path, monkeypatch):
+    # GET /api/runs is now the SQLite-backed paginated list (SPEC_SQLITE_MIGRATION §4.2):
+    # {runs, total, limit, offset}, not the old in-memory sessions list.
+    # Isolate the DB to tmp (the endpoint derives it from OUTPUT_DIR) so the test never
+    # touches the repo's data/cv_tailor.db.
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    monkeypatch.setattr(runs_router, "OUTPUT_DIR", str(tmp_path / "outputs"))
     r = client.get("/api/runs")
-    assert r.status_code == 200 and isinstance(r.json(), list)
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body["runs"], list)
+    assert body["limit"] == 20 and body["offset"] == 0 and "total" in body
 
 
 def test_unknown_run_404(client):
@@ -416,6 +425,39 @@ def test_archive_exposes_summary_card_fields(client, archive_dir):
 def test_archive_unknown_run_404(client, archive_dir):
     assert client.get("/api/runs/nope/detail").status_code == 404
     assert client.get("/api/runs/nope/report").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# GET /api/runs — SQLite-backed paginated list (SPEC_SQLITE_MIGRATION §4.2)     #
+# --------------------------------------------------------------------------- #
+
+def test_runs_list_from_sqlite(client, tmp_path, monkeypatch):
+    """The paginated list reads the SQLite store seeded from on-disk runs (newest first,
+    filterable). Degrades to empty (not 500) when the DB has no rows yet."""
+    from tailor import db
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    monkeypatch.setattr(runs_router, "OUTPUT_DIR", str(out))
+
+    # empty DB → empty list, not an error
+    empty = client.get("/api/runs").json()
+    assert empty == {"runs": [], "total": 0, "limit": 20, "offset": 0}
+
+    _make_run(out, "run_20260601_000000")
+    _make_run(out, "run_20260602_000000", meta={"public_demo": True})
+    for rid in ("run_20260601_000000", "run_20260602_000000"):
+        db.record_run_complete(rid, output_dir=str(out))
+
+    body = client.get("/api/runs").json()
+    assert body["total"] == 2
+    assert [r["run_id"] for r in body["runs"]] == [        # ts DESC
+        "run_20260602_000000", "run_20260601_000000"]
+    assert body["runs"][0]["public_demo"] is True and body["runs"][0]["jd_role_title"] == "Eng"
+
+    # pagination + public_only filter
+    assert client.get("/api/runs?limit=1&offset=1").json()["runs"][0]["run_id"] == "run_20260601_000000"
+    pub = client.get("/api/runs?public_only=true").json()
+    assert pub["total"] == 1 and pub["runs"][0]["run_id"] == "run_20260602_000000"
 
 
 # --------------------------------------------------------------------------- #

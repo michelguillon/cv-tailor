@@ -2111,3 +2111,41 @@ dict**, so `start_run` instead derives the stored value from the raw response vi
 `job_radar_assessment(data)` helper — consistent with the established `job_radar_source(data)` pattern
 and robust to the mock. `fetch_job` still embeds the typed models (the documented contract / the
 `test_fetch_job_parses_*` tests); the two paths share `parse_assessment`.
+
+### 12.13 — SQLite run store + dynamic report (Phase 1 built, F-59; Phases 2–3 planned)
+
+Full design: **`docs/SPEC_SQLITE_MIGRATION.md`**. A queryable SQLite run store at
+`data/cv_tailor.db` (`tailor/db.py`) that converges cv-tailor's storage with Job Radar's
+(SQLite + JSONL + filesystem) and lets new run fields surface without regenerating a static
+`cv_final.html`. Three layers stay **complementary, not redundant**: SQLite holds structured
+metadata; `run_log.jsonl` holds the full append-only audit trail (D-06); the filesystem holds
+section text + binary artifacts (D-07 #3).
+
+**Phase 1 (built).** Additive — nothing else changes behaviour:
+- **Schema** (`runs` / `run_sections` / `run_iterations`, migration §2), created on demand, WAL mode
+  so the API can read while the pipeline's worker thread writes.
+- **Write path** — `db.record_run_complete()` called at the `run_complete` event in `tailor/run.py`
+  for **every** run (CLI + API), guarded so a DB failure is a logged no-op, never a run failure (the
+  audit/telemetry side-channel discipline). `INSERT OR REPLACE` → re-runs/retries are idempotent.
+- **Row builders read the on-disk checkpoints**, the same files `api/archive.py` reads — *not* a
+  `PipelineOutput` (which this codebase never materialises) and *not* the visibility sidecar as a
+  summary (here `run_meta.json` is creation-time visibility/retention state, D-40). So the live write
+  path and the migration share **one** disk→row mapping. The only fields not on any checkpoint
+  (`convergence_reason`, `converged`) come from the in-memory `summary` on the live path and are NULL
+  for migrated runs (§7 accepts this). `db.py` reads the sidecar **by path**, never importing `api`,
+  keeping layering one-way (api → tailor → db). DB location derives as the `data/` sibling of the run
+  `output_dir`, so tests pointing `output_dir` at a `tmp_path` get an isolated DB (`CV_TAILOR_DB`
+  overrides).
+- **Backfill** — `cli/migrate_runs.py` (`python -m cli.migrate_runs`, `--dry-run`/`--db`/`--output-dir`),
+  idempotent (`INSERT OR IGNORE`, never clobbers live rows). Validated against all existing local runs:
+  completed + `failed` runs recorded, pre-footer crashes skipped.
+- **`GET /api/runs`** repointed from the old in-memory live-sessions list (which the frontend never
+  consumed — it reads `/archive` and streams a known run id) to a SQLite-backed paginated list
+  `{runs, total, limit, offset}`, newest first, filterable by `mode`/`public_only` (§4.2).
+- `data/cv_tailor.db{,-shm,-wal}` gitignored (§9).
+
+**Phases 2–3 (planned).** Phase 2: API-driven run-detail (`GET /api/runs/{id}` structured JSON +
+`/sections/{id}/diff` + `/reasoning` + on-demand `/html`), React run-detail page rendering all six tabs
+from the API. Phase 3: retire static `cv_final.html` generation (on-demand only), make SQLite the
+source of truth for visibility flags (`PATCH` writes SQLite), drop the `run_meta.json` write. `cv_final.md`
+(the submission artifact) and `run_log.jsonl` (the audit trail) are never touched.

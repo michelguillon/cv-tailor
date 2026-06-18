@@ -27,6 +27,7 @@ from api.run_meta import read_meta, write_meta
 from api.runner import launch_run
 from api.security import FULL_COOKIE, full_mode_configured, require_unlocked, verify_token
 from api.session import TERMINAL, SessionError
+from tailor import db
 from tailor.config import ConfigError, load_config, resolve_run_config
 from tailor.run_context import new_run_id
 
@@ -85,9 +86,17 @@ class RerunRequest(BaseModel):
 
 
 @router.get("")
-def list_runs(request: Request) -> list[dict]:
-    sessions = request.app.state.sessions.list()
-    return [s.public() for s in sorted(sessions, key=lambda s: s.created_at, reverse=True)]
+def list_runs(request: Request, limit: int = 20, offset: int = 0,
+              mode: str | None = None, public_only: bool = False) -> dict:
+    """Paginated run list from the SQLite store, newest first (SPEC_SQLITE_MIGRATION §4.2).
+
+    Replaces the old in-memory live-sessions list (which the frontend never consumed — it
+    reads `/archive` and streams a known run id over SSE). Returns
+    `{runs, total, limit, offset}`; filter by `mode` ('demo'|'full') or `public_only`.
+    A fresh deploy with no DB yet returns an empty list rather than erroring (the schema is
+    created on demand)."""
+    return db.query_runs(OUTPUT_DIR, limit=limit, offset=offset, mode=mode,
+                         public_only=public_only)
 
 
 # NB: declared before "/{run_id}" so the literal path isn't captured as a run id.

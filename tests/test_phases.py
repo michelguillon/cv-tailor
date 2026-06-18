@@ -22,6 +22,7 @@ import pytest
 from click.testing import CliRunner
 
 from tailor import helpers
+from tailor import db
 from tailor import run as run_mod
 from tailor.__main__ import cli
 from tailor.audit import read_entries
@@ -201,6 +202,15 @@ def test_end_to_end_produces_outputs_and_complete_log(run_demo):
     events = {e.get("event") for e in entries}
     assert {"jd_analysed", "loop_start", "iteration_scored", "output_written"} <= events
     assert entries[-1].get("type") == "run_complete"
+
+    # live SQLite write path fired at run_complete (SPEC_SQLITE_MIGRATION §3): the run is
+    # queryable, with the summary-only convergence_reason that only the live path supplies.
+    listed = db.query_runs(out.parent)
+    assert listed["total"] == 1 and listed["runs"][0]["run_id"] == "e2e"
+    with db.get_db(out.parent) as conn:
+        row = dict(conn.execute("SELECT * FROM runs WHERE run_id='e2e'").fetchone())
+    assert row["status"] == "complete" and row["fit_outcome"] == "strong"
+    assert row["convergence_reason"] == summary["convergence_reason"]
 
 
 def test_cvcm_when_present_flows_to_fit_and_runs_clean(run_demo, monkeypatch):

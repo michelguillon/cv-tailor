@@ -412,6 +412,43 @@ what changed (if anything).*
 
 ---
 
+### F-59 — SQLite run store (SPEC_SQLITE_MIGRATION Phase 1): the write path reads on-disk checkpoints, not a `PipelineOutput`
+
+**What.** Built Phase 1 of the SQLite migration (`docs/SPEC_SQLITE_MIGRATION.md`): an additive,
+queryable run store at `data/cv_tailor.db` (`tailor/db.py`) written at the `run_complete` event
+**alongside** — never replacing — the existing JSONL audit trail + on-disk checkpoints, which remain
+the source of truth. Three tables (`runs` / `run_sections` / `run_iterations`, §2), a one-time idempotent
+backfill (`cli/migrate_runs.py`), and a SQLite-backed paginated `GET /api/runs` (§4.2) that repoints the
+old endpoint. Recorded as SPEC §12.13. Phases 2 (API-driven run-detail) + 3 (retire static HTML) deferred.
+
+**Ambiguity resolved (two spec assumptions vs. this codebase).** SPEC_SQLITE_MIGRATION sketches
+`record_run_complete(run_id, pipeline_output: PipelineOutput)` "alongside the existing `run_meta.json`
+write." But (1) this codebase never materialises a `PipelineOutput` at runtime — a run's data lives in
+its checkpoint files (the D-07 #3 "drafts on disk, not fields on an object" convention); and (2)
+`run_meta.json` here is the *visibility/retention sidecar* written at run **creation** (D-40), not a
+run-summary file written at completion. Resolution: the row builders read the **same** on-disk
+checkpoints `api/archive.py` already reads (`phase0/1`, `iteration_*.json`, the draft/final manifest,
+the sidecar by path), so the live write path and the migration produce **identical** rows from one
+mapping — no second source to drift. Two fields (`convergence_reason`, `converged`) are persisted to no
+checkpoint (they ride only the in-memory summary / SSE event); the live path passes them via `summary=`,
+the migration leaves them NULL — which §7 explicitly accepts for pre-existing runs.
+
+**Layering kept one-way.** `tailor/db.py` reads `run_meta.json` **by path** rather than importing
+`api.run_meta`, so the package layering stays api → tailor → db, never back. The DB path is derived as
+the `data/` sibling of the run `output_dir` (`db.db_path_for`), so a test pointing `output_dir` at a
+`tmp_path` gets an isolated, throwaway DB and never writes into the repo — with `CV_TAILOR_DB` as an
+explicit override. (One test that hit `GET /api/runs` without isolating `OUTPUT_DIR` leaked an empty
+schema into the bind-mounted repo `data/` under Docker; fixed by isolating it — the same
+never-write-into-the-repo discipline as `outputs/`.)
+
+**Validation.** Dry-run + real migration run against all 35 local run dirs (28 recordable, 7 skipped as
+pre-footer crashes, 1 correctly `failed`); idempotent on re-run; static sections carry structure only
+(null scores); `ts DESC` ordering and `public_only`/`mode` filters verified. Live write path asserted in
+the e2e pipeline test. The defensive guard (`_record_sqlite`) makes a DB failure a logged no-op, never a
+run failure — the same side-channel discipline as audit/telemetry.
+
+---
+
 ### F-58 — Job Radar assessment context (Phase 4 Step 2): read/store/display, parsed from the raw response not the embedded dataclass
 
 **What.** Built Step 2 of the Job Radar Phase 4 integration (`../job-radar/docs/SPEC_INTEGRATION_PHASE4.md`):

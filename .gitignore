@@ -6,6 +6,10 @@ data/cvs/
 data/chroma/
 outputs/
 tmp/
+# SQLite run store + WAL sidecars (personal run data, SPEC_SQLITE_MIGRATION §9)
+data/cv_tailor.db
+data/cv_tailor.db-shm
+data/cv_tailor.db-wal
 # Job descriptions — real target JDs reveal the job search; keep local only.
 # (Commit a sanitised sample as data/jd.example.txt if one is ever needed.)
 data/*.txt

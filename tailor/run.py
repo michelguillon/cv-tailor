@@ -10,10 +10,11 @@ render_fit_hitl). Cost is captured centrally via cost.track() (D-08, estimates F
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from corpus.retrieval import all_sections
-from tailor import cost, telemetry
+from tailor import cost, db, telemetry
 from tailor.candidate import load_cvcm
 from tailor.config import load_budgets, load_config, resolve_run_config
 from tailor.phases import phase4_hitl, phase5_validation
@@ -280,6 +281,10 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
         # (F-35) ride the footer so the archive can show the summary card without re-deriving.
         grounded_coverage = result.iterations[-1].keyword_coverage if result.iterations else None
         summary["grounded_coverage"] = grounded_coverage
+        # SQLite run store (SPEC_SQLITE_MIGRATION §3): record the completed run's structured
+        # metadata from its on-disk checkpoints, alongside — never replacing — the JSONL/disk
+        # source of truth. Secondary store: a DB failure must not break a run, so guard it.
+        _record_sqlite(ctx.run_id, output_dir, summary)
         emit("run_complete", run_id=ctx.run_id, outcome=fit.outcome,
              converged=result.converged, convergence_reason=result.convergence_reason,
              iterations=len(result.iterations), grounded_coverage=grounded_coverage,
@@ -315,3 +320,17 @@ def _finalise(ctx, tracker, rc, *, iterations_run: int) -> dict:
     footer = tracker.footer(mode=rc.mode, iterations_run=iterations_run)
     ctx.audit.log_footer(footer)
     return footer
+
+
+def _record_sqlite(run_id: str, output_dir: str, summary: dict) -> None:
+    """Record the completed run to the SQLite store (SPEC_SQLITE_MIGRATION §3), best-effort.
+
+    The DB is a secondary, queryable view over the same on-disk checkpoints; the JSONL +
+    checkpoint files remain authoritative. A write failure (locked DB, disk full) must never
+    fail an otherwise-complete run, so swallow and log it — exactly like the audit/telemetry
+    side channels. The migration script backfills anything missed."""
+    try:
+        db.record_run_complete(run_id, output_dir=output_dir, summary=summary)
+    except Exception:                       # pragma: no cover — defensive, like telemetry
+        logging.getLogger("cv_tailor.run").warning("SQLite record failed for run %s", run_id,
+                                                    exc_info=True)

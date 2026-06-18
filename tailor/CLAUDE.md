@@ -22,6 +22,13 @@ The orchestrator and all phases/tools. Entry point: `python -m tailor`
   is key-gated on `FULL_MODE_KEY` (§3.7).
 - `audit.py` — `AuditLogger` → `run_log.jsonl`. Pure, no API calls. Log a
   `ReasoningEntry` for every orchestrator decision; never feed it back into context.
+- `db.py` — the **SQLite run store** (`data/cv_tailor.db`, SPEC_SQLITE_MIGRATION / §12.13 / F-59).
+  `record_run_complete()` is called at the `run_complete` event (guarded — a DB failure is a logged
+  no-op, never a run failure, like audit/telemetry). **Row builders read the on-disk checkpoints**
+  (the same files `api/archive.py` reads), so the live write path and `cli/migrate_runs.py` share one
+  disk→row mapping. Reads the `run_meta.json` sidecar **by path** — never imports `api` (layering stays
+  api → tailor → db). DB path derives as the `data/` sibling of `output_dir` (so a `tmp_path` output dir
+  → isolated DB; `CV_TAILOR_DB` overrides). Complementary to JSONL/checkpoints, never a replacement.
 - `cost.py` — per-model cost **estimate** (D-08, F-08). `cost.track()` activates a
   tracker; `helpers` notes usage into it on every call. Side-channel, like audit —
   phases never touch it.
