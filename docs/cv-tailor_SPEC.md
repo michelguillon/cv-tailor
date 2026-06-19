@@ -2144,6 +2144,13 @@ section text + binary artifacts (D-07 #3).
   `{runs, total, limit, offset}`, newest first, filterable by `mode`/`public_only` (§4.2).
 - `data/cv_tailor.db{,-shm,-wal}` gitignored (§9).
 
+**Methodology — dual-write, soak, reconcile.** Each phase ships additive (old stores stay
+authoritative + drive the app; the new store shadows them), soaks **~1 week** in prod, and advances
+**only on a clean reconciliation** — `cli/reconcile_runs.py` rebuilds each run's expected row from the
+on-disk checkpoints and diffs it against SQLite (`exit 1` gates; `public_demo`/`keep`/`convergence_reason`
+are reported but don't gate). The gate matters most before Phase 3, the only irreversible step. Same
+discipline as the Job Radar storage migration. (Migration spec §6.)
+
 **Phases 2–3 (planned).** Phase 2: API-driven run-detail (`GET /api/runs/{id}` structured JSON +
 `/sections/{id}/diff` + `/reasoning` + on-demand `/html`), React run-detail page rendering all six tabs
 from the API. Phase 3: retire static `cv_final.html` generation (on-demand only), make SQLite the

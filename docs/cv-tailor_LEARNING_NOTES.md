@@ -447,6 +447,16 @@ pre-footer crashes, 1 correctly `failed`); idempotent on re-run; static sections
 the e2e pipeline test. The defensive guard (`_record_sqlite`) makes a DB failure a logged no-op, never a
 run failure — the same side-channel discipline as audit/telemetry.
 
+**Methodology (decided with the user) — dual-write, soak, reconcile.** Each phase ships *additive* (old
+stores stay authoritative + drive the app; the new store shadows), soaks **~1 week** in prod, and advances
+**only on a clean reconciliation** — never on a timer alone. `cli/reconcile_runs.py` is the gate: it
+rebuilds each run's expected row from the current on-disk checkpoints (same `build_run_row` as the write
+path) and diffs it against the stored row, flagging missing rows / orphans / field mismatches (`exit 1`
+gates a deploy). `public_demo`/`keep` (mutable sidecar — SQLite refreshes only at write time until Phase 3
+makes `PATCH` write SQLite) and `convergence_reason` (no checkpoint) are reported as drift but never gate.
+The gate matters most before Phase 3 — the only irreversible step (it retires the old write paths). Same
+discipline as the Job Radar storage migration. Phase 1 deployed + verified live on prod 2026-06-18.
+
 ---
 
 ### F-58 — Job Radar assessment context (Phase 4 Step 2): read/store/display, parsed from the raw response not the embedded dataclass

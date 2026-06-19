@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from cli import migrate_runs
+from cli import migrate_runs, reconcile_runs
 from tailor import db
 
 
@@ -257,3 +257,60 @@ def test_migrate_dry_run_writes_nothing(tmp_path, monkeypatch):
     res = migrate_runs.migrate(out, dry_run=True)
     assert res["recorded"] == 1
     assert db.query_runs(out)["total"] == 0               # nothing persisted
+
+
+# --------------------------------------------------------------------------- #
+# reconciliation gate (the migration soak gate)                                #
+# --------------------------------------------------------------------------- #
+
+def test_reconcile_clean_after_migration(tmp_path, monkeypatch):
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    make_run(out, "run_20260601_000000", iterations=[_iter(1)], manifest=SECTION_MANIFEST)
+    make_run(out, "run_20260602_000000", iterations=[_iter(1), _iter(2)])
+    migrate_runs.migrate(out)
+    r = reconcile_runs.reconcile(out)
+    assert r["clean"] is True
+    assert r["disk_runs"] == 2 and r["sqlite_runs"] == 2
+    assert not r["missing"] and not r["orphan"] and not r["mismatches"]
+
+
+def test_reconcile_flags_missing_and_mismatch(tmp_path, monkeypatch):
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    make_run(out, "run_a", fit_score=0.5, iterations=[_iter(1)])
+    make_run(out, "run_b", fit_score=0.6)
+    migrate_runs.migrate(out)
+    with db.get_db(out) as conn:
+        conn.execute("UPDATE runs SET fit_score=0.999 WHERE run_id='run_a'")   # corrupt a field
+        conn.execute("DELETE FROM runs WHERE run_id='run_b'")                  # drop a row
+
+    r = reconcile_runs.reconcile(out)
+    assert r["clean"] is False
+    assert r["missing"] == ["run_b"]
+    assert any(m["field"] == "fit_score" and m["run_id"] == "run_a" for m in r["mismatches"])
+
+
+def test_reconcile_public_demo_drift_is_not_a_failure(tmp_path, monkeypatch):
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    make_run(out, "run_a")
+    migrate_runs.migrate(out)
+    # Simulate a post-write PATCH that flipped the sidecar but not (yet) SQLite (Phase 1/2 reality).
+    with db.get_db(out) as conn:
+        conn.execute("UPDATE runs SET public_demo=1 WHERE run_id='run_a'")
+
+    r = reconcile_runs.reconcile(out)
+    assert r["clean"] is True                              # drift does not gate
+    assert any(d["field"] == "public_demo" for d in r["drift"])
+
+
+def test_reconcile_orphan_row(tmp_path, monkeypatch):
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    make_run(out, "run_a")
+    migrate_runs.migrate(out)
+    import shutil
+    shutil.rmtree(out / "run_a")                           # row remains, disk run gone
+    r = reconcile_runs.reconcile(out)
+    assert r["clean"] is False and r["orphan"] == ["run_a"]

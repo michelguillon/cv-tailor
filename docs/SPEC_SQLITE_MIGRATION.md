@@ -277,6 +277,31 @@ now from the API rather than baked into static HTML.
 
 ## 6. Migration plan
 
+### Migration methodology — dual-write, soak, reconcile (how we advance phases)
+
+Every phase ships as a **dual-write / coexistence** step: the old stores stay authoritative
+and keep driving the app, while the new store shadows them. We then **soak ~1 week in prod**
+and advance **only on a clean reconciliation** — never on a timer alone. (Same discipline used
+for the Job Radar storage migration.)
+
+1. **Ship additive.** The new path writes alongside the old; nothing yet *depends* on it
+   (Phase 1: SQLite is written at completion but only a direct-HTTP `GET /api/runs` reads it —
+   the UI is untouched).
+2. **Soak ~1 week.** Real prod runs exercise the new write path while the old path is still the
+   source of truth, so a bug is invisible to users and reversible (delete the DB).
+3. **Reconcile before advancing** — `cli/reconcile_runs.py` is the gate. It rebuilds each run's
+   expected row from the current on-disk checkpoints (the same `tailor/db.build_run_row` the
+   write path uses) and diffs it against the stored row, flagging missing rows, orphans, and
+   field mismatches (`exit 1` gates a deploy). Two field classes are reported but never gate:
+   `public_demo`/`keep` (mutable sidecar — SQLite refreshes only at write time until Phase 3
+   makes `PATCH` write SQLite) and `convergence_reason` (no checkpoint to rebuild from).
+   ```bash
+   docker compose run --rm cli python -m cli.reconcile_runs            # exit 0 = clean = advance
+   docker compose run --rm cli python -m cli.reconcile_runs --verbose
+   ```
+4. **Advance on green.** A clean reconcile after the soak is the go signal. The gate matters
+   **most before Phase 3** — the one irreversible step that retires the old write paths.
+
 ### Phase 1 — Add SQLite alongside existing approach (1 day)
 
 1. Add `tailor/db.py` — schema creation, `record_run_complete()`
@@ -360,3 +385,4 @@ data/cv_tailor.db-wal
 - [ ] `data/cv_tailor.db` is gitignored and bind-mounted
 - [ ] Existing test suite passes unchanged
 - [ ] `cv_final.md` download still works
+- [ ] `cli/reconcile_runs.py` reports CLEAN after the ~1-week soak (the per-phase advance gate)
