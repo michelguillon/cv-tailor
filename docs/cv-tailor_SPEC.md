@@ -1123,6 +1123,14 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build ba
 git pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
+> **Backend code changes MUST recreate the container.** `--build` does this (the `COPY . .`
+> layer is invalidated by any source change → new image → container recreated → uvicorn
+> re-imports the new code). Do **not** shortcut to a bare `up -d` "because the code is
+> bind-mounted": that updates the *files* but not the running *process*, and prod runs with
+> **no `--reload`**, so the old code keeps serving. If you skip `--build`, force it explicitly:
+> `up -d --force-recreate backend`. (Lesson from the SQLite Phase-1 deploy: a bare `up -d` left
+> the pre-deploy backend running for 2.5 weeks — the live write path never fired; the reconcile
+> soak gate caught it, F-59.)
 
 **Bind-mounted state (back up these, nothing else):**
 - `data/chroma/` — ChromaDB (re-embeddable but costs API calls)

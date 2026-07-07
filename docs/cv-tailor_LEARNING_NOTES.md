@@ -455,7 +455,18 @@ path) and diffs it against the stored row, flagging missing rows / orphans / fie
 gates a deploy). `public_demo`/`keep` (mutable sidecar — SQLite refreshes only at write time until Phase 3
 makes `PATCH` write SQLite) and `convergence_reason` (no checkpoint) are reported as drift but never gate.
 The gate matters most before Phase 3 — the only irreversible step (it retires the old write paths). Same
-discipline as the Job Radar storage migration. Phase 1 deployed + verified live on prod 2026-06-18.
+discipline as the Job Radar storage migration.
+
+**The soak gate immediately earned its keep (Phase 1 deploy → gate passed 2026-07-07).** The deploy used a
+bare `docker compose up -d backend`, which does **not** recreate an already-running container when its
+config is unchanged — so the pre-deploy backend kept serving for 2.5 weeks and the live SQLite write path
+**never fired**. SQLite held only the deploy-time migration rows; every new run was missing. `reconcile_runs`
+caught it (6 post-deploy runs on disk, absent from SQLite). Fix: `up -d --force-recreate backend` (the repo
+is bind-mounted + prod has no `--reload`, so files update but the process doesn't) + a backfill migration;
+confirmed genuinely live by watching the reconcile count go 36→37 on a fresh run with **no migration in
+between** (proof the live path wrote it, not the migration). Lesson recorded in SPEC §7.5 (Updates): a
+backend code change must recreate the container. A clean reconcile *right after a backfill* proves the
+backfill, not the write path — always confirm with one fresh live run.
 
 ---
 
