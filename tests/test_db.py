@@ -329,17 +329,113 @@ def test_reconcile_flags_missing_and_mismatch(tmp_path, monkeypatch):
 
 
 def test_reconcile_public_demo_drift_is_not_a_failure(tmp_path, monkeypatch):
+    """A pre-Phase-3 run still has a sidecar (the disk ground truth). PATCH now writes SQLite, so
+    SQLite legitimately diverges from the stale sidecar — reported as drift, never gated."""
     monkeypatch.delenv("CV_TAILOR_DB", raising=False)
     out = tmp_path / "outputs"
-    make_run(out, "run_a")
+    make_run(out, "run_a", meta={})                       # empty sidecar present → pre-Phase-3 run
     migrate_runs.migrate(out)
-    # Simulate a post-write PATCH that flipped the sidecar but not (yet) SQLite (Phase 1/2 reality).
+    # Simulate a post-write PATCH that set SQLite while the sidecar stays at its old value.
     with db.get_db(out) as conn:
         conn.execute("UPDATE runs SET public_demo=1 WHERE run_id='run_a'")
 
     r = reconcile_runs.reconcile(out)
     assert r["clean"] is True                              # drift does not gate
     assert any(d["field"] == "public_demo" for d in r["drift"])
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: creation row, preservation, PATCH → SQLite, reconcile skip          #
+# --------------------------------------------------------------------------- #
+
+def test_record_run_start_then_complete_preserves_creation_meta(tmp_path, monkeypatch):
+    """A creation row (record_run_start) carries metadata with NO disk source once the sidecar write
+    is retired; the disk-derived completion write must preserve it, not clobber it (§6c / F-60)."""
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    out.mkdir()
+    jr = {"job_id": "sha256:xyz", "company": "Elastic"}
+    db.record_run_start("run_20260701_120000", output_dir=out, mode="full", company_name="Elastic",
+                        rerun_of="run_20260630_090000", job_radar_source=jr,
+                        job_radar_assessment={"fit_label": "strong"},
+                        job_radar_extraction={"skills": ["python"]})
+    with db.get_db(out) as conn:                          # a 'running' row exists before completion
+        r = dict(conn.execute("SELECT * FROM runs WHERE run_id='run_20260701_120000'").fetchone())
+    assert r["status"] == "running" and r["company_name"] == "Elastic"
+    assert r["job_radar_job_id"] == "sha256:xyz" and r["rerun_of"] == "run_20260630_090000"
+
+    # completion (no sidecar → build_run_row yields None for creation-owned) must preserve them
+    make_run(out, "run_20260701_120000", mode="full", role="Staff SE")    # no meta= → no sidecar
+    db.record_run_complete("run_20260701_120000", output_dir=out)
+    meta = db.get_run_creation_meta("run_20260701_120000", out)
+    assert meta["company_name"] == "Elastic"              # creation value preserved
+    assert meta["job_radar_source"] == jr and meta["rerun_of"] == "run_20260630_090000"
+    assert meta["job_radar_assessment"] == {"fit_label": "strong"}
+    with db.get_db(out) as conn:
+        r = dict(conn.execute("SELECT * FROM runs WHERE run_id='run_20260701_120000'").fetchone())
+    assert r["status"] == "complete" and r["jd_role_title"] == "Staff SE"   # completion synced
+
+
+def test_company_name_falls_back_to_jd_when_no_manual(tmp_path, monkeypatch):
+    """When creation set no manual company_name, completion fills it with the JD-inferred name
+    (COALESCE(existing, excluded) with existing NULL → the disk value)."""
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    out.mkdir()
+    db.record_run_start("run_20260702_000000", output_dir=out, mode="demo",
+                        job_radar_source={"job_id": "j1"})       # jr run, no manual company label
+    rd = make_run(out, "run_20260702_000000")
+    _write(rd / "phase0_jd_analysis.json", {"role_title": "SE", "company_name": "Inferred Co"})
+    db.record_run_complete("run_20260702_000000", output_dir=out)
+    assert db.query_runs(out)["runs"][0]["company_name"] == "Inferred Co"
+
+
+def test_update_run_meta_patches_sqlite(tmp_path, monkeypatch):
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    make_run(out, "run_20260601_000000")                  # no sidecar (a Phase-3 run)
+    db.record_run_complete("run_20260601_000000", output_dir=out)
+    res = db.update_run_meta("run_20260601_000000", out, public_demo=True, keep=True,
+                             company_name="Globex")
+    assert res == {"company_name": "Globex", "keep": True, "public_demo": True}
+    meta = db.get_run_creation_meta("run_20260601_000000", out)
+    assert meta["public_demo"] is True and meta["keep"] is True and meta["company_name"] == "Globex"
+    assert db.query_runs(out, public_only=True)["total"] == 1
+
+
+def test_update_run_meta_backfills_missing_row(tmp_path, monkeypatch):
+    """PATCH on a completed run not yet in SQLite backfills it from disk, then applies the edit."""
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    make_run(out, "run_20260601_000000")                  # on disk, never recorded
+    res = db.update_run_meta("run_20260601_000000", out, public_demo=True)
+    assert res["public_demo"] is True
+    assert db.query_runs(out)["total"] == 1               # row created from disk
+
+
+def test_reconcile_skips_creation_owned_without_sidecar(tmp_path, monkeypatch):
+    """A Phase-3 run has no sidecar, so its creation-owned fields have no disk source; reconcile
+    skips them — a PATCH-set public_demo is neither a mismatch nor drift (§6e / F-60)."""
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    make_run(out, "run_a")                                # no meta= → no sidecar
+    db.record_run_complete("run_a", output_dir=out)
+    db.update_run_meta("run_a", out, public_demo=True)    # PATCH → SQLite only
+    r = reconcile_runs.reconcile(out)
+    assert r["clean"] is True
+    assert not any(d["field"] == "public_demo" for d in r["drift"])
+    assert not any(m["field"] == "public_demo" for m in r["mismatches"])
+
+
+def test_reconcile_exempts_running_creation_row(tmp_path, monkeypatch):
+    """An in-flight run's status='running' creation row has no disk footer to rebuild from — it must
+    not be flagged as an orphan (§6 / F-60)."""
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    out.mkdir()
+    db.record_run_start("run_20260701_120000", output_dir=out, mode="demo", company_name="Acme")
+    r = reconcile_runs.reconcile(out)
+    assert r["clean"] is True and r["orphan"] == []
 
 
 def test_reconcile_orphan_row(tmp_path, monkeypatch):

@@ -23,9 +23,13 @@ Two fields are not persisted to any checkpoint — ``convergence_reason`` and
 The live path passes them through ``summary=``; the migration leaves them NULL (an old
 run simply has no value, which §7 explicitly accepts).
 
-The run's visibility/retention sidecar (``run_meta.json``, ``api/run_meta.py``) supplies
-``public_demo`` / ``keep`` / ``job_radar_job_id`` / ``rerun_of``. db.py reads that file
-**by path** (it is just another file in the run dir) rather than importing ``api`` —
+Creation-time metadata that is NOT reconstructable from the disk checkpoints — the company
+label, the Job Radar context (source/assessment/extraction), the rerun lineage, and the
+visibility flags — is written to SQLite at run creation by ``record_run_start`` (called from the
+API), and preserved through the disk-derived completion write by the UPSERT's COALESCE (F-60).
+This is what lets Phase 3 retire the ``run_meta.json`` sidecar write. For a **pre-Phase-3** run
+whose values still live only in the sidecar, the builders + ``get_run_creation_meta`` fall back
+to it — read **by path** (it is just another file in the run dir) rather than importing ``api``,
 keeping the package layering one-way (api → tailor → db), never back.
 
 Database location (§3): ``<project>/data/cv_tailor.db``, derived from the run
@@ -45,7 +49,8 @@ from pathlib import Path
 
 __all__ = [
     "db_path_for", "get_db", "init_schema",
-    "record_run_complete", "query_runs", "get_run_detail",
+    "record_run_start", "record_run_complete", "get_run_creation_meta", "update_run_meta",
+    "query_runs", "get_run_detail",
     "RUN_COLUMNS", "SECTION_COLUMNS", "ITERATION_COLUMNS",
 ]
 
@@ -74,8 +79,11 @@ CREATE TABLE IF NOT EXISTS runs (
     jd_role_title       TEXT,
     value_alignment     TEXT,
     no_fit_reason       TEXT,
-    company_name        TEXT,                       -- resolved display label (sidecar → JD-inferred)
-    unsupported_claims  INTEGER                     -- verifier fabrication-flag count (F-35)
+    company_name        TEXT,                       -- resolved display label (creation manual → JD-inferred)
+    unsupported_claims  INTEGER,                    -- verifier fabrication-flag count (F-35)
+    job_radar_source    TEXT,                       -- creation-owned JSON: originating Job Radar role (F-60)
+    job_radar_assessment TEXT,                      -- creation-owned JSON: owner's Job Radar review (F-60)
+    job_radar_extraction TEXT                       -- creation-owned JSON: Job Radar's extraction (F-60)
 );
 
 CREATE TABLE IF NOT EXISTS run_sections (
@@ -120,11 +128,24 @@ RUN_COLUMNS = (
     "keep", "fit_score", "fit_outcome", "coverage_score", "quality_score", "cvcm_enabled",
     "convergence_reason", "iterations_run", "cost_usd", "jd_role_title", "value_alignment",
     "no_fit_reason", "company_name", "unsupported_claims",
+    "job_radar_source", "job_radar_assessment", "job_radar_extraction",
 )
 
 # Columns added after the initial (deployed) schema — ALTER-ed in on demand for an existing DB
-# (SPEC_SQLITE_MIGRATION Phase 2 §5.2). New additions go here, never a destructive rebuild.
-_ADDED_COLUMNS = (("company_name", "TEXT"), ("unsupported_claims", "INTEGER"))
+# (SPEC_SQLITE_MIGRATION Phase 2 §5.2 / Phase 3 §6). New additions go here, never a destructive rebuild.
+_ADDED_COLUMNS = (("company_name", "TEXT"), ("unsupported_claims", "INTEGER"),
+                  ("job_radar_source", "TEXT"), ("job_radar_assessment", "TEXT"),
+                  ("job_radar_extraction", "TEXT"))
+
+# CREATION-owned columns (SPEC_SQLITE_MIGRATION Phase 3 §6c): written at run creation
+# (``record_run_start``) or by ``PATCH`` (``update_run_meta``), NOT reconstructable from the
+# disk checkpoints once the ``run_meta.json`` sidecar write is retired. ``record_run_complete``
+# is disk-derived and must NOT clobber these — the UPSERT preserves them via COALESCE (below).
+# ``public_demo``/``keep`` are deliberately EXCLUDED: they are always 0 at completion (only a
+# post-run PATCH ever sets 1), so a disk write never clobbers a real value, and keeping them
+# disk-driven lets a re-migration still repair legacy sidecar→SQLite drift (F-60).
+_CREATION_OWNED = ("company_name", "rerun_of", "job_radar_job_id",
+                   "job_radar_source", "job_radar_assessment", "job_radar_extraction")
 SECTION_COLUMNS = (
     "run_id", "section_id", "section_type", "position", "static", "final_version",
     "converged", "keyword_coverage", "claude_quality", "gpt_quality", "selected_writer",
@@ -318,7 +339,9 @@ def build_run_row(run_dir: Path, *, summary: dict | None = None) -> dict | None:
     summary = summary or {}
 
     status = "complete" if footer else "failed"
-    jr = meta.get("job_radar_source") or {}
+    jr = meta.get("job_radar_source")                 # dict or None (creation-owned, from sidecar)
+    jr_assessment = meta.get("job_radar_assessment")
+    jr_extraction = meta.get("job_radar_extraction")
     grounded = footer.get("grounded_coverage")
     if grounded is None and iters:
         grounded = iters[-1].get("keyword_coverage")
@@ -328,7 +351,7 @@ def build_run_row(run_dir: Path, *, summary: dict | None = None) -> dict | None:
         "ts": _run_ts(run_dir, run_id, log),
         "mode": footer.get("mode") or summary.get("mode") or "demo",
         "status": status,
-        "job_radar_job_id": jr.get("job_id"),
+        "job_radar_job_id": (jr or {}).get("job_id"),
         "rerun_of": meta.get("rerun_of"),
         "public_demo": 1 if meta.get("public_demo") else 0,
         "keep": 1 if meta.get("keep") else 0,
@@ -343,9 +366,16 @@ def build_run_row(run_dir: Path, *, summary: dict | None = None) -> dict | None:
         "jd_role_title": p0.get("role_title"),
         "value_alignment": p1.get("value_alignment_notes"),
         "no_fit_reason": p1.get("no_fit_reason"),
-        # Display label (F-47 precedence: owner's manual/edited sidecar value → JD-inferred).
+        # Display label (F-47 precedence: owner's manual/edited value → JD-inferred). For a
+        # Phase-3 run there is no sidecar, so meta.get(...) is None → the JD-inferred p0 name;
+        # the manual value (if any) rides the SQLite creation row and the UPSERT preserves it (F-60).
         "company_name": meta.get("company_name") or p0.get("company_name"),
         "unsupported_claims": footer.get("fabrication_flags"),
+        # Creation-owned Job Radar context as JSON (from the sidecar for a pre-Phase-3 run; None for
+        # a Phase-3 run, whose values ride the SQLite creation row and are preserved by the UPSERT).
+        "job_radar_source": json.dumps(jr) if jr else None,
+        "job_radar_assessment": json.dumps(jr_assessment) if jr_assessment else None,
+        "job_radar_extraction": json.dumps(jr_extraction) if jr_extraction else None,
     }
 
 
@@ -399,18 +429,24 @@ def build_iteration_rows(run_dir: Path) -> list[dict]:
 # Write path                                                                   #
 # --------------------------------------------------------------------------- #
 
-# UPSERT: sync every disk-derived column from the incoming row, but never lose the
-# live-only convergence_reason — COALESCE prefers the incoming value (live path supplies it)
-# and falls back to the stored one (a migration passes NULL, so the row keeps it). This makes
-# the live write and the migration idempotent AND lets a re-migration backfill columns added
-# later (§5.2) on rows written before they existed.
+# UPSERT: sync every disk-derived column from the incoming row, with two preservation rules:
+#   • convergence_reason — COALESCE(excluded, existing): the live path supplies it, a migration
+#     passes NULL, so the incoming value wins but a re-migration never wipes it.
+#   • the CREATION-owned columns — COALESCE(existing, excluded): the run-creation row
+#     (``record_run_start``) is authoritative, so a later disk-derived completion write never
+#     clobbers them; the disk value only fills a column the creation row left NULL (e.g.
+#     ``company_name`` falling back to the JD-inferred name; a pre-Phase-3 run whose values came
+#     from the sidecar on first insert). This is what lets Phase 3 drop the sidecar write (F-60).
+# public_demo/keep stay plain excluded-wins (always 0 at completion; a re-migration still syncs
+# any legacy sidecar drift). Everything else is plain excluded-wins (disk is the truth).
+_UPSERT_SPECIAL = {"run_id", "convergence_reason", *_CREATION_OWNED}
 _RUN_UPSERT = (
     f"INSERT INTO runs ({', '.join(RUN_COLUMNS)}) "
     f"VALUES ({', '.join('?' for _ in RUN_COLUMNS)}) "
     "ON CONFLICT(run_id) DO UPDATE SET "
-    + ", ".join(f"{c} = excluded.{c}" for c in RUN_COLUMNS
-                if c not in ("run_id", "convergence_reason"))
+    + ", ".join(f"{c} = excluded.{c}" for c in RUN_COLUMNS if c not in _UPSERT_SPECIAL)
     + ", convergence_reason = COALESCE(excluded.convergence_reason, runs.convergence_reason)"
+    + "".join(f", {c} = COALESCE(runs.{c}, excluded.{c})" for c in _CREATION_OWNED)
 )
 
 
@@ -451,6 +487,137 @@ def record_run_complete(run_id: str, *, output_dir: str | Path = "outputs",
     run_dir = Path(output_dir) / run_id
     with get_db(output_dir) as conn:
         return write_run(conn, run_dir, summary=summary)
+
+
+# --------------------------------------------------------------------------- #
+# Creation-time metadata (SPEC_SQLITE_MIGRATION Phase 3 §6b/§6c/§6d)           #
+#                                                                             #
+# Phase 3 drops the run_meta.json sidecar write, so the creation-time metadata #
+# that is NOT reconstructable from disk checkpoints (company label, Job Radar  #
+# context, rerun lineage, visibility flags) must land in SQLite at run         #
+# creation and be preserved through the disk-derived completion write.         #
+# --------------------------------------------------------------------------- #
+
+# Columns record_run_start writes (the required NOT-NULL trio + the creation-owned metadata).
+_START_COLUMNS = ("run_id", "ts", "mode", "status", "company_name", "public_demo", "keep",
+                  "rerun_of", "job_radar_job_id", "job_radar_source", "job_radar_assessment",
+                  "job_radar_extraction")
+
+
+def record_run_start(run_id: str, *, output_dir: str | Path = "outputs", mode: str = "demo",
+                     company_name: str | None = None, public_demo: bool = False,
+                     keep: bool = False, rerun_of: str | None = None,
+                     job_radar_source: dict | None = None,
+                     job_radar_assessment: dict | None = None,
+                     job_radar_extraction: dict | None = None) -> None:
+    """Write a partial ``status='running'`` row carrying a run's creation-time metadata (§6b).
+
+    Called by the API at run creation (``start_run`` / ``rerun_run``) — the channel that gets the
+    non-disk-reconstructable metadata (company label, Job Radar context as JSON, rerun lineage)
+    into SQLite before the pipeline runs. ``record_run_complete`` later UPSERTs the disk-derived
+    completion columns over this row while preserving these creation-owned ones (COALESCE). Job
+    Radar dicts are stored as JSON text. Idempotent: a re-call refreshes only the creation columns.
+    """
+    row = {
+        "run_id": run_id,
+        "ts": _ts_from_run_id(run_id) or "",
+        "mode": mode,
+        "status": "running",
+        "company_name": company_name,
+        "public_demo": 1 if public_demo else 0,
+        "keep": 1 if keep else 0,
+        "rerun_of": rerun_of,
+        "job_radar_job_id": (job_radar_source or {}).get("job_id"),
+        "job_radar_source": json.dumps(job_radar_source) if job_radar_source else None,
+        "job_radar_assessment": json.dumps(job_radar_assessment) if job_radar_assessment else None,
+        "job_radar_extraction": json.dumps(job_radar_extraction) if job_radar_extraction else None,
+    }
+    # ON CONFLICT updates only the creation columns (never ts/mode/status of an existing row).
+    updatable = [c for c in _START_COLUMNS if c not in ("run_id", "ts", "mode", "status")]
+    sql = (f"INSERT INTO runs ({', '.join(_START_COLUMNS)}) "
+           f"VALUES ({', '.join('?' for _ in _START_COLUMNS)}) "
+           "ON CONFLICT(run_id) DO UPDATE SET "
+           + ", ".join(f"{c} = excluded.{c}" for c in updatable))
+    with get_db(output_dir) as conn:
+        conn.execute(sql, tuple(row[c] for c in _START_COLUMNS))
+
+
+def _load_json(value):
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def get_run_creation_meta(run_id: str, output_dir: str | Path = "outputs") -> dict:
+    """A run's creation-time metadata, SQLite-first with a ``run_meta.json`` sidecar fallback (§6d).
+
+    Returns the SAME shape as ``api.run_meta.read_meta`` so callers can swap in place:
+    ``{company_name, keep, public_demo, job_radar_source, rerun_of, job_radar_assessment,
+    job_radar_extraction}`` (Job Radar values parsed back from JSON). SQLite is authoritative for
+    a Phase-3 run; a pre-Phase-3 run whose values still live only in the sidecar falls back to it
+    (per field), so both populations read correctly through one helper. db.py reads the sidecar by
+    path (never importing ``api``), keeping layering one-way (api → tailor → db)."""
+    sidecar = _sidecar(Path(output_dir) / run_id)
+    with get_db(output_dir) as conn:
+        r = conn.execute(
+            "SELECT company_name, keep, public_demo, rerun_of, job_radar_source, "
+            "job_radar_assessment, job_radar_extraction FROM runs WHERE run_id = ?",
+            (run_id,)).fetchone()
+    if r is None:                                    # pre-migration run: sidecar only (legacy shape)
+        return {
+            "company_name": sidecar.get("company_name"),
+            "keep": bool(sidecar.get("keep")),
+            "public_demo": bool(sidecar.get("public_demo")),
+            "job_radar_source": sidecar.get("job_radar_source"),
+            "rerun_of": sidecar.get("rerun_of"),
+            "job_radar_assessment": sidecar.get("job_radar_assessment"),
+            "job_radar_extraction": sidecar.get("job_radar_extraction"),
+        }
+    row = dict(r)
+    return {
+        "company_name": row["company_name"] if row["company_name"] is not None
+                        else sidecar.get("company_name"),
+        "keep": bool(row["keep"]),
+        "public_demo": bool(row["public_demo"]),
+        "job_radar_source": _load_json(row["job_radar_source"]) or sidecar.get("job_radar_source"),
+        "rerun_of": row["rerun_of"] if row["rerun_of"] is not None else sidecar.get("rerun_of"),
+        "job_radar_assessment": (_load_json(row["job_radar_assessment"])
+                                 or sidecar.get("job_radar_assessment")),
+        "job_radar_extraction": (_load_json(row["job_radar_extraction"])
+                                 or sidecar.get("job_radar_extraction")),
+    }
+
+
+def update_run_meta(run_id: str, output_dir: str | Path = "outputs", *,
+                    company_name: str | None = None, keep: bool | None = None,
+                    public_demo: bool | None = None) -> dict:
+    """PATCH a run's mutable visibility/retention fields **in SQLite** (Phase 3 §6: SQLite is the
+    source of truth; the sidecar write is retired). Only non-None fields change. If the run has no
+    row yet (a completed run recorded before Phase 3, or one not yet migrated), it is backfilled
+    from disk (``write_run``) then updated, so a PATCH is never silently lost. Returns the resulting
+    ``{company_name, keep, public_demo}``."""
+    sets, params = [], []
+    if company_name is not None:
+        sets.append("company_name = ?"); params.append(company_name)
+    if keep is not None:
+        sets.append("keep = ?"); params.append(1 if keep else 0)
+    if public_demo is not None:
+        sets.append("public_demo = ?"); params.append(1 if public_demo else 0)
+    with get_db(output_dir) as conn:
+        if sets:
+            clause = ", ".join(sets)
+            cur = conn.execute(f"UPDATE runs SET {clause} WHERE run_id = ?", (*params, run_id))
+            if cur.rowcount == 0 and write_run(conn, Path(output_dir) / run_id):
+                conn.execute(f"UPDATE runs SET {clause} WHERE run_id = ?", (*params, run_id))
+        r = conn.execute("SELECT company_name, keep, public_demo FROM runs WHERE run_id = ?",
+                         (run_id,)).fetchone()
+    if r is None:                                    # no row and nothing on disk to backfill
+        return {"company_name": company_name, "keep": bool(keep), "public_demo": bool(public_demo)}
+    return {"company_name": r["company_name"], "keep": bool(r["keep"]),
+            "public_demo": bool(r["public_demo"])}
 
 
 # --------------------------------------------------------------------------- #

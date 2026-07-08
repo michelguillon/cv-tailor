@@ -1,7 +1,7 @@
 # SPEC_SQLITE_MIGRATION.md
 ## cv-tailor — SQLite Run Store + Dynamic Report
 
-**Status:** Planned  
+**Status:** Phases 1–3 built (F-59/F-60) — the migration is complete  
 **Scope:** SQLite run store · API-driven run detail page · dynamic report tabs  
 **Effort:** ~2–3 days  
 **Motivation:** Static `cv_final.html` cannot accommodate new fields without
@@ -131,6 +131,13 @@ reads all `outputs/<run_id>/run_meta.json` + `run_log.jsonl` files and
 populates SQLite. Existing runs without all fields get nulls for new
 columns. Script is idempotent (INSERT OR IGNORE).
 
+**Creation-time metadata (Phase 3).** Some metadata is fixed at run *creation* and cannot be
+rebuilt from the disk checkpoints (company label, `rerun_of`, Job Radar source/assessment/extraction,
+visibility flags). Since Phase 3 the API writes it to a partial `status='running'` row at creation
+(`db.record_run_start`); the completion write (`record_run_complete`) UPSERTs the disk-derived columns
+**over** it while preserving the creation-owned ones via `COALESCE` (see Phase 3 in §6). This replaces
+the retired `run_meta.json` sidecar write.
+
 ---
 
 ## 4. API
@@ -231,14 +238,15 @@ Returns the HTML file as a download. Replaces the static file approach —
 the HTML is always up to date with whatever fields exist in the DB at
 generation time.
 
-### 4.4 Run meta update (existing — now writes to SQLite)
+### 4.4 Run meta update (Phase 3 — writes SQLite)
 
 ```
-PATCH /api/runs/{run_id}
+PATCH /api/runs/{run_id}/meta
 ```
 
-Updates `public_demo`, `keep` flags. Writes to both `run_meta.json` (for
-backward compatibility during transition) and SQLite.
+Updates `public_demo`, `keep`, `company_name` (owner-only). Since Phase 3 it writes **SQLite only**
+(`db.update_run_meta`) — the `run_meta.json` sidecar write is retired. If the run has no row yet it is
+backfilled from disk (`write_run`) then updated, so a PATCH is never lost.
 
 ---
 
@@ -334,13 +342,42 @@ columns on rows recorded before they existed. Advancing after a schema change: `
 
 *`cv_final.html` still generated at run time (belt + braces during transition).*
 
-### Phase 3 — Retire static HTML (half day)
+### Phase 3 — Retire the old write paths (built, F-60) — THE IRREVERSIBLE STEP
 
-1. Remove `cv_final.html` generation from Phase 6
-2. `GET /api/runs/{run_id}/html` is now the only HTML path
-3. Update any references to `cv_final.html` in docs
+1. **Remove `cv_final.html` generation from Phase 6** — `generate_output` writes only `cv_final.md`;
+   `GET /api/runs/{id}/html` (on-demand `regenerate_html`) is the only HTML path. Existing
+   `cv_final.html` files in `outputs/` are kept as snapshots (not deleted).
+2. **SQLite is the source of truth for run metadata.** Stop writing `run_meta.json` on new runs.
+   Creation-time metadata not reconstructable from disk (company label, Job Radar
+   source/assessment/extraction, `rerun_of`, visibility flags) is written to a partial
+   `status='running'` row at run creation via **`db.record_run_start`** (from `start_run`/`rerun_run`).
+   The Job Radar dicts are JSON `TEXT` columns (`_ADDED_COLUMNS`). `record_run_complete` UPSERTs the
+   disk-derived completion columns **over** that row, preserving the CREATION-owned columns via
+   `COALESCE(runs.col, excluded.col)` (`_CREATION_OWNED`: `company_name`, `rerun_of`,
+   `job_radar_job_id`, the three JSON columns). `public_demo`/`keep` stay `excluded`-wins (always 0 at
+   completion; only a post-run PATCH sets 1) so a re-migration still repairs legacy sidecar drift.
+3. **`PATCH /{id}/meta` writes SQLite** (`db.update_run_meta`).
+4. **One reader at every seam** — `db.get_run_creation_meta` (SQLite-first, sidecar fallback for
+   pre-Phase-3 runs) replaces `read_meta` in the Job Radar callback + telemetry (`runner`), the
+   owner-gated detail + rerun (`runs`), the report header badge (`phase6`), and **`archive.is_public`
+   /`cleanup_runs`** (which gate visibility + retention on the flags — must read SQLite too).
+5. **`reconcile_runs` reworked** (§6e): creation-owned fields have no disk source for a Phase-3 run, so
+   they are compared only when a sidecar still exists (pre-Phase-3), reported as drift, never gating;
+   a `status='running'` row is exempt from the orphan check.
+6. **Retire the dead legacy endpoints** `GET /{id}/detail`, `/{id}/report`, `/archive` (+
+   `archive.list_runs`/`run_detail`, `api.archiveRuns`/`runDetail`/`reportUrl`) — unused since Phase 2;
+   repoint the RunPage "Open report" link to `runHtmlUrl`.
+7. Update all `cv_final.html` / `run_meta.json` references in docs + comments.
 
-*`cv_final.md` stays — it's the submission artifact, not the report*
+*`cv_final.md` (submission artifact), `run_log.jsonl` (audit trail), and `outputs/<id>/sections/` are
+never touched. Pre-Phase-3 `run_meta.json` sidecars are kept — `migrate_runs` + the read fallback still
+use them.*
+
+**Deploy (schema + backend + frontend change; the F-59 force-recreate lesson):** `git pull` → `docker
+compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend frontend` (force-recreate)
+→ `migrate_runs` (backfills the new JSON columns + syncs any legacy flag drift) → `reconcile_runs` CLEAN
+→ soak → verify a fresh run's visibility/Job-Radar/company, PATCH persistence, no run-time `cv_final.html`,
+and the on-demand `/html` download. **Confirm reconcile is CLEAN on prod before considering it done.**
 
 ---
 
@@ -349,9 +386,12 @@ columns on rows recorded before they existed. Advancing after a schema change: `
 - Existing runs without SQLite entries: `cli/migrate_runs.py` backfills
   them. Nulls for fields that didn't exist (e.g. `jd_role_title` for old
   runs).
-- `run_meta.json` kept for the transition period. Removed in Phase 3.
+- The `run_meta.json` **write** is retired in Phase 3 (SQLite is the source of truth), but
+  pre-Phase-3 **sidecars are kept on disk** — `migrate_runs` reads them to backfill old runs, and
+  `db.get_run_creation_meta` falls back to them per field for a run not yet in SQLite.
 - Old `cv_final.html` files in `outputs/` are not deleted — they remain
-  as static snapshots but are no longer the primary UI surface.
+  as static snapshots (still downloadable via `/{id}/files/cv_final.html`) but are no longer the
+  UI surface; new runs don't write one (the report is on-demand).
 - CLI `replay` command unchanged — reads JSONL directly.
 
 ---

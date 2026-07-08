@@ -23,7 +23,6 @@ from sse_starlette.sse import EventSourceResponse
 from api import archive
 from api.job_radar import (JobRadarError, fetch_job, job_radar_assessment,
                            job_radar_extraction, job_radar_source)
-from api.run_meta import read_meta, write_meta
 from api.runner import launch_run
 from api.security import FULL_COOKIE, full_mode_configured, require_unlocked, verify_token
 from api.session import TERMINAL, SessionError
@@ -111,15 +110,9 @@ def list_runs(request: Request, limit: int = 20, offset: int = 0,
     return result
 
 
-# NB: declared before "/{run_id}" so the literal path isn't captured as a run id.
-@router.get("/archive")
-def list_archive(request: Request) -> list[dict]:
-    """Completed runs on disk (replay/showcase), capability-aware (§12.9/D-40): public
-    visitors see only `public_demo` runs (redacted); the owner sees all with full metadata."""
-    unlocked = _unlocked(request)
-    return archive.list_runs(OUTPUT_DIR, include_private=unlocked, redact=not unlocked)
-
-
+# NB: /cleanup declared before "/{run_id}" so the literal path isn't captured as a run id.
+# The legacy GET /archive (filesystem scan) was retired in Phase 3 — the SQLite-backed GET /api/runs
+# above is the run list; the frontend never consumed /archive after Phase 2 (SPEC_SQLITE_MIGRATION §6).
 @router.post("/cleanup", dependencies=[Depends(require_unlocked)])
 def cleanup_runs() -> dict:
     """Delete stale private runs now (older than RUN_RETENTION_DAYS, default 7; keeps
@@ -215,8 +208,10 @@ def get_run_detail(run_id: str, request: Request) -> dict:
     detail = db.get_run_detail(run_id, OUTPUT_DIR) or _null_detail(run_id)  # nulls if pre-migration
     _enrich_detail_from_disk(run_dir, detail)
 
-    # Visibility/retention sidecar + display fields (parity with the run's summary card, D-34/F-47).
-    meta = read_meta(run_dir)
+    # Visibility/retention + display fields (parity with the run's summary card, D-34/F-47). Since
+    # Phase 3 these come from the SQLite creation row (get_run_creation_meta, with a sidecar fallback
+    # for pre-Phase-3 runs), not the retired run_meta.json write.
+    meta = db.get_run_creation_meta(run_id, OUTPUT_DIR)
     p0_company = _read_json(run_dir / "phase0_jd_analysis.json").get("company_name")
     detail["company_name"] = meta["company_name"] or p0_company        # manual wins (F-47)
     detail["keep"] = meta["keep"]
@@ -287,36 +282,9 @@ def run_html(run_id: str, request: Request):
                     headers={"Content-Disposition": f'attachment; filename="{run_id}_report.html"'})
 
 
-@router.get("/{run_id}/detail")
-def run_detail(run_id: str, request: Request) -> dict:
-    """Replay payload from outputs/<run_id>/: summary + iteration scores + reasoning + cv_md.
-
-    A private run 404s for a locked request (don't reveal its existence, §12.9)."""
-    if not _viewable(request, run_id):
-        raise HTTPException(status_code=404, detail=f"no output for run {run_id!r}")
-    detail = archive.run_detail(OUTPUT_DIR, run_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail=f"no output for run {run_id!r}")
-    # The Job Radar reference + the owner's assessment/extraction context all link to a personal
-    # job-search tool — owner-only, even for a public-demo run or a live-session viewer
-    # (Integration §5.4 / SPEC §12.12). The archive list already redacts them; the detail endpoint
-    # isn't redacted, so blank them here when locked.
-    if not _unlocked(request):
-        detail["job_radar_source"] = None
-        detail["job_radar_assessment"] = None
-        detail["job_radar_extraction"] = None
-    return detail
-
-
-@router.get("/{run_id}/report")
-def run_report(run_id: str, request: Request):
-    """The Phase-6 HTML report (4 tabs), served inline for the output panel iframe."""
-    if not _viewable(request, run_id):
-        raise HTTPException(status_code=404, detail=f"no report for run {run_id!r}")
-    path = archive.run_file(OUTPUT_DIR, run_id, "cv_final.html")
-    if path is None:
-        raise HTTPException(status_code=404, detail=f"no report for run {run_id!r}")
-    return FileResponse(path, media_type="text/html")
+# The legacy GET /{id}/detail (archive.run_detail) and GET /{id}/report (static cv_final.html
+# iframe) were retired in Phase 3: the run detail is served by GET /{id} (structured, above) and the
+# report HTML by GET /{id}/html (regenerated on demand). The frontend consumed neither after Phase 2.
 
 
 @router.get("/{run_id}/files/{name}")
@@ -332,12 +300,15 @@ def run_download(run_id: str, name: str, request: Request):
 
 @router.patch("/{run_id}/meta", dependencies=[Depends(require_unlocked)])
 def patch_run_meta(run_id: str, body: RunMetaPatch) -> dict:
-    """Set a run's company_name / keep / public_demo (owner-only, §12.9). None = unchanged."""
+    """Set a run's company_name / keep / public_demo (owner-only, §12.9). None = unchanged.
+
+    Since Phase 3, SQLite is the source of truth for these mutable flags (update_run_meta), not the
+    retired run_meta.json sidecar (§6). Returns the resulting visibility state."""
     run_dir = archive.run_dir_if_exists(OUTPUT_DIR, run_id)
     if run_dir is None:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
-    meta = write_meta(run_dir, company_name=body.company_name,
-                      keep=body.keep, public_demo=body.public_demo)
+    meta = db.update_run_meta(run_id, OUTPUT_DIR, company_name=body.company_name,
+                              keep=body.keep, public_demo=body.public_demo)
     return {"run_id": run_id, **meta}
 
 
@@ -370,7 +341,7 @@ def rerun_run(original_run_id: str, body: RerunRequest, request: Request) -> dic
     if not jd_text.strip():
         raise HTTPException(status_code=400,
                             detail="Original run has no stored JD — re-run not possible")
-    orig_meta = read_meta(orig_dir)
+    orig_meta = db.get_run_creation_meta(original_run_id, OUTPUT_DIR)   # SQLite (sidecar fallback)
     jr_source = orig_meta.get("job_radar_source")              # carried forward → §5 callback lineage
     jr_assessment = orig_meta.get("job_radar_assessment")      # carried forward (SPEC §12.12)
     jr_extraction = orig_meta.get("job_radar_extraction")
@@ -400,14 +371,12 @@ def rerun_run(original_run_id: str, body: RerunRequest, request: Request) -> dic
     else:
         raise HTTPException(status_code=500, detail="could not allocate a run id")
 
-    # Persist the new run's sidecar up front: carry the company label + Job Radar reference forward
-    # and record the lineage (`rerun_of`, write-once like job_radar_source). The pipeline writes the
-    # JD to jd_raw.txt itself when it runs.
-    run_dir = Path(OUTPUT_DIR) / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    write_meta(run_dir, company_name=company_name, job_radar_source=jr_source,
-               job_radar_assessment=jr_assessment, job_radar_extraction=jr_extraction,
-               rerun_of=original_run_id)
+    # Persist the new run's creation metadata up front (Phase 3: a SQLite 'running' row, not the
+    # retired sidecar): carry the company label + Job Radar reference forward and record the lineage
+    # (`rerun_of`, write-once like job_radar_source). The pipeline writes jd_raw.txt itself when it runs.
+    db.record_run_start(run_id, output_dir=OUTPUT_DIR, mode=body.mode, company_name=company_name,
+                        job_radar_source=jr_source, job_radar_assessment=jr_assessment,
+                        job_radar_extraction=jr_extraction, rerun_of=original_run_id)
 
     launch_run(store, session, jd_text, mode=body.mode, key=key, output_dir=OUTPUT_DIR)
     return {"run_id": run_id}
@@ -471,14 +440,14 @@ def start_run(body: StartRunRequest, request: Request) -> dict:
     else:
         raise HTTPException(status_code=500, detail="could not allocate a run id")
 
-    # Persist the visibility sidecar up front when there's something to store — a company label
-    # (§12.9) or the Job Radar reference (Integration §5.2, write-once). New runs default private
-    # + not-kept; the run dir is the pipeline's, created here idempotently.
+    # Persist the creation-time metadata up front when there's something to store — a company label
+    # (§12.9) or the Job Radar reference (Integration §5.2, write-once). Since Phase 3 this writes a
+    # partial 'running' row in SQLite (record_run_start), NOT the retired run_meta.json sidecar; the
+    # disk-derived completion write preserves it (§6). New runs default private + not-kept.
     if company_name or jr_source:
-        run_dir = Path(OUTPUT_DIR) / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        write_meta(run_dir, company_name=company_name, job_radar_source=jr_source,
-                   job_radar_assessment=jr_assessment, job_radar_extraction=jr_extraction)
+        db.record_run_start(run_id, output_dir=OUTPUT_DIR, mode=body.mode, company_name=company_name,
+                            job_radar_source=jr_source, job_radar_assessment=jr_assessment,
+                            job_radar_extraction=jr_extraction)
 
     launch_run(store, session, jd_text, mode=body.mode, key=key,
                max_iterations=body.max_iterations, auto=body.auto, output_dir=OUTPUT_DIR)

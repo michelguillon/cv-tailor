@@ -386,45 +386,17 @@ def archive_dir(tmp_path, monkeypatch, unlocked):
     return out
 
 
-def test_archive_lists_completed_runs(client, archive_dir):
-    runs = client.get("/api/runs/archive").json()
-    assert len(runs) == 1
-    r = runs[0]
-    assert r["run_id"] == "run_demo" and r["role_title"] == "Director, SE"
-    assert r["outcome"] == "partial" and r["cost_estimated_usd"] == 0.1
-    assert r["has_md"] and r["has_html"]
-
-
-def test_run_detail_replay_payload(client, archive_dir):
-    d = client.get("/api/runs/run_demo/detail").json()
-    assert d["role_title"] == "Director, SE" and d["outcome"] == "partial"
-    assert len(d["iteration_scores"]) == 1 and d["iteration_scores"][0]["iteration"] == 1
-    assert any(e.get("event") == "jd_analysed" for e in d["reasoning"])
-    assert "clean cv text" in d["cv_md"]
-
-
-def test_run_report_and_download(client, archive_dir):
-    rep = client.get("/api/runs/run_demo/report")
-    assert rep.status_code == 200 and "full report" in rep.text
+def test_run_file_download(client, archive_dir):
+    """cv_final.md downloads; a non-whitelisted name 404s (path-safety). The run list + detail moved
+    to the SQLite endpoints (GET /api/runs, GET /api/runs/{id}); the legacy /archive, /detail, /report
+    were retired in Phase 3 (SPEC_SQLITE_MIGRATION §6) — the report HTML is now GET /{id}/html."""
     md = client.get("/api/runs/run_demo/files/cv_final.md")
     assert md.status_code == 200 and "clean cv text" in md.text
     assert client.get("/api/runs/run_demo/files/evil.sh").status_code == 404   # not downloadable
-
-
-def test_archive_exposes_summary_card_fields(client, archive_dir):
-    """The archive surfaces the D-34 card numbers (grounded coverage, unsupported claims,
-    derived status) from the run_complete footer — for the OutputPanel card."""
-    r = client.get("/api/runs/archive").json()[0]
-    assert r["grounded_coverage"] == 0.36 and r["unsupported_claims"] == 1
-    # partial fit (0.58) + 1 unsupported claim → Review Required; band from fit score
-    assert r["status"] == "Review Required" and r["fit_band"] == "partial"
-    d = client.get("/api/runs/run_demo/detail").json()
-    assert d["status"] == "Review Required" and d["grounded_coverage"] == 0.36
-
-
-def test_archive_unknown_run_404(client, archive_dir):
-    assert client.get("/api/runs/nope/detail").status_code == 404
-    assert client.get("/api/runs/nope/report").status_code == 404
+    # the retired endpoints no longer route
+    assert client.get("/api/runs/archive").status_code == 404
+    assert client.get("/api/runs/run_demo/detail").status_code == 404
+    assert client.get("/api/runs/run_demo/report").status_code == 404
 
 
 # --------------------------------------------------------------------------- #
@@ -668,17 +640,6 @@ def test_created_at_from_id():
     assert run_meta.created_at_from_id("run_demo") is None
 
 
-def test_archive_filter_and_redact(tmp_path):
-    out = tmp_path / "outputs"
-    _make_run(out, "run_20260101_000000")                                # private
-    _make_run(out, "run_20260102_000000", meta={"public_demo": True, "company_name": "Acme"})
-    assert len(archive.list_runs(out)) == 2                              # owner view: all
-    pub = archive.list_runs(out, include_private=False, redact=True)     # public view
-    assert [r["run_id"] for r in pub] == ["run_20260102_000000"]
-    assert pub[0]["company_name"] == "Acme" and pub[0]["public_demo"] is True
-    assert pub[0]["cost_estimated_usd"] is None and pub[0]["created_at"] is None  # redacted
-
-
 def test_cleanup_respects_keep_public_and_age(tmp_path):
     from datetime import datetime, timezone
     out = tmp_path / "outputs"
@@ -690,19 +651,6 @@ def test_cleanup_respects_keep_public_and_age(tmp_path):
     assert removed == ["run_20260101_000000"]
     assert (out / "run_20260101_000001").exists() and (out / "run_20260101_000002").exists()
     assert (out / "run_20260610_000000").exists()
-
-
-def test_company_precedence_manual_over_inferred(tmp_path):
-    """F-47: manual sidecar company wins; else the Phase-0 inferred name; else None."""
-    out = tmp_path / "outputs"
-    _make_run(out, "run_20260101_000000", phase0_company="Airwallex")            # inferred only
-    _make_run(out, "run_20260102_000000", phase0_company="Airwallex",
-              meta={"company_name": "Manual Co"})                                # manual override
-    _make_run(out, "run_20260103_000000")                                       # neither → None
-    by_id = {r["run_id"]: r for r in archive.list_runs(out)}
-    assert by_id["run_20260101_000000"]["company_name"] == "Airwallex"          # Phase-0 fallback
-    assert by_id["run_20260102_000000"]["company_name"] == "Manual Co"          # sidecar wins
-    assert by_id["run_20260103_000000"]["company_name"] is None
 
 
 def test_delete_run_unit(tmp_path):
@@ -726,44 +674,39 @@ def runs_disk(tmp_path, monkeypatch):
     return out
 
 
-def test_archive_public_vs_owner(client, runs_disk, monkeypatch):
-    monkeypatch.setenv("FULL_MODE_KEY", "pw")
-    locked = client.get("/api/runs/archive").json()                     # public only, redacted
-    assert [r["run_id"] for r in locked] == ["run_20260102_000000"]
-    assert locked[0]["company_name"] == "Acme" and locked[0]["cost_estimated_usd"] is None
-    client.post("/api/full-mode/unlock", json={"key": "pw"})            # owner: all + full
-    owner = client.get("/api/runs/archive").json()
-    assert len(owner) == 2 and owner[0]["cost_estimated_usd"] is not None
-
-
 def test_private_run_view_404_until_unlock(client, runs_disk, monkeypatch):
+    """The structured detail (GET /{id}) + on-demand HTML (GET /{id}/html) 404 for a locked request
+    on a private run; a public-demo run opens; the owner sees the private one (§12.9). Phase 3: no
+    /detail or /report — the report is regenerated at /html."""
     monkeypatch.setenv("FULL_MODE_KEY", "pw")
-    assert client.get("/api/runs/run_20260101_000000/detail").status_code == 404
-    assert client.get("/api/runs/run_20260101_000000/report").status_code == 404
-    assert client.get("/api/runs/run_20260102_000000/report").status_code == 200  # public opens
+    assert client.get("/api/runs/run_20260101_000000").status_code == 404
+    assert client.get("/api/runs/run_20260101_000000/html").status_code == 404
+    assert client.get("/api/runs/run_20260102_000000").status_code == 200          # public opens
     client.post("/api/full-mode/unlock", json={"key": "pw"})
-    assert client.get("/api/runs/run_20260101_000000/detail").status_code == 200
+    assert client.get("/api/runs/run_20260101_000000").status_code == 200
 
 
 def test_private_run_viewable_while_session_live(client, runs_disk, monkeypatch):
-    """A live session grants a non-owner access to their own run's output (report + detail +
-    downloads) without an unlock — the friends-run-live case (§12.9). Access ends with the
-    session: once it's gone, a still-private run narrows back to owner-or-public (404)."""
+    """A live session grants a non-owner access to their own run's output (detail + downloads)
+    without an unlock — the friends-run-live case (§12.9). Access ends with the session: once it's
+    gone, a still-private run narrows back to owner-or-public (404)."""
     monkeypatch.setenv("FULL_MODE_KEY", "pw")
     rid = "run_20260101_000000"                                  # the private run on disk
-    assert client.get(f"/api/runs/{rid}/detail").status_code == 404      # no session yet → 404
+    assert client.get(f"/api/runs/{rid}").status_code == 404             # no session yet → 404
     store = client.app.state.sessions
     store.create(rid, mode="demo")                              # the creator's live session
     try:
-        assert client.get(f"/api/runs/{rid}/detail").status_code == 200
-        assert client.get(f"/api/runs/{rid}/report").status_code == 200
+        assert client.get(f"/api/runs/{rid}").status_code == 200
         assert client.get(f"/api/runs/{rid}/files/cv_final.md").status_code in (200, 404)
     finally:
         store.delete(rid)                                      # session TTL'd / gone
-    assert client.get(f"/api/runs/{rid}/report").status_code == 404      # back to owner-or-public
+    assert client.get(f"/api/runs/{rid}").status_code == 404             # back to owner-or-public
 
 
 def test_run_meta_mutations_require_unlock(client, runs_disk, monkeypatch):
+    """PATCH /{id}/meta is owner-gated and now writes SQLite (Phase 3 §6), not the sidecar — a
+    public_demo=True toggle makes the run publicly visible in the SQLite-backed list."""
+    from tailor import db
     monkeypatch.setenv("FULL_MODE_KEY", "pw")
     assert client.patch("/api/runs/run_20260101_000000/meta", json={"keep": True}).status_code == 403
     assert client.delete("/api/runs/run_20260101_000000").status_code == 403
@@ -771,8 +714,11 @@ def test_run_meta_mutations_require_unlock(client, runs_disk, monkeypatch):
     client.post("/api/full-mode/unlock", json={"key": "pw"})
     r = client.patch("/api/runs/run_20260101_000000/meta", json={"keep": True, "public_demo": True})
     assert r.status_code == 200 and r.json()["keep"] is True and r.json()["public_demo"] is True
-    client.post("/api/full-mode/lock")                                  # now publicly visible
-    assert "run_20260101_000000" in [x["run_id"] for x in client.get("/api/runs/archive").json()]
+    # written to SQLite (source of truth), visible in the capability-aware list even when locked
+    assert db.get_run_creation_meta("run_20260101_000000", str(runs_disk))["public_demo"] is True
+    client.post("/api/full-mode/lock")
+    listed = [x["run_id"] for x in client.get("/api/runs").json()["runs"]]
+    assert "run_20260101_000000" in listed
 
 
 def test_delete_run_endpoint(client, runs_disk, monkeypatch):
@@ -792,12 +738,15 @@ def test_cleanup_endpoint_owner_only(client, runs_disk, monkeypatch):
 
 
 def test_start_run_persists_company(client, run_store, runs_disk, monkeypatch):
+    """The company label is written to the SQLite creation row at run start (Phase 3 §6), not a
+    run_meta.json sidecar."""
+    from tailor import db
     import api.runner as runner
     monkeypatch.setattr(runner, "run_pipeline", _fake_run_pipeline)
     monkeypatch.setattr(runs_router, "new_run_id", lambda: "run_20260601_090000")
     r = client.post("/api/runs", json={"jd_text": "x", "mode": "demo", "company_name": "Globex"})
     assert r.status_code == 201
-    assert run_meta.read_meta(runs_disk / "run_20260601_090000")["company_name"] == "Globex"
+    assert db.get_run_creation_meta("run_20260601_090000", str(runs_disk))["company_name"] == "Globex"
 
 
 # --------------------------------------------------------------------------- #
@@ -836,9 +785,10 @@ def jr_run(client, run_store, runs_disk, monkeypatch):
 
 
 def test_run_from_job_radar_success(jr_run, run_store):
+    from tailor import db
     resp, run_dir = jr_run()
     assert resp.status_code == 201
-    meta = run_meta.read_meta(run_dir)
+    meta = db.get_run_creation_meta(run_dir.name, str(run_dir.parent))   # SQLite creation row
     assert meta["company_name"] == "Elastic"                       # company → run label
     src = meta["job_radar_source"]
     assert src["job_id"] == "sha256:abc123" and src["fit_label"] == "strong_fit"
@@ -849,8 +799,10 @@ def test_run_from_job_radar_success(jr_run, run_store):
 
 
 def test_run_meta_has_job_radar_source(jr_run):
+    from tailor import db
     _, run_dir = jr_run()
-    assert run_meta.read_meta(run_dir)["job_radar_source"]["company"] == "Elastic"
+    meta = db.get_run_creation_meta(run_dir.name, str(run_dir.parent))
+    assert meta["job_radar_source"]["company"] == "Elastic"
 
 
 # --- assessment-context enrichment (SPEC §12.12, Phase 4 Step 2) --- #
@@ -865,9 +817,10 @@ _JR_JOB_WITH_ASSESSMENT = {
 
 
 def test_run_meta_stores_assessment(jr_run):
-    """A run sourced from Job Radar persists the serialised assessment + extraction (write-once)."""
+    """A run sourced from Job Radar persists the serialised assessment + extraction (SQLite JSON)."""
+    from tailor import db
     _, run_dir = jr_run(job=_JR_JOB_WITH_ASSESSMENT)
-    meta = run_meta.read_meta(run_dir)
+    meta = db.get_run_creation_meta(run_dir.name, str(run_dir.parent))
     a = meta["job_radar_assessment"]
     assert a["fit_label"] == "strong_fit" and a["owner_status"] == "shortlisted"
     assert a["fit_override"] == {"label": "good_fit", "reason": "short on consulting"}
@@ -875,24 +828,28 @@ def test_run_meta_stores_assessment(jr_run):
 
 
 def test_run_meta_assessment_write_once(jr_run):
-    """A later sidecar edit (e.g. PATCH company/keep) never mutates the stored assessment."""
+    """A later PATCH (company/keep/public_demo) never mutates the stored assessment — update_run_meta
+    touches only the visibility columns in SQLite."""
+    from tailor import db
     _, run_dir = jr_run(job=_JR_JOB_WITH_ASSESSMENT)
-    run_meta.write_meta(run_dir, keep=True)                         # an unrelated edit
-    a = run_meta.read_meta(run_dir)["job_radar_assessment"]
+    db.update_run_meta(run_dir.name, str(run_dir.parent), keep=True)   # an unrelated edit
+    a = db.get_run_creation_meta(run_dir.name, str(run_dir.parent))["job_radar_assessment"]
     assert a["fit_label"] == "strong_fit"                          # unchanged
 
 
 def test_run_meta_no_assessment_when_absent(jr_run):
-    """An old Job Radar without Phase 4 (no assessment in the response) → no key, reads None."""
+    """An old Job Radar without Phase 4 (no assessment in the response) → no value, reads None."""
+    from tailor import db
     _, run_dir = jr_run()                                          # _JR_JOB has no assessment
-    meta = run_meta.read_meta(run_dir)
+    meta = db.get_run_creation_meta(run_dir.name, str(run_dir.parent))
     assert meta.get("job_radar_assessment") is None
     assert meta.get("job_radar_extraction") is None
 
 
 def test_run_from_job_radar_is_private(jr_run):
+    from tailor import db
     _, run_dir = jr_run()
-    meta = run_meta.read_meta(run_dir)                              # default not overridden (§12.9)
+    meta = db.get_run_creation_meta(run_dir.name, str(run_dir.parent))  # default not overridden (§12.9)
     assert meta["public_demo"] is False and meta["keep"] is False
 
 
@@ -921,8 +878,9 @@ def test_run_without_job_radar_source(client, run_store, runs_disk, monkeypatch)
     monkeypatch.setattr(runs_router, "new_run_id", lambda: "run_20260612_130000")
     r = client.post("/api/runs", json={"jd_text": "tailor my cv", "mode": "demo"})
     assert r.status_code == 201
-    # no sidecar written at all (no company, no JR source) → read defaults to None
-    assert run_meta.read_meta(runs_disk / "run_20260612_130000")["job_radar_source"] is None
+    # no creation row written at all (no company, no JR source) → reads default to None
+    from tailor import db
+    assert db.get_run_creation_meta("run_20260612_130000", str(runs_disk))["job_radar_source"] is None
 
 
 # --- prefill proxy + fetch_job unit + owner-only redaction --- #
@@ -973,47 +931,34 @@ def test_fetch_job_maps_http_errors(monkeypatch):
         job_radar.fetch_job("x")
 
 
-def test_job_radar_source_redacted_for_public(tmp_path):
-    """job_radar_source is owner-only (Integration §5.4): present for the owner, blanked in the
-    redacted public archive view."""
-    out = tmp_path / "outputs"
-    _make_run(out, "run_20260612_140000",
-              meta={"public_demo": True, "job_radar_source": {"job_id": "sha256:abc", "company": "Elastic"}})
-    owner = archive.list_runs(out)[0]
-    assert owner["job_radar_source"]["company"] == "Elastic"
-    public = archive.list_runs(out, include_private=False, redact=True)[0]
-    assert public["job_radar_source"] is None
-
-
 def test_run_detail_redacts_job_radar_source_when_locked(client, runs_disk, monkeypatch):
-    """GET /runs/{id}/detail blanks the Job Radar reference for a locked (non-owner) request,
-    even on a public-demo run; the owner sees it (Integration §5.4)."""
+    """GET /runs/{id} blanks the Job Radar reference for a locked (non-owner) request, even on a
+    public-demo run; the owner sees it (Integration §5.4). Seeded via a pre-Phase-3 sidecar, which
+    get_run_creation_meta falls back to when the run isn't in SQLite."""
     monkeypatch.setenv("FULL_MODE_KEY", "pw")
     out = runs_disk
     _make_run(out, "run_20260612_150000",
               meta={"public_demo": True, "job_radar_source": {"job_id": "sha256:abc", "company": "Elastic"}})
-    locked = client.get("/api/runs/run_20260612_150000/detail").json()    # public can open it
+    locked = client.get("/api/runs/run_20260612_150000").json()    # public can open it
     assert locked["job_radar_source"] is None
     client.post("/api/full-mode/unlock", json={"key": "pw"})
-    owner = client.get("/api/runs/run_20260612_150000/detail").json()
+    owner = client.get("/api/runs/run_20260612_150000").json()
     assert owner["job_radar_source"]["company"] == "Elastic"
 
 
 def test_run_detail_redacts_assessment_when_locked(client, runs_disk, monkeypatch):
-    """GET /runs/{id}/detail blanks the owner's assessment/extraction for a locked request,
-    even on a public-demo run; the owner sees them (SPEC §12.12)."""
+    """GET /runs/{id} blanks the owner's assessment for a locked request, even on a public-demo run;
+    the owner sees it (SPEC §12.12)."""
     monkeypatch.setenv("FULL_MODE_KEY", "pw")
     out = runs_disk
     _make_run(out, "run_20260612_160000",
               meta={"public_demo": True,
-                    "job_radar_assessment": {"fit_label": "strong_fit", "owner_status": "shortlisted"},
-                    "job_radar_extraction": {"seniority": "director"}})
-    locked = client.get("/api/runs/run_20260612_160000/detail").json()  # public can open it
-    assert locked["job_radar_assessment"] is None and locked["job_radar_extraction"] is None
+                    "job_radar_assessment": {"fit_label": "strong_fit", "owner_status": "shortlisted"}})
+    locked = client.get("/api/runs/run_20260612_160000").json()  # public can open it
+    assert locked["job_radar_assessment"] is None
     client.post("/api/full-mode/unlock", json={"key": "pw"})
-    owner = client.get("/api/runs/run_20260612_160000/detail").json()
+    owner = client.get("/api/runs/run_20260612_160000").json()
     assert owner["job_radar_assessment"]["fit_label"] == "strong_fit"
-    assert owner["job_radar_extraction"]["seniority"] == "director"
 
 
 # --------------------------------------------------------------------------- #
@@ -1105,7 +1050,8 @@ def test_rerun_creates_new_run_with_lineage(rerun_env, run_store):
     r = go("run_20260601_080000", mode="demo")
     assert r.status_code == 201
     new_id = r.json()["run_id"]
-    m = run_meta.read_meta(out / new_id)
+    from tailor import db
+    m = db.get_run_creation_meta(new_id, str(out))                # new run's SQLite creation row
     assert m["rerun_of"] == "run_20260601_080000"                 # audit trail (§3.2)
     assert m["job_radar_source"]["company"] == "Elastic"          # lineage carried forward (§2)
     assert m["company_name"] == "Elastic"

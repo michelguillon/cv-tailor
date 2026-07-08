@@ -270,7 +270,9 @@ def run_pipeline(jd_path, *, mode="demo", key=None, max_iterations=None,
             "converged": result.converged,
             "convergence_reason": result.convergence_reason,
             "iterations": len(result.iterations),
-            "cv_md": out["md"], "cv_html": out["html"], "cv_docx": out.get("docx"),
+            # cv_html dropped in Phase 3 — the report HTML is regenerated on demand, not at run
+            # time (SPEC_SQLITE_MIGRATION §6). cv_final.md stays as the submission artefact.
+            "cv_md": out["md"], "cv_docx": out.get("docx"),
             "fabrication_flags": flag_count,
             "cost_estimated_usd": footer["total_estimated_usd"],
             "cost_breakdown": footer["cost_breakdown_estimated_usd"],

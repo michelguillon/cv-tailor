@@ -546,7 +546,7 @@ export function RunPage({
             </span>
             {runId && (
               <div className="flex w-full flex-wrap gap-2 pt-1">
-                <a href={api.reportUrl(runId)} target="_blank" rel="noreferrer">
+                <a href={api.runHtmlUrl(runId)} target="_blank" rel="noreferrer">
                   <Button variant="outline" size="sm">
                     <ExternalLink className="h-4 w-4" /> Open report
                   </Button>

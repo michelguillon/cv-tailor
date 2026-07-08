@@ -1,9 +1,15 @@
-"""api/run_meta.py — mutable per-run visibility/retention sidecar (SPEC §12.9, D-40).
+"""api/run_meta.py — per-run visibility/retention sidecar (SPEC §12.9, D-40).
+
+**Since Phase 3 (SPEC_SQLITE_MIGRATION / F-60), SQLite is the source of truth for run metadata and
+this sidecar is NO LONGER WRITTEN on new runs.** It survives only as a **read fallback** for
+pre-Phase-3 runs: `tailor/db.get_run_creation_meta` (and the row builders) fall back to it per field,
+and `cli/migrate_runs.py` reads it to backfill old runs. New writes go to SQLite
+(`db.record_run_start` at creation, `db.update_run_meta` on PATCH). This module's `read_meta` shape is
+what `get_run_creation_meta` mirrors; `created_at_from_id` is still used by retention cleanup.
 
 A run's durable record (`run_log.jsonl`, phase checkpoints, cv_final.*) is append-only and
 immutable (audit ≠ context, D-06). Visibility (`public_demo`), retention (`keep`), and an
-editable `company_name` are *mutable* owner state, so they live in a separate sidecar
-`outputs/<run_id>/run_meta.json` — orthogonal to the model/cost `mode`.
+editable `company_name` are *mutable* owner state — orthogonal to the model/cost `mode`.
 
 The sidecar is absent on every pre-existing run, so reads default to **private, not kept**
 (`public_demo=false, keep=false`) — old runs need no migration. `created_at` is the run id's

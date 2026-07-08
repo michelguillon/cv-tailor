@@ -5,11 +5,21 @@ from pathlib import Path
 import pytest
 
 from tailor.models import FitAssessment, IterationScore, JDAnalysis, ScoringRubric, SectionScore
-from tailor.phases.phase6_output import assemble_markdown, generate_output, summary_card
+from tailor.phases.phase6_output import (assemble_markdown, build_report_context, generate_output,
+                                         render_report, summary_card)
 from tailor.run_context import RunContext
 
 CONFIG = {"cv_sections": ["header", "profile", "skills", "experience", "ai_projects",
                           "education", "languages", "certifications", "interests"]}
+
+
+def report_html(ctx, manifest, fit, rubric, iterations, *, jd_raw="", verification_flags=None):
+    """Render the report HTML from its data (build_report_context + render_report) — the same path
+    the on-demand `regenerate_html` uses. Since Phase 3, `generate_output` no longer writes the HTML
+    at run time, so report-content tests render it directly here (SPEC_SQLITE_MIGRATION §6)."""
+    context = build_report_context(ctx, manifest, jd(), fit, rubric, iterations, config=CONFIG,
+                                   jd_raw=jd_raw, verification_flags=verification_flags)
+    return render_report(context)
 
 
 def man(static, version, stype, position, title, wc):
@@ -57,7 +67,7 @@ def test_assemble_markdown_order_and_headings(tmp_path):
     assert "Tailored profile alpha beta" in md         # latest version used (v1, not v0)
 
 
-def test_generate_output_writes_md_and_html(tmp_path):
+def test_generate_output_writes_md_only_and_report_renders(tmp_path):
     ctx = RunContext.create(run_id="r", base_dir=tmp_path)
     manifest = setup(ctx)
     ctx.audit.log_event("refinement", "section_adjudicated", "profile chose claude", iteration=1)
@@ -66,8 +76,11 @@ def test_generate_output_writes_md_and_html(tmp_path):
 
     out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)
 
-    assert Path(out["md"]).exists() and Path(out["html"]).exists()
-    html = Path(out["html"]).read_text(encoding="utf-8")
+    # Phase 3: only cv_final.md is written at run time; the HTML report is regenerated on demand.
+    assert Path(out["md"]).exists()
+    assert "html" not in out and not (ctx.output_dir / "cv_final.html").exists()
+
+    html = report_html(ctx, manifest, fit, rubric, iters())
     # tabs present (Fit added in F-39)
     for tab in ("Fit", "CV", "Changes", "Scores", "Reasoning"):
         assert tab in html
@@ -89,9 +102,7 @@ def test_fit_tab_renders_value_alignment(tmp_path):
         gaps=[FitGap(requirement="payments domain", gap_type="experience", severity="major",
                      addressable=True, reason="no payments work")],
         value_alignment_notes="Your core pattern is turning capability into outcomes.")
-    out = generate_output(ctx, manifest, jd(), fit,
-                          ScoringRubric(1, ["alpha"], [], [], "t", "t", []), iters(), config=CONFIG)
-    html = Path(out["html"]).read_text(encoding="utf-8")
+    html = report_html(ctx, manifest, fit, ScoringRubric(1, ["alpha"], [], [], "t", "t", []), iters())
     assert 'data-tab="fit"' in html and 'id="fit" class="tab active"' in html
     assert "Your core pattern is turning capability into outcomes." in html
     assert "building operating models" in html and "payments domain" in html
@@ -136,8 +147,7 @@ def test_static_section_marked_verbatim_in_changes(tmp_path):
     manifest = setup(ctx)
     fit = FitAssessment(outcome="strong", overall_fit_score=0.9)
     rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
-    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)
-    html = Path(out["html"]).read_text(encoding="utf-8")
+    html = report_html(ctx, manifest, fit, rubric, iters())
     assert "copied verbatim" in html
 
 
@@ -171,8 +181,7 @@ def test_generate_output_renders_summary_card(tmp_path):
     fit = FitAssessment(outcome="partial", overall_fit_score=0.58)
     rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
     # iters() final keyword_coverage is 0.6 → grounded 60%; no verification_flags → 0 unsupported
-    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)
-    html = Path(out["html"]).read_text(encoding="utf-8")
+    html = report_html(ctx, manifest, fit, rubric, iters())
     assert "Grounded Coverage:" in html and "60%" in html
     assert "Unsupported Claims:" in html
     assert "Status: Review Required" in html
@@ -181,8 +190,9 @@ def test_generate_output_renders_summary_card(tmp_path):
 
 
 def test_header_shows_job_radar_provenance_when_present(tmp_path):
-    """A run created from Job Radar (run_meta.json sidecar) shows a 'From Job Radar' badge in the
-    report header; a plain run shows nothing (Integration §5.2 / F-51)."""
+    """A run created from Job Radar shows a 'From Job Radar' badge in the report header; a plain run
+    shows nothing (Integration §5.2 / F-51). The report reads the provenance sidecar-first (a
+    pre-Phase-3 run), else the SQLite creation row (a Phase-3 run) — here via the sidecar."""
     import json
 
     ctx = RunContext.create(run_id="r", base_dir=tmp_path)
@@ -192,7 +202,7 @@ def test_header_shows_job_radar_provenance_when_present(tmp_path):
     (ctx.output_dir / "run_meta.json").write_text(json.dumps({
         "job_radar_source": {"company": "Elastic", "fit_label": "strong_fit", "fit_score": 10,
                              "source_url": "https://jobs.example.com/elastic/pm"}}), encoding="utf-8")
-    html = Path(generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)["html"]).read_text("utf-8")
+    html = report_html(ctx, manifest, fit, rubric, iters())
     assert "From Job Radar: Elastic" in html and "strong_fit" in html
     assert 'href="https://jobs.example.com/elastic/pm"' in html
 
@@ -202,7 +212,7 @@ def test_header_no_job_radar_badge_for_plain_run(tmp_path):
     manifest = setup(ctx)
     fit = FitAssessment(outcome="partial", overall_fit_score=0.58)
     rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
-    html = Path(generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)["html"]).read_text("utf-8")
+    html = report_html(ctx, manifest, fit, rubric, iters())
     assert "From Job Radar" not in html
 
 
@@ -211,9 +221,8 @@ def test_jd_tab_renders_raw_jd(tmp_path):
     manifest = setup(ctx)
     fit = FitAssessment(outcome="strong", overall_fit_score=0.9)
     rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
-    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG,
-                          jd_raw="Director of Solutions Engineering — EMEA. Lead the team.")
-    html = Path(out["html"]).read_text(encoding="utf-8")
+    html = report_html(ctx, manifest, fit, rubric, iters(),
+                       jd_raw="Director of Solutions Engineering — EMEA. Lead the team.")
     assert 'data-tab="jd"' in html
     assert "Director of Solutions Engineering — EMEA. Lead the team." in html
 
@@ -223,6 +232,5 @@ def test_jd_tab_empty_state_without_jd(tmp_path):
     manifest = setup(ctx)
     fit = FitAssessment(outcome="strong", overall_fit_score=0.9)
     rubric = ScoringRubric(1, ["alpha"], [], [], "t", "t", [])
-    out = generate_output(ctx, manifest, jd(), fit, rubric, iters(), config=CONFIG)  # no jd_raw
-    html = Path(out["html"]).read_text(encoding="utf-8")
+    html = report_html(ctx, manifest, fit, rubric, iters())  # no jd_raw
     assert "JD not recorded for this run." in html

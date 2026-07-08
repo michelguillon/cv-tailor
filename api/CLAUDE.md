@@ -43,33 +43,33 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
   **403 fail-closed** when no key is configured or the cookie is missing/invalid. Any future
   corpus-mutating endpoint must add the same dependency.
 - `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`. **SQLite run store
-  + API-driven detail (§12.13/F-59, Phases 1–2):** `record_run_complete` (in `tailor/run.py`, guarded)
-  writes `data/cv_tailor.db` at completion. `GET /api/runs` is now the **SQLite-backed paginated list**
-  (`{runs,total,limit,offset}`, capability-aware — locked ⇒ public-demo only + owner fields redacted),
-  replacing the old live-sessions list; live status moved to `GET /{id}/status`. The **run detail** is
-  driven by `GET /{id}` (structured JSON, SQLite + disk) + `/{id}/sections/{sid}/diff`, `/{id}/reasoning`,
-  and `/{id}/html` (report regenerated on demand from checkpoints — `phase6_output.regenerate_html`). All
-  are `_viewable`-gated (private→404 locked; owner-only Job Radar blanked). The **legacy** `/{id}/detail`
-  + `/{id}/report` (filesystem `api/archive.py`) still exist for the transition; Phase 3 retires them.
-  **Run visibility & retention (D-40/§12.9):** the archive is **capability-aware** — `GET /archive`
-  and `/{id}/detail|report|files` return only `public_demo` runs (list redacted) unless the
-  request is unlocked (`verify_token` on `cv_full_mode`); a private run **404s** when locked
-  (don't leak ids). **Exception — live-session grant (F-48):** `_viewable` also passes when a
-  live in-memory `Session` exists for the run id, so whoever just ran a job (a non-owner) can
-  view their own report/detail/downloads until the session is GC'd by TTL (the friends-run-live
-  case). Tradeoff: timestamped run ids are guessable, so the grant is id-holder-wide during that
-  window — fine for the demo; upgrade to a per-run view token if it ever matters. Mutations
-  `PATCH /{id}/meta` (company_name/keep/public_demo), `DELETE /{id}`,
-  `POST /cleanup`, and `POST /{id}/rerun` are `require_unlocked` (403). **Re-run (SPEC_RERUN):**
-  `POST /{id}/rerun` creates a *new* run pre-populated with the original's JD (read from its durable
-  `jd_raw.txt`, **not** the sidecar — large immutable content stays out of `run_meta.json`),
-  carries `job_radar_source` forward (so the Phase-3 callback fires as for a fresh run, §5), and
-  records `rerun_of` (write-once in the sidecar, like `job_radar_source`; absent ⇒ None via `.get`,
-  so it stays out of `default_meta`). Visibility/retention flags live in a **mutable
-  sidecar** `outputs/<run_id>/run_meta.json` (`api/run_meta.py`) — never in the append-only
-  `run_log.jsonl` (audit ≠ context). Retention helpers in `api/archive.py` (`cleanup_runs` ages
-  by the run-id timestamp, not mtime); auto-cleanup runs on startup (`main.py` lifespan) **only
-  when `RUN_RETENTION_DAYS` is set** — unset ⇒ off, so the test client never deletes real runs.
+  + API-driven detail (§12.13/F-59/F-60, Phases 1–3):** `record_run_complete` (in `tailor/run.py`, guarded)
+  writes `data/cv_tailor.db` at completion. `GET /api/runs` is the **SQLite-backed paginated list**
+  (`{runs,total,limit,offset}`, capability-aware — locked ⇒ public-demo only + owner fields redacted);
+  live status is `GET /{id}/status`. The **run detail** is driven by `GET /{id}` (structured JSON,
+  SQLite + disk) + `/{id}/sections/{sid}/diff`, `/{id}/reasoning`, and `/{id}/html` (report regenerated on
+  demand from checkpoints — `phase6_output.regenerate_html`). All are `_viewable`-gated (private→404
+  locked; owner-only Job Radar blanked). **Phase 3 retired the legacy `/{id}/detail`, `/{id}/report`,
+  `GET /archive`** (+ `archive.list_runs`/`run_detail`) — unused by the frontend since Phase 2.
+  **Run metadata is SQLite since Phase 3 (F-60), not a sidecar.** Creation-time metadata (company label,
+  Job Radar source/assessment/extraction, `rerun_of`, visibility flags) is written at run creation via
+  `db.record_run_start` (from `start_run`/`rerun_run`); `PATCH /{id}/meta` writes SQLite
+  (`db.update_run_meta`); every reader goes through `db.get_run_creation_meta` (SQLite-first, sidecar
+  fallback). **Run visibility & retention (D-40/§12.9):** `_viewable` gates `GET /{id}`, `/{id}/html`,
+  `/{id}/files` to `public_demo` runs unless unlocked (`verify_token` on `cv_full_mode`); a private run
+  **404s** when locked (don't leak ids). `is_public`/`cleanup_runs` (`api/archive.py`) read the flags
+  from SQLite. **Exception — live-session grant (F-48):** `_viewable` also passes when a live in-memory
+  `Session` exists for the run id, so whoever just ran a job (a non-owner) can view their own
+  output/downloads until the session is GC'd by TTL (the friends-run-live case). Tradeoff: timestamped
+  run ids are guessable, so the grant is id-holder-wide during that window — fine for the demo; upgrade
+  to a per-run view token if it ever matters. Mutations `PATCH /{id}/meta` (company_name/keep/public_demo),
+  `DELETE /{id}`, `POST /cleanup`, and `POST /{id}/rerun` are `require_unlocked` (403). **Re-run
+  (SPEC_RERUN):** `POST /{id}/rerun` creates a *new* run pre-populated with the original's JD (read from
+  its durable `jd_raw.txt`), carries `job_radar_source` forward (so the Phase-3 callback fires as for a
+  fresh run, §5), and records `rerun_of` (write-once in the creation row). Retention helpers in
+  `api/archive.py` (`cleanup_runs` ages by the run-id timestamp, not mtime); auto-cleanup runs on startup
+  (`main.py` lifespan) **only when `RUN_RETENTION_DAYS` is set** — unset ⇒ off, so the test client never
+  deletes real runs. (`api/run_meta.py` remains for pre-Phase-3 sidecar reads via the fallback.)
 - `hitl.py` (`/api/runs/{id}/hitl`) — resume a paused run with the human's decision
   (a single action dict → `Session.submit_hitl`). Shares the `/api/runs` prefix with
   `runs.py`; FastAPI merges them. Action shapes per checkpoint: SPEC §12.3 / F-31.

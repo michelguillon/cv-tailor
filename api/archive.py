@@ -1,33 +1,29 @@
-"""api/archive.py — read completed runs from outputs/<run_id>/ for replay/showcase.
+"""api/archive.py — filesystem helpers for run output dirs (path safety, downloads, retention).
 
-A run's durable record is its output directory (checkpoints + run_log.jsonl +
-cv_final.*), written identically by CLI and UI runs. This reads them back — the same
-data the CLI `replay` command surfaces — so the UI can browse and re-view any past
-run (including the preserved no-spend demo runs) without re-spending. Read-only.
+A run's durable record is its output directory (checkpoints + run_log.jsonl + cv_final.md),
+written identically by CLI and UI runs. Since Phase 3 the run **list** and **detail** are served
+from SQLite (`tailor/db.py`) via `GET /api/runs` and `GET /api/runs/{id}`, so the old
+filesystem-scan `list_runs`/`run_detail` were retired. What remains here is the on-disk plumbing the
+API still needs: path-safe run-dir resolution, artifact downloads, deletion, and retention cleanup.
+The visibility flags (`public_demo`/`keep`) now live in SQLite, so `is_public`/`cleanup_runs` read
+them via `db.get_run_creation_meta` (which falls back to the `run_meta.json` sidecar for a
+pre-Phase-3 run).
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from api.run_meta import created_at_from_id, read_meta
-from tailor.audit import read_entries
-from tailor.phases.phase6_output import summary_card
+from api.run_meta import created_at_from_id
+from tailor import db
 
-__all__ = ["list_runs", "run_detail", "run_file", "delete_run", "cleanup_runs",
+__all__ = ["run_file", "delete_run", "cleanup_runs",
            "is_public", "run_dir_if_exists", "retention_days_env"]
 
 DOWNLOADABLE = {"cv_final.md", "cv_final.html"}
-
-# Owner-only fields blanked from the redacted public view (§12.9 — public ≠ full metadata).
-# job_radar_source/_assessment/_extraction are owner-only: they link to a personal job-search
-# tool and the owner's private review of the role (Integration §5.4 / SPEC §12.12).
-_REDACTED = ("cost_estimated_usd", "cost_breakdown", "created_at", "unsupported_claims",
-             "job_radar_source", "job_radar_assessment", "job_radar_extraction")
 
 
 def _run_dir(output_dir: str | Path, run_id: str) -> Path | None:
@@ -47,111 +43,14 @@ def run_dir_if_exists(output_dir: str | Path, run_id: str) -> Path | None:
     return run_dir
 
 
-def _footer(run_dir: Path) -> dict:
-    for entry in reversed(read_entries(run_dir / "run_log.jsonl")):
-        if entry.get("type") == "run_complete":
-            return entry
-    return {}
-
-
-def _summary(run_dir: Path) -> dict:
-    footer = _footer(run_dir)
-    role_title = outcome = fit_score = None
-    p0_company = None
-    p0 = run_dir / "phase0_jd_analysis.json"
-    if p0.exists():
-        p0_data = json.loads(p0.read_text(encoding="utf-8"))
-        role_title = p0_data.get("role_title")
-        p0_company = p0_data.get("company_name")     # Phase-0 inferred name (D-40 / F-47)
-    p1 = run_dir / "phase1_fit_assessment.json"
-    if p1.exists():
-        fit = json.loads(p1.read_text(encoding="utf-8"))
-        outcome = fit.get("outcome")
-        fit_score = fit.get("overall_fit_score")
-    # Summary card (D-34): derive from the footer's grounded_coverage + fabrication_flags
-    # via the same helper Phase 6 uses (single source of truth, F-43). Old runs whose
-    # footer predates these fields → card numbers are None (the UI degrades gracefully).
-    grounded = footer.get("grounded_coverage")
-    unsupported = footer.get("fabrication_flags")
-    card = summary_card(outcome or "", fit_score, grounded, unsupported or 0)
-    meta = read_meta(run_dir)                       # visibility/retention sidecar (D-40)
-    # Company precedence (F-47): the owner's manual/edited value wins; else the Phase-0
-    # inferred name from the JD; else None → the UI shows "Unknown company".
-    company = meta["company_name"] or p0_company
-    return {
-        "run_id": run_dir.name,
-        "created_at": created_at_from_id(run_dir.name),
-        "company_name": company,
-        "mode": footer.get("mode"),
-        "role_title": role_title,
-        "outcome": outcome,
-        "fit_score": fit_score,
-        "iterations": footer.get("iterations_run"),
-        "cost_estimated_usd": footer.get("total_estimated_usd"),
-        "cost_breakdown": footer.get("cost_breakdown_estimated_usd"),
-        "grounded_coverage": grounded,
-        "unsupported_claims": unsupported,
-        "status": card["status"] if outcome is not None else None,
-        "fit_band": card["fit_band"] if fit_score is not None else None,
-        "keep": meta["keep"],
-        "public_demo": meta["public_demo"],
-        "job_radar_source": meta.get("job_radar_source"),   # Integration §5.2 (owner-only, redacted)
-        # Assessment-context enrichment (SPEC §12.12) — owner-only, redacted in the public view.
-        "job_radar_assessment": meta.get("job_radar_assessment"),
-        "job_radar_extraction": meta.get("job_radar_extraction"),
-        "rerun_of": meta.get("rerun_of"),                   # SPEC_RERUN §3.2 — original run id, or None
-        "has_md": (run_dir / "cv_final.md").exists(),
-        "has_html": (run_dir / "cv_final.html").exists(),
-    }
-
-
-def _redact(summary: dict) -> dict:
-    """Blank owner-only fields for the public view (curated demo runs, §12.9)."""
-    return {**summary, **{k: None for k in _REDACTED}}
-
-
 def is_public(output_dir: str | Path, run_id: str) -> bool:
-    """Whether a run is marked public demo (so it's viewable without an unlock)."""
+    """Whether a run is marked public demo (so it's viewable without an unlock). Since Phase 3 the
+    `public_demo` flag lives in SQLite (`PATCH` writes it there); read via `db.get_run_creation_meta`
+    (sidecar fallback for a pre-Phase-3 run). A hot path (called per `_viewable` check)."""
     run_dir = _run_dir(output_dir, run_id)
     if run_dir is None or not (run_dir / "run_log.jsonl").exists():
         return False
-    return read_meta(run_dir)["public_demo"]
-
-
-def list_runs(output_dir: str | Path = "outputs", *, include_private: bool = True,
-              redact: bool = False) -> list[dict]:
-    """Run summaries, newest first (by directory name = timestamped id).
-
-    `include_private=False` returns only `public_demo` runs (the public view); `redact=True`
-    blanks owner-only fields (cost, created_at, grounding internals) — §12.9 / D-40."""
-    base = Path(output_dir)
-    if not base.is_dir():
-        return []
-    dirs = sorted([d for d in base.iterdir() if d.is_dir() and (d / "run_log.jsonl").exists()],
-                  key=lambda d: d.name, reverse=True)
-    out = []
-    for d in dirs:
-        s = _summary(d)
-        if not include_private and not s["public_demo"]:
-            continue
-        out.append(_redact(s) if redact else s)
-    return out
-
-
-def run_detail(output_dir: str | Path, run_id: str) -> dict | None:
-    """Full replay payload: summary + per-iteration scores + the reasoning trace."""
-    run_dir = _run_dir(output_dir, run_id)
-    if run_dir is None or not (run_dir / "run_log.jsonl").exists():
-        return None
-    detail = _summary(run_dir)
-    iters = sorted(run_dir.glob("iteration_*.json"), key=lambda p: int(p.stem.split("_")[1]))
-    detail["iteration_scores"] = [json.loads(p.read_text(encoding="utf-8")) for p in iters]
-    detail["reasoning"] = [
-        e for e in read_entries(run_dir / "run_log.jsonl") if e.get("type") != "run_complete"
-    ]
-    md = run_dir / "cv_final.md"
-    detail["cv_md"] = md.read_text(encoding="utf-8") if md.exists() else None
-    return detail
+    return bool(db.get_run_creation_meta(run_id, output_dir)["public_demo"])
 
 
 def run_file(output_dir: str | Path, run_id: str, name: str) -> Path | None:
@@ -205,7 +104,7 @@ def cleanup_runs(output_dir: str | Path, max_age_days: float,
     for d in base.iterdir():
         if not (d.is_dir() and (d / "run_log.jsonl").exists()):
             continue
-        meta = read_meta(d)
+        meta = db.get_run_creation_meta(d.name, output_dir)   # keep/public_demo in SQLite since Phase 3
         if meta["keep"] or meta["public_demo"]:
             continue
         created = created_at_from_id(d.name)

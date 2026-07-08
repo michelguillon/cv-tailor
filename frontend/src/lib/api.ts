@@ -199,39 +199,9 @@ export interface JobRadarPrefill {
   assessment?: JobRadarAssessment | null;   // owner's review (SPEC §12.12) — owner-only panel
 }
 
-export interface ArchiveRun {
-  run_id: string;
-  created_at: string | null;        // run-id timestamp (null in the redacted public view)
-  job_radar_source?: JobRadarSource | null;   // Integration §5.2 (owner-only; redacted public)
-  job_radar_assessment?: JobRadarAssessment | null;   // SPEC §12.12 (owner-only; redacted public)
-  job_radar_extraction?: Record<string, unknown> | null;   // SPEC §12.12 (owner-only; redacted)
-  company_name: string | null;      // editable label; UI shows "Unknown company" when null
-  mode: string | null;
-  role_title: string | null;
-  outcome: string | null;
-  fit_score: number | null;
-  iterations: number | null;
-  cost_estimated_usd: number | null;
-  cost_breakdown?: Record<string, number> | null;
-  // Summary card (D-34): grounded coverage (F-38) + verifier flags (F-35) + derived status.
-  grounded_coverage: number | null;
-  unsupported_claims: number | null;
-  status: string | null;
-  fit_band: string | null;
-  // Run visibility & retention (D-40/§12.9): orthogonal to `mode`.
-  keep: boolean;
-  public_demo: boolean;
-  // SPEC_RERUN §3.2: the original run id when this run is a re-run; null/absent otherwise.
-  rerun_of?: string | null;
-  has_md: boolean;
-  has_html: boolean;
-}
-
-export interface RunDetail extends ArchiveRun {
-  iteration_scores: Array<Record<string, unknown>>;
-  reasoning: Array<Record<string, unknown>>;
-  cv_md: string | null;
-}
+// The ArchiveRun / RunDetail shapes (the retired /archive + /detail endpoints) were removed in
+// Phase 3 (SPEC_SQLITE_MIGRATION §6). The run list is RunV2 (GET /api/runs); the detail is
+// RunDetailV2 (GET /api/runs/{id}); the report HTML is on-demand (runHtmlUrl).
 
 // --- Phase 2: API-driven run detail (SPEC_SQLITE_MIGRATION §4.1) ------------- //
 
@@ -432,7 +402,6 @@ export const api = {
   submitHitl: (runId: string, body: HitlDecision) =>
     post<{ ok: boolean; status: string }>(`/runs/${encodeURIComponent(runId)}/hitl`, body),
   runStreamUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/stream`,
-  archiveRuns: () => get<ArchiveRun[]>("/runs/archive"),
   // Run visibility & retention (D-40/§12.9) — all owner-only (require the capability cookie).
   setRunMeta: (runId: string, meta: { company_name?: string | null; keep?: boolean; public_demo?: boolean }) =>
     patch<{ run_id: string; company_name: string | null; keep: boolean; public_demo: boolean }>(
@@ -445,8 +414,8 @@ export const api = {
   rerun: (runId: string, mode: string) =>
     post<{ run_id: string }>(`/runs/${encodeURIComponent(runId)}/rerun`, { mode }),
   cleanupRuns: () => post<{ removed: string[]; count: number; max_age_days: number }>("/runs/cleanup", {}),
-  runDetail: (runId: string) => get<RunDetail>(`/runs/${encodeURIComponent(runId)}/detail`),
-  reportUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/report`,
+  // The legacy runDetail (/detail) + reportUrl (/report static cv_final.html) were retired in Phase 3
+  // (SPEC_SQLITE_MIGRATION §6): use runDetailV2 (structured) + runHtmlUrl (on-demand report) below.
   fileUrl: (runId: string, name: string) =>
     `${BASE}/runs/${encodeURIComponent(runId)}/files/${encodeURIComponent(name)}`,
   // Phase 2 (§4): structured detail + per-tab data + on-demand HTML.

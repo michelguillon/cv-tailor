@@ -187,11 +187,15 @@ def test_end_to_end_produces_outputs_and_complete_log(run_demo):
     # all four model roles exercised in one run (mistral / claude+haiku / gpt)
     assert rec["mistral"] == 1 and rec["anthropic"] > 0 and rec["openai"] > 0
 
-    # submittable artefacts written
-    assert (out / "cv_final.md").exists() and (out / "cv_final.html").exists()
+    # submittable artefact written; the HTML report is NOT written at run time since Phase 3 —
+    # it regenerates on demand from the checkpoints (SPEC_SQLITE_MIGRATION §6).
+    assert (out / "cv_final.md").exists() and not (out / "cv_final.html").exists()
     md = (out / "cv_final.md").read_text(encoding="utf-8")
     assert "alpha" in md and "## " in md            # tailored content + assembled headings
-    assert (out / "cv_final.html").read_text(encoding="utf-8").lstrip().startswith("<!")
+    from tailor.config import load_config
+    from tailor.phases.phase6_output import regenerate_html
+    report = regenerate_html(out, config=load_config())
+    assert report.lstrip().startswith("<!")         # on-demand report renders from disk
 
     # summary reflects a clean single-iteration demo run
     assert summary["outcome"] == "strong"
@@ -244,7 +248,10 @@ def test_verification_gate_surfaces_flags_in_summary_and_report(run_demo, monkey
     out = Path(summary["output_dir"])
 
     assert summary["fabrication_flags"] >= 1
-    html = (out / "cv_final.html").read_text(encoding="utf-8")
+    # The flag reaches the on-demand report's Grounding tab (regenerated from the run_log, Phase 3).
+    from tailor.config import load_config
+    from tailor.phases.phase6_output import regenerate_html
+    html = regenerate_html(out, config=load_config())
     assert "fintech leadership" in html and "Grounding" in html
     events = {e.get("event") for e in read_entries(out / "run_log.jsonl")}
     assert "unsupported_claim" in events and "flags_raised" in events

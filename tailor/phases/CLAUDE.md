@@ -100,17 +100,20 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   section (or static). Jinja `templates/output.html`, **7 tabs (Fit/CV/Grounding/
   Changes/Scores/Reasoning/JD)** + a **sticky summary card** (D-34/F-43); word-level
   diffs via `difflib`. `cv_final.md` is the clean artefact.
-  **Split for the API (SQLite migration Phase 2, §12.13):** `generate_output` = `build_report_context`
-  (pure, the report's data shape) + `render_report` (Jinja → HTML string) + file writes.
-  `regenerate_html(run_dir)` reconstructs the inputs from a run's checkpoints
-  (`reconstruct_report_inputs` — the promoted `tmp/sweep/regen_report.py`, F-40) and re-renders on
-  demand — this backs `GET /api/runs/{id}/html` and is what lets Phase 3 retire the run-time
-  `cv_final.html` write. `section_change`/`section_change_from_disk` back the Changes-tab diff endpoint;
-  `summary_card` is the single source of truth for the card (the archive + the API detail both reuse it).
+  **Split for the API (SQLite migration §12.13):** `generate_output` (Phase 3, F-60) writes **only
+  `cv_final.md`** — **no run-time `cv_final.html`**; the report is `build_report_context` (pure, the
+  report's data shape) + `render_report` (Jinja → HTML string). `regenerate_html(run_dir)` reconstructs
+  the inputs from a run's checkpoints (`reconstruct_report_inputs` — the promoted `tmp/sweep/regen_report.py`,
+  F-40) and re-renders **on demand** behind `GET /api/runs/{id}/html` — the only HTML path now. The
+  header badge's `_job_radar_source` reads the provenance **sidecar-first** (immutable; a pre-Phase-3
+  run), else `db.get_run_creation_meta` (a Phase-3 run). `section_change`/`section_change_from_disk` back
+  the Changes-tab diff endpoint; `summary_card` is the single source of truth for the card (the API detail
+  reuses it).
 - **Summary card + JD tab (D-34/D-37/F-43):** the card reuses signals the pipeline
   already produces — **no extra LLM pass**. `summary_card(outcome, fit_score,
   grounded_coverage, unsupported)` is the single source of truth for the fit band +
-  status (`api/archive.py` imports it, so the web card and HTML card can't drift).
+  status (the API detail endpoint reuses it via `phase6.summary_card`, so the web card and HTML card
+  can't drift).
   Grounded coverage = the final iteration's source-grounded `keyword_coverage` (F-38);
   unsupported = the verifier's flag count (F-35). `generate_output(jd_raw=…)` feeds the
   JD tab; `run.py` persists `jd_raw.txt` and puts `grounded_coverage`/`fabrication_flags`

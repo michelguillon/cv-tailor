@@ -24,8 +24,7 @@ import traceback
 from pathlib import Path
 
 from api.job_radar import cv_tailor_base_url, post_results_to_job_radar, service_key
-from api.run_meta import read_meta
-from tailor import telemetry
+from tailor import db, telemetry
 from tailor.audit import AuditLogger, utc_now_iso
 from tailor.config import cv_display_name, load_config, resolve_run_config
 from tailor.phases import phase1_fit_assessment, phase4_hitl
@@ -268,12 +267,11 @@ def _link_back_to_job_radar(session, summary: dict, output_dir: str) -> None:
     the run came from Job Radar AND `JOB_RADAR_SERVICE_KEY` is set (opt-in by config). Emits a
     single `job_radar_linked` SSE event ({ok}) so the timeline can show ✓/⚠. Never raises — a
     failed callback must not affect run completion (`run_complete` has already fired)."""
-    run_dir = Path(output_dir) / session.run_id
-    meta = read_meta(run_dir)
+    meta = db.get_run_creation_meta(session.run_id, output_dir)   # SQLite creation row (sidecar fallback)
     jr = meta.get("job_radar_source")
     if not jr or not jr.get("job_id") or not service_key():
         return                                            # Phase-2 behaviour: no callback, no event
-    metrics = _callback_metrics(run_dir, summary)
+    metrics = _callback_metrics(Path(output_dir) / session.run_id, summary)
     ok = post_results_to_job_radar(                       # never raises; False on any failure
         jr["job_id"], session.run_id,
         output_link=f"{cv_tailor_base_url()}/runs/{session.run_id}",
@@ -304,12 +302,12 @@ def launch_run(store, session, jd_text, *, mode="demo", key=None, max_iterations
         rc = resolve_run_config(load_config(), mode=mode, key=key, max_iterations=max_iterations)
         hitl = SSEHITL(session, validation_model=rc.validation_model)
 
-    # Langfuse trace metadata: read the run's Job Radar provenance once up front (write-once at
-    # run creation, Integration §5.2). The durable run dir is under output_dir (where the pipeline
-    # writes checkpoints + run_meta.json), NOT store.base_dir (the session tmp holding only jd.txt).
+    # Langfuse trace metadata: read the run's Job Radar provenance once up front (write-once at run
+    # creation, Integration §5.2). Since Phase 3 this comes from the SQLite creation row
+    # (get_run_creation_meta, sidecar fallback), written by start_run/rerun before this thread spawns.
     # Absent ⇒ None ⇒ a plain cv_tailor_run trace.
     run_dir = Path(output_dir) / session.run_id
-    job_radar_source = read_meta(run_dir).get("job_radar_source") or None
+    job_radar_source = db.get_run_creation_meta(session.run_id, output_dir).get("job_radar_source")
 
     def target() -> None:
         try:

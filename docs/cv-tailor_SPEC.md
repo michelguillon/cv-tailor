@@ -2120,7 +2120,7 @@ dict**, so `start_run` instead derives the stored value from the raw response vi
 and robust to the mock. `fetch_job` still embeds the typed models (the documented contract / the
 `test_fetch_job_parses_*` tests); the two paths share `parse_assessment`.
 
-### 12.13 — SQLite run store + dynamic report (Phases 1–2 built, F-59; Phase 3 planned)
+### 12.13 — SQLite run store + dynamic report (Phases 1–3 built, F-59/F-60)
 
 Full design: **`docs/SPEC_SQLITE_MIGRATION.md`**. A queryable SQLite run store at
 `data/cv_tailor.db` (`tailor/db.py`) that converges cv-tailor's storage with Job Radar's
@@ -2179,6 +2179,22 @@ discipline as the Job Radar storage migration. (Migration spec §6.)
   `company_name` as expected drift (mutable sidecar). Deploy: `git pull` → `up -d --force-recreate backend`
   → `migrate_runs` (backfills the new columns) → `reconcile_runs` CLEAN.
 
-**Phase 3 (planned).** Retire static `cv_final.html` generation (on-demand only), make SQLite the source of
-truth for visibility flags (`PATCH` writes SQLite), drop the `run_meta.json` write. `cv_final.md` (the
-submission artifact) and `run_log.jsonl` (the audit trail) are never touched.
+**Phase 3 (built, F-60) — the irreversible step.** Retires the old write paths:
+- **`cv_final.html` is no longer generated at run time** (`generate_output` writes only `cv_final.md`);
+  the report HTML regenerates on demand from the checkpoints at `GET /api/runs/{id}/html`, so a new
+  report field never needs an HTML rebuild. Existing `cv_final.html` files stay as snapshots (not deleted).
+- **SQLite is the source of truth for run metadata.** The `run_meta.json` sidecar is **no longer written**
+  on new runs; creation-time metadata that is not reconstructable from disk (company label, Job Radar
+  context, `rerun_of`, visibility flags) is written to a partial `status='running'` row at run creation
+  (`db.record_run_start`, from `start_run`/`rerun_run`) and preserved through the disk-derived completion
+  UPSERT via `COALESCE`. `PATCH /{id}/meta` writes SQLite (`db.update_run_meta`). `db.get_run_creation_meta`
+  (SQLite-first, sidecar fallback for pre-Phase-3 runs) is the one reader at every seam — including
+  `archive.is_public`/`cleanup_runs`, which gate visibility + retention on the flags.
+- Job Radar context (`source`/`assessment`/`extraction`) now lives in SQLite as JSON columns.
+- `reconcile_runs` reworked: creation-owned fields have no disk source for a Phase-3 run, so they are
+  compared only when a sidecar still exists (pre-Phase-3), reported as drift, never gating; a
+  `status='running'` row is exempt from the orphan check.
+- Legacy `GET /{id}/detail`, `/{id}/report`, `/archive` (+ `archive.list_runs`/`run_detail` and the dead
+  `api.archiveRuns`/`runDetail`/`reportUrl` client methods) retired — unused by the frontend since Phase 2.
+- `cv_final.md` (the submission artifact), `run_log.jsonl` (the audit trail), and `outputs/<id>/sections/`
+  are never touched. Pre-Phase-3 `run_meta.json` sidecars are kept (read by `migrate_runs`/the fallback).

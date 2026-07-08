@@ -11,12 +11,21 @@ run, and exits non-zero on any *real* divergence so it can gate a deploy. For ea
 builder the write path uses (``tailor/db.build_run_row``) and diffs it against the stored row —
 so a row builder bug, a missed run, or an orphaned row all surface.
 
-Two field classes are *not* hard failures (reported separately, never gate):
-- ``public_demo`` / ``keep`` — mutable visibility flags. In Phase 1/2, ``PATCH /{id}/meta``
-  writes only the sidecar, so SQLite's copy goes stale after a post-completion toggle (known;
-  Phase 3 makes PATCH write SQLite). Reported as **drift (expected)**.
-- ``convergence_reason`` — persisted to no checkpoint (it rides the in-memory summary on the
-  live path; NULL for migrated runs). The disk rebuild can't reproduce it, so it's **skipped**.
+Since Phase 3, the CREATION-owned fields have **no disk source** for a Phase-3 run (the
+``run_meta.json`` sidecar write is retired — they live only in the SQLite creation row). So the
+gate can only reconcile the **disk-derived completion** fields (fit / scores / cost / sections /
+iterations); the creation-owned fields are handled by field class:
+- **Creation-owned** (``public_demo`` / ``keep`` / ``company_name`` / ``rerun_of`` /
+  ``job_radar_job_id`` / ``job_radar_source`` / ``job_radar_assessment`` / ``job_radar_extraction``)
+  — compared **only for a pre-Phase-3 run that still has a sidecar** (the disk ground truth), and
+  even then reported as **drift**, never gated (``PATCH`` now writes SQLite not the sidecar, so a
+  post-write toggle legitimately diverges). For a Phase-3 run (no sidecar) they are **skipped** —
+  there is nothing on disk to rebuild them from (F-60).
+- ``convergence_reason`` — persisted to no checkpoint (rides the in-memory summary on the live
+  path; NULL for migrated runs). The disk rebuild can't reproduce it, so it's **skipped**.
+
+An in-flight (or hard-crashed) run shows a ``status='running'`` SQLite row with no disk footer to
+rebuild from; those are **exempt from the orphan check** (they are not stale/orphaned rows).
 
 Usage (inside the cli container)::
 
@@ -32,10 +41,11 @@ from pathlib import Path
 
 from tailor import db
 
-# Fields whose disk-vs-SQLite difference is expected, not a bug (see module docstring).
-# public_demo/keep/company_name are mutable sidecar state (PATCH writes the sidecar, not SQLite,
-# until Phase 3), so SQLite can lag until the next write/migration.
-DRIFT_OK = ("public_demo", "keep", "company_name")
+# Creation-owned fields (SPEC_SQLITE_MIGRATION Phase 3 §6c): written at run creation / by PATCH, no
+# disk source once the sidecar write is retired. Compared only when a sidecar still exists (pre-Phase-3
+# run) and then reported as drift, never gated; skipped entirely for a sidecar-less Phase-3 run.
+CREATION_OWNED = ("public_demo", "keep", "company_name", "rerun_of", "job_radar_job_id",
+                  "job_radar_source", "job_radar_assessment", "job_radar_extraction")
 SKIP = ("convergence_reason",)         # DB-only; no checkpoint to rebuild from
 
 
@@ -71,19 +81,29 @@ def reconcile(output_dir: str | Path = "outputs") -> dict:
             "SELECT run_id, COUNT(*) FROM run_iterations GROUP BY run_id").fetchall()}
 
     missing = sorted(set(expected) - set(stored))        # on disk, recordable, not in SQLite
-    orphan = sorted(set(stored) - set(expected))         # in SQLite, no recordable disk run
+    # A status='running' SQLite row is in-flight (or hard-crashed) — no disk footer to rebuild from,
+    # so it's expected to be absent from `expected`; exempt it from the orphan check (§6, F-60).
+    orphan = sorted(r for r in (set(stored) - set(expected))
+                    if stored[r].get("status") != "running")
     mismatches: list[dict] = []                          # real field divergences (gate)
-    drift: list[dict] = []                               # expected sidecar staleness (info)
+    drift: list[dict] = []                               # expected creation-owned divergence (info)
 
     for run_id in sorted(set(expected) & set(stored)):
         exp, got = expected[run_id], stored[run_id]
+        has_sidecar = (output_dir / run_id / "run_meta.json").exists()
         for col in db.RUN_COLUMNS:
             if col in SKIP:
                 continue
+            if col in CREATION_OWNED:
+                # No disk source for a Phase-3 run (no sidecar) → nothing to reconcile against.
+                if not has_sidecar or exp.get(col) == got.get(col):
+                    continue
+                drift.append({"run_id": run_id, "field": col,
+                              "disk": exp.get(col), "sqlite": got.get(col)})
+                continue
             if exp.get(col) != got.get(col):
-                rec = {"run_id": run_id, "field": col,
-                       "disk": exp.get(col), "sqlite": got.get(col)}
-                (drift if col in DRIFT_OK else mismatches).append(rec)
+                mismatches.append({"run_id": run_id, "field": col,
+                                   "disk": exp.get(col), "sqlite": got.get(col)})
         if section_counts.get(run_id, 0) != sec_have.get(run_id, 0):
             mismatches.append({"run_id": run_id, "field": "section_count",
                                "disk": section_counts.get(run_id, 0),
@@ -129,8 +149,8 @@ def main(argv: list[str] | None = None) -> int:
         for m in r["mismatches"]:
             print(f"    {m['run_id']}  {m['field']}: disk={m['disk']!r}  sqlite={m['sqlite']!r}")
     if r["drift"]:
-        print(f"[info] {len(r['drift'])} expected drift (mutable flag PATCHed after the SQLite "
-              f"write — Phase 3 propagates PATCH -> SQLite):")
+        print(f"[info] {len(r['drift'])} expected drift (creation-owned field on a pre-Phase-3 run "
+              f"whose SQLite value now diverges from its stale sidecar — PATCH writes SQLite):")
         for d in r["drift"]:
             print(f"    {d['run_id']}  {d['field']}: disk={d['disk']!r}  sqlite={d['sqlite']!r}")
     if args.verbose:

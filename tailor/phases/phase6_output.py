@@ -250,18 +250,24 @@ def _build_reasoning(ctx) -> list[dict]:
 
 
 def _job_radar_source(output_dir: Path) -> dict | None:
-    """The Job Radar provenance, if this run came from a Job Radar handoff (Integration §5.2).
-
-    Read defensively from the `run_meta.json` sidecar — an API-layer file (absent for CLI runs),
-    so this is read straight off disk with no dependency on `api/` (which itself imports `tailor`)."""
-    path = output_dir / "run_meta.json"
-    if not path.exists():
-        return None
+    """The Job Radar provenance for the report header badge, if this run came from a Job Radar
+    handoff (Integration §5.2). The value is write-once/immutable, so read **sidecar-first**: a
+    pre-Phase-3 (or CLI) run reads it straight off `run_meta.json` with no DB open. Since Phase 3 a
+    new run has no sidecar → fall back to the SQLite creation row. Best effort — never raise into
+    report generation (no source anywhere → None → no badge)."""
+    sidecar = output_dir / "run_meta.json"
+    if sidecar.exists():                               # pre-Phase-3 run: the sidecar is authoritative
+        try:
+            meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            src = meta.get("job_radar_source") if isinstance(meta, dict) else None
+        except (json.JSONDecodeError, OSError):
+            src = None
+        return src if isinstance(src, dict) else None
+    from tailor import db                              # Phase-3 run: the creation row in SQLite
     try:
-        meta = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        src = db.get_run_creation_meta(output_dir.name, output_dir.parent).get("job_radar_source")
+    except Exception:
         return None
-    src = meta.get("job_radar_source") if isinstance(meta, dict) else None
     return src if isinstance(src, dict) else None
 
 
@@ -333,25 +339,22 @@ def render_report(context: dict, *, template_dir: str | Path = TEMPLATE_DIR) -> 
 def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
                     config, template_dir: str | Path = TEMPLATE_DIR,
                     source_docx=None, verification_flags=None, jd_raw: str = "") -> dict:
-    """Write cv_final.md + cv_final.html (+ cv_final.docx when `source_docx` is given,
-    the --docx stretch). `verification_flags` ({sid: [CritiqueItem]}) feeds the report's
-    Grounding tab (F-35); `jd_raw` is the raw JD for the JD tab (D-37). Returns
-    {'md', 'html'[, 'docx']} paths."""
+    """Write cv_final.md (+ cv_final.docx when `source_docx` is given, the --docx stretch).
+
+    The report HTML is **no longer written at run time** (SPEC_SQLITE_MIGRATION Phase 3): it is
+    regenerated on demand from the run's checkpoints via `regenerate_html` behind
+    `GET /api/runs/{id}/html`, so a new field never needs an HTML rebuild. `verification_flags`
+    ({sid: [CritiqueItem]}) still feeds that on-demand report's Grounding tab (F-35) via the
+    reconstructed run_log; `jd_raw` is persisted separately (jd_raw.txt) by the pipeline. Returns
+    {'md'[, 'docx']} paths."""
     cv_md = assemble_markdown(ctx, manifest, config)
     md_path = ctx.output_dir / "cv_final.md"
     md_path.write_text(cv_md, encoding="utf-8")
 
-    context = build_report_context(ctx, manifest, jd, fit, final_rubric, iterations,
-                                   config=config, verification_flags=verification_flags,
-                                   jd_raw=jd_raw, cv_md=cv_md)
-    html_out = render_report(context, template_dir=template_dir)
-    html_path = ctx.output_dir / "cv_final.html"
-    html_path.write_text(html_out, encoding="utf-8")
-
     ctx.audit.log_event("phase6_output", "output_written",
-                        f"cv_final.md ({len(cv_md.split())} words) + cv_final.html")
+                        f"cv_final.md ({len(cv_md.split())} words); HTML report on demand (Phase 3)")
 
-    out = {"md": str(md_path), "html": str(html_path)}
+    out = {"md": str(md_path)}
     if source_docx is not None:                      # --docx stretch (clean CV only)
         from tailor.phases import phase6_docx
         docx_path = phase6_docx.write_cv_docx(cv_md, source_docx, ctx.output_dir / "cv_final.docx")

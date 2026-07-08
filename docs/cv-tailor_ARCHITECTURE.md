@@ -133,7 +133,8 @@ Phase 5  Haiku Validation    Formatting · length check · grounding report
                               ⏸ HITL #3 — binary Approve/Reject only
 
 Phase 6  Output Generation   Section assembly by position · role_line re-attached
-                              cv_final.html (6 tabs) · cv_final.md · run_log.jsonl
+                              cv_final.md · run_log.jsonl · SQLite row
+                              (report HTML regenerated on demand at /{id}/html, §12.13)
 ```
 
 **Termination table (F-16 validated):**
@@ -329,9 +330,9 @@ Phase 5: formatting corrections + grounding report
   ↓ HITL #3
 Phase 6: section assembly (ordered by CVSection.position, role_line re-attached)
   → cv_final.md  (clean, for sending)
-  → cv_final.html (belt+braces; run detail UI is now API-driven React tabs, §12.13)
   → run_log.jsonl (audit trail, D-06: separate from context)
   → SQLite run store (data/cv_tailor.db) — structured metadata for the API (§12.13)
+  → report HTML regenerated on demand at GET /{id}/html (not written at run time, §12.13/F-60)
 ```
 
 ### Corpus ingestion
@@ -446,25 +447,34 @@ owner from running expensive operations or mutating state.
 **Run visibility and retention (D-40):**
 - Public visitors see only runs flagged `public_demo` (redacted metadata)
 - Owner (same capability cookie) sees all runs with full metadata + controls
-- Per-run mutable flags in `run_meta.json` sidecar: `public_demo`, `keep`,
-  `company_name` (orthogonal to `mode`)
+- Per-run mutable flags `public_demo`, `keep`, `company_name` (orthogonal to `mode`) live in
+  **SQLite** since Phase 3 (`db.update_run_meta`; was the `run_meta.json` sidecar through Phase 2)
 - `company_name` precedence (F-47): manual (run form / edit) → Phase-0 name
   inferred from the JD (`JDAnalysis.company_name`, no extra LLM call) → "Unknown company"
 - Private runs: filtered from list/detail (404, not 403 — run IDs not revealed)
 - Cleanup: startup-triggered only when `RUN_RETENTION_DAYS` env var set;
   `keep` and `public_demo` runs are protected; age from run_id, not mtime
 
-**Run store + API-driven report (SQLite migration, §12.13 / F-59 — Phases 1–2 deployed):**
+**Run store + API-driven report (SQLite migration, §12.13 / F-59/F-60 — Phases 1–3 deployed):**
 - Structured run metadata lives in **SQLite** (`data/cv_tailor.db`: `runs`/`run_sections`/
-  `run_iterations`), written at the `run_complete` event **alongside** the on-disk checkpoints +
-  `run_log.jsonl`, which remain the source of truth (SQLite is a queryable view; `tailor/db.py`).
+  `run_iterations`); `run_log.jsonl` + the on-disk checkpoints remain the audit trail + section
+  substrate. Since **Phase 3, SQLite is the source of truth for run metadata**: creation-time metadata
+  (company label, Job Radar context, `rerun_of`, visibility flags — not reconstructable from disk) is
+  written to a `status='running'` row at run creation (`db.record_run_start`) and preserved through the
+  disk-derived completion UPSERT; `PATCH /{id}/meta` writes SQLite (`db.update_run_meta`). The
+  `run_meta.json` sidecar is **no longer written** (pre-Phase-3 sidecars kept as a read fallback via
+  `db.get_run_creation_meta`). `is_public`/`cleanup_runs` read the flags from SQLite.
 - `GET /api/runs` is the SQLite-backed paginated run list (capability-aware); the run **detail**
   page renders **seven native React tabs** from `GET /api/runs/{id}` (+ `/sections/{sid}/diff`,
-  `/reasoning`, on-demand `/html`) — **no static-HTML iframe**. `cv_final.html` is still generated
-  at run time (belt + braces) but is no longer the UI surface; Phase 3 retires that generation.
-- Storage evolves via **dual-write → soak → reconcile** (`cli/migrate_runs.py` +
+  `/reasoning`, on-demand `/html`) — **no static-HTML iframe**. Since **Phase 3, `cv_final.html` is not
+  generated at run time**: the report regenerates on demand from the checkpoints at `/{id}/html`, so a
+  new field never needs an HTML rebuild. Old `cv_final.html` files stay as snapshots. The legacy
+  `/{id}/detail`, `/{id}/report`, `/archive` endpoints were retired.
+- Storage evolved via **dual-write → soak → reconcile** (`cli/migrate_runs.py` +
   `cli/reconcile_runs.py`); schema additions are ALTER-ed into an existing DB on open, and the
-  write path is an idempotent UPSERT that backfills them on re-migration.
+  write path is an idempotent UPSERT that backfills them on re-migration. Phase 3 (the irreversible
+  step) reworked reconcile: creation-owned fields are compared only against a surviving sidecar
+  (pre-Phase-3), reported as drift; `status='running'` rows are exempt from the orphan check.
 
 ---
 

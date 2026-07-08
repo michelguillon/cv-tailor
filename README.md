@@ -56,8 +56,10 @@ docker compose run --rm cli python -m corpus.ingest --cv-dir data/cvs/
 docker compose run --rm cli python -m tailor run --jd data/jd.txt --demo
 ```
 
-Outputs land in `outputs/<run_id>/`: `cv_final.html` (CV + changes + scores +
-reasoning tabs), `cv_final.md` (clean CV), and `run_log.jsonl` (audit trail).
+Outputs land in `outputs/<run_id>/`: `cv_final.md` (clean CV) and `run_log.jsonl`
+(audit trail); the interactive report (CV + changes + scores + reasoning tabs) is
+regenerated on demand from the run's checkpoints (`GET /api/runs/{id}/html`), and
+structured run metadata is stored in `data/cv_tailor.db` (SQLite).
 
 ## Web UI
 

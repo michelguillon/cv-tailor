@@ -412,6 +412,73 @@ what changed (if anything).*
 
 ---
 
+### F-60 — SQLite run store Phase 3 (irreversible): SQLite becomes the source of truth for creation-time metadata; the `run_meta.json` sidecar write + run-time `cv_final.html` are retired
+
+**What.** Built Phase 3 of the SQLite migration (`docs/SPEC_SQLITE_MIGRATION.md §6`) — the one
+**irreversible** step, which retires the old write paths. Two changes: (1) **`cv_final.html` is no
+longer written at run time** (`phase6_output.generate_output` writes only `cv_final.md`); the report
+HTML is regenerated on demand from the checkpoints via `regenerate_html` behind `GET /api/runs/{id}/html`,
+so a new report field never needs an HTML rebuild. (2) **SQLite is the source of truth for run
+metadata**: the `run_meta.json` sidecar is no longer written on new runs, and `PATCH /{id}/meta`
+writes SQLite (`db.update_run_meta`). Recorded as SPEC §12.13 (Phase 3 built) + SPEC_SQLITE_MIGRATION
+Phase 3. Legacy `/{id}/detail`, `/{id}/report`, `/archive` endpoints (+ `archive.list_runs`/`run_detail`,
+`api.archiveRuns`/`runDetail`/`reportUrl`) retired — unused by the frontend since Phase 2.
+
+**The hard part — creation-time metadata has no disk source once the sidecar write is gone.**
+`run_meta.json` held CREATION-time state that is NOT reconstructable from the disk checkpoints:
+`company_name` (manual), `public_demo`/`keep`, `rerun_of`, and the Job Radar context
+(`job_radar_source`/`assessment`/`extraction`). Resolution: get it into SQLite at run **creation**
+via a new **`db.record_run_start`** (called from `start_run`/`rerun_run`) that writes a partial
+`status='running'` row with the creation-owned columns (the three Job Radar dicts stored as JSON TEXT,
+ALTER-ed in via `_ADDED_COLUMNS`). `record_run_complete` then UPSERTs the disk-derived completion
+columns **over** that row. The whole design turns on **not clobbering** the creation-owned columns
+with the disk-derived write.
+
+**The UPSERT COALESCE directions (subtle, and asymmetric on purpose).** The completion write preserves
+creation-owned columns with `COALESCE(runs.col, excluded.col)` — the creation value wins, the disk
+value only fills a NULL. This covers `company_name` (manual creation label wins; else the JD-inferred
+`p0.company_name` fills it), `rerun_of`, `job_radar_job_id`, and the three JSON columns. **But
+`public_demo`/`keep` stay plain `excluded`-wins** (NOT preserved): they are always `0` at completion
+(only a *post-run* PATCH ever sets `1`, and the run never completes again), so a disk write never
+clobbers a real value — **and** keeping them disk-driven lets a re-migration still *repair* the legacy
+Phase-1/2 sidecar→SQLite drift at the deploy (preserving them would freeze that drift instead).
+`convergence_reason` keeps its own `COALESCE(excluded, existing)` (live path supplies it; migration
+passes NULL). One helper, **`db.get_run_creation_meta`** (SQLite-first, `run_meta.json` sidecar
+fallback for pre-Phase-3 runs), replaced every `read_meta` at the seams: the Job Radar callback +
+telemetry (`runner`), the owner-gated detail + rerun (`runs`), and — critically — **`archive.is_public`
+and `archive.cleanup_runs`**, which read the mutable flags: had those kept reading the sidecar, a
+PATCH-to-public run would have become invisible and a `keep` run could have been auto-deleted (the
+task's field list didn't call these out — found by tracing every flag reader).
+
+**reconcile had to be reworked (§6e).** Its model is "rebuild the expected row from disk checkpoints
+and diff vs SQLite." Once the sidecar write is gone, the creation-owned fields have **no disk source**
+for a Phase-3 run, so they can't be reconciled that way. Resolution: reconcile compares creation-owned
+fields **only when a `run_meta.json` sidecar still exists** (a pre-Phase-3 run — the disk ground truth),
+and even then reports them as **drift**, never gating; for a sidecar-less Phase-3 run it **skips** them.
+And an in-flight/hard-crashed `status='running'` row (a creation row with no disk footer to rebuild
+from) is **exempt from the orphan check**. So the gate still reconciles the disk-derived completion
+fields (fit/scores/cost/sections/iterations) — the part that has a disk truth.
+
+**Decisions surfaced to the user (both confirmed).** (1) *Clean cut vs dual-write during the soak.*
+Dropping the sidecar write means new-run creation metadata lives **only** in SQLite during the soak —
+no disk fallback, and reconcile can't verify it for new runs. That is inherent to this being the
+irreversible phase; the safety net is the *Phase-2* reconcile that gates *this* deploy. Confirmed:
+clean cut (as the task specifies). (2) *Retire the dead legacy endpoints* — confirmed yes.
+
+**`cv_final.html` reversibility.** Stopping the run-time HTML write is itself fully reversible (the
+report reconstructs from checkpoints on demand), so it carries none of the metadata risk. Existing
+`cv_final.html` files in `outputs/` are left as snapshots (not deleted); `/{id}/files/cv_final.html`
+still downloads them for old runs, and `has_html` reflects file existence (False for new runs).
+
+**Validation.** Full suite green (376). New Phase-3 db tests: creation-row preservation through
+completion, `company_name` JD-fallback, PATCH→SQLite (+ backfill of a missing row), reconcile skips
+creation-owned without a sidecar, reconcile exempts running rows. API tests rewritten to assert SQLite
+(`get_run_creation_meta`) instead of the sidecar for start/rerun/Job-Radar/PATCH, and the detail
+redaction moved from `/detail` to `/{id}`. Frontend builds clean (tsc + vite) after removing the dead
+client methods/types and repointing the RunPage "Open report" link to `runHtmlUrl`.
+
+---
+
 ### F-59 — SQLite run store (SPEC_SQLITE_MIGRATION Phase 1): the write path reads on-disk checkpoints, not a `PipelineOutput`
 
 **What.** Built Phase 1 of the SQLite migration (`docs/SPEC_SQLITE_MIGRATION.md`): an additive,
