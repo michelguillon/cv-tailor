@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   RefreshCw, FileText, Trash2, Star, Globe, Pencil, AlertTriangle, Lock, LockOpen, Loader2,
 } from "lucide-react";
-import { api, type ArchiveRun } from "@/lib/api";
+import { api, type RunListRow } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,22 +12,31 @@ import { useUnlock } from "@/components/UnlockProvider";
 
 const FIT_LABEL: Record<string, string> = { strong: "Strong", partial: "Partial", low: "No fit" };
 
+// Fit band from the score (mirrors phase6.summary_card): ≥75% strong, ≥40% partial, else low.
+function fitBand(score: number | null): string | null {
+  if (score == null) return null;
+  const pct = score * 100;
+  return pct >= 75 ? "strong" : pct >= 40 ? "partial" : "low";
+}
+
 export function RunsPage({ onRerun }: { onRerun?: (runId: string) => void } = {}) {
-  const [runs, setRuns] = useState<ArchiveRun[]>([]);
+  const [runs, setRuns] = useState<RunListRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
-  const [editing, setEditing] = useState<ArchiveRun | null>(null); // company-name edit dialog
+  const [editing, setEditing] = useState<RunListRow | null>(null); // company-name edit dialog
 
   // Runs are capability-aware (D-40/§12.9): locked sessions get only curated public-demo
-  // runs (redacted); the owner (valid cookie) gets all runs + management controls.
+  // runs (redacted); the owner (valid cookie) gets all runs + management controls. The
+  // capability is enforced server-side on GET /api/runs (SQLite-backed, §4.2/§5.2).
   const { configured, unlocked, requestUnlock, lock } = useUnlock();
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      setRuns(await api.archiveRuns());
+      // limit high enough to show the whole archive for a personal tool (query caps at 200).
+      setRuns((await api.runsList({ limit: 200 })).runs);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -49,7 +58,7 @@ export function RunsPage({ onRerun }: { onRerun?: (runId: string) => void } = {}
   }
 
   // Owner actions — guarded by requestUnlock so an expired cookie re-prompts rather than 403s.
-  async function toggleMeta(r: ArchiveRun, patch: { keep?: boolean; public_demo?: boolean }) {
+  async function toggleMeta(r: RunListRow, patch: { keep?: boolean; public_demo?: boolean }) {
     if (!(await requestUnlock())) return;
     try {
       await api.setRunMeta(r.run_id, patch);
@@ -59,9 +68,9 @@ export function RunsPage({ onRerun }: { onRerun?: (runId: string) => void } = {}
     }
   }
 
-  async function onDelete(r: ArchiveRun) {
+  async function onDelete(r: RunListRow) {
     if (!(await requestUnlock())) return;
-    const label = r.company_name?.trim() || r.role_title || r.run_id;
+    const label = r.company_name?.trim() || r.jd_role_title || r.run_id;
     if (!window.confirm(`Delete the run for ${label}? This removes its output directory permanently.`))
       return;
     try {
@@ -137,33 +146,34 @@ export function RunsPage({ onRerun }: { onRerun?: (runId: string) => void } = {}
       <div className="space-y-2">
         {runs.map((r) => {
           const company = r.company_name?.trim() || "Unknown company";
-          const fitLabel = r.fit_band ? FIT_LABEL[r.fit_band] ?? r.fit_band : null;
+          const band = fitBand(r.fit_score);
+          const fitLabel = band ? FIT_LABEL[band] ?? band : null;
           const fitPct = r.fit_score != null ? `${Math.round(r.fit_score * 100)}%` : null;
           return (
             <Card key={r.run_id}>
               <CardContent className="flex flex-wrap items-center gap-x-3 gap-y-2 py-4 text-sm">
                 <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <span className="font-medium">
-                  {company} <span className="text-muted-foreground">— {r.role_title ?? r.run_id}</span>
+                  {company} <span className="text-muted-foreground">— {r.jd_role_title ?? r.run_id}</span>
                 </span>
                 {fitLabel && (
-                  <Badge variant={r.fit_band === "strong" ? "success" : "secondary"}>
+                  <Badge variant={band === "strong" ? "success" : "secondary"}>
                     {fitLabel}
                     {fitPct ? ` · ${fitPct}` : ""}
                   </Badge>
                 )}
                 {r.mode && <Badge variant="outline">{r.mode}</Badge>}
-                <span className="text-muted-foreground">{r.iterations ?? 0} iter(s)</span>
+                <span className="text-muted-foreground">{r.iterations_run ?? 0} iter(s)</span>
 
                 {/* Owner-only metadata + warnings */}
-                {unlocked && r.cost_estimated_usd != null && (
+                {unlocked && r.cost_usd != null && (
                   <span className="tabular-nums text-muted-foreground">
-                    ${r.cost_estimated_usd.toFixed(4)}
+                    ${r.cost_usd.toFixed(4)}
                   </span>
                 )}
-                {unlocked && r.created_at && (
+                {unlocked && r.ts && (
                   <span className="text-xs text-muted-foreground">
-                    {new Date(r.created_at).toLocaleDateString()}
+                    {new Date(r.ts).toLocaleDateString()}
                   </span>
                 )}
                 {unlocked && (r.unsupported_claims ?? 0) > 0 && (
@@ -271,7 +281,7 @@ function EditCompanyDialog({
   onError,
   requestUnlock,
 }: {
-  run: ArchiveRun;
+  run: RunListRow;
   onClose: () => void;
   onSaved: () => void;
   onError: (m: string) => void;

@@ -5,9 +5,11 @@ One-time (idempotent) migration per SPEC_SQLITE_MIGRATION §3: read every
 scores, draft manifest, and the ``run_meta.json`` sidecar) and populate
 ``data/cv_tailor.db``. Existing runs that predate a field get NULL for it (§7).
 
-Idempotent: rows are written with ``INSERT OR IGNORE`` so re-running never clobbers
-data already present (including rows the live write path has since refreshed). Runs
-with no recordable footer (crashed before completion) are skipped, not errored.
+Idempotent: rows are written with an UPSERT that syncs every disk-derived column from the
+on-disk checkpoints while preserving the live-only ``convergence_reason`` (a migration passes
+NULL for it, so an existing row keeps its value). Re-running is therefore also a **repair/sync**
+— it backfills columns added after a run was first recorded (§5.2). Runs with no recordable
+footer (crashed before completion) are skipped, not errored.
 
 The row mapping is the **same** code the live write path uses (``tailor/db.write_run``)
 — there is no second disk→row mapping to drift (F-59). Run it against real data
@@ -63,7 +65,7 @@ def migrate(output_dir: str | Path = "outputs", *, dry_run: bool = False) -> dic
     else:
         with db.get_db(output_dir) as conn:
             for d in dirs:
-                if db.write_run(conn, d, mode="IGNORE"):
+                if db.write_run(conn, d):        # idempotent UPSERT — syncs disk, keeps live-only fields
                     recorded += 1
                 else:
                     skipped += 1

@@ -345,6 +345,11 @@ export interface RunListRow {
   rerun_of: string | null;
   public_demo: boolean;
   jd_role_title: string | null;
+  company_name: string | null;
+  keep: boolean;
+  cost_usd: number | null;
+  unsupported_claims: number | null;
+  iterations_run: number | null;
 }
 
 export interface RunListResponse {

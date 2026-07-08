@@ -431,10 +431,11 @@ def test_archive_unknown_run_404(client, archive_dir):
 # GET /api/runs — SQLite-backed paginated list (SPEC_SQLITE_MIGRATION §4.2)     #
 # --------------------------------------------------------------------------- #
 
-def test_runs_list_from_sqlite(client, tmp_path, monkeypatch):
+def test_runs_list_from_sqlite(unlocked, tmp_path, monkeypatch):
     """The paginated list reads the SQLite store seeded from on-disk runs (newest first,
-    filterable). Degrades to empty (not 500) when the DB has no rows yet."""
+    filterable). `unlocked` = owner view (all runs). Degrades to empty (not 500) when empty."""
     from tailor import db
+    client = unlocked
     monkeypatch.delenv("CV_TAILOR_DB", raising=False)
     out = tmp_path / "outputs"
     monkeypatch.setattr(runs_router, "OUTPUT_DIR", str(out))
@@ -448,16 +449,32 @@ def test_runs_list_from_sqlite(client, tmp_path, monkeypatch):
     for rid in ("run_20260601_000000", "run_20260602_000000"):
         db.record_run_complete(rid, output_dir=str(out))
 
-    body = client.get("/api/runs").json()
+    body = client.get("/api/runs").json()                  # owner (unlocked) → all runs
     assert body["total"] == 2
     assert [r["run_id"] for r in body["runs"]] == [        # ts DESC
         "run_20260602_000000", "run_20260601_000000"]
     assert body["runs"][0]["public_demo"] is True and body["runs"][0]["jd_role_title"] == "Eng"
 
-    # pagination + public_only filter
+    # pagination + mode/public_only filters
     assert client.get("/api/runs?limit=1&offset=1").json()["runs"][0]["run_id"] == "run_20260601_000000"
     pub = client.get("/api/runs?public_only=true").json()
     assert pub["total"] == 1 and pub["runs"][0]["run_id"] == "run_20260602_000000"
+
+
+def test_runs_list_capability_aware(client, tmp_path, monkeypatch):
+    """A locked visitor sees only public-demo runs, with owner-only fields redacted (§12.9)."""
+    from tailor import db
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    monkeypatch.setattr(runs_router, "OUTPUT_DIR", str(out))
+    _make_run(out, "run_20260601_000000")                                  # private
+    _make_run(out, "run_20260602_000000", meta={"public_demo": True})      # public
+    for rid in ("run_20260601_000000", "run_20260602_000000"):
+        db.record_run_complete(rid, output_dir=str(out))
+
+    body = client.get("/api/runs").json()                  # locked (no owner cookie)
+    assert [r["run_id"] for r in body["runs"]] == ["run_20260602_000000"]  # only the public one
+    assert body["runs"][0]["cost_usd"] is None and body["runs"][0]["unsupported_claims"] is None
 
 
 # --------------------------------------------------------------------------- #

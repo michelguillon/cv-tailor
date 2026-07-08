@@ -73,7 +73,9 @@ CREATE TABLE IF NOT EXISTS runs (
     cost_usd            REAL,
     jd_role_title       TEXT,
     value_alignment     TEXT,
-    no_fit_reason       TEXT
+    no_fit_reason       TEXT,
+    company_name        TEXT,                       -- resolved display label (sidecar → JD-inferred)
+    unsupported_claims  INTEGER                     -- verifier fabrication-flag count (F-35)
 );
 
 CREATE TABLE IF NOT EXISTS run_sections (
@@ -117,8 +119,12 @@ RUN_COLUMNS = (
     "run_id", "ts", "mode", "status", "job_radar_job_id", "rerun_of", "public_demo",
     "keep", "fit_score", "fit_outcome", "coverage_score", "quality_score", "cvcm_enabled",
     "convergence_reason", "iterations_run", "cost_usd", "jd_role_title", "value_alignment",
-    "no_fit_reason",
+    "no_fit_reason", "company_name", "unsupported_claims",
 )
+
+# Columns added after the initial (deployed) schema — ALTER-ed in on demand for an existing DB
+# (SPEC_SQLITE_MIGRATION Phase 2 §5.2). New additions go here, never a destructive rebuild.
+_ADDED_COLUMNS = (("company_name", "TEXT"), ("unsupported_claims", "INTEGER"))
 SECTION_COLUMNS = (
     "run_id", "section_id", "section_type", "position", "static", "final_version",
     "converged", "keyword_coverage", "claude_quality", "gpt_quality", "selected_writer",
@@ -150,10 +156,15 @@ def db_path_for(output_dir: str | Path = "outputs") -> Path:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     """Create tables + indexes if absent (idempotent). WAL so the API can read while
-    the pipeline's worker thread writes at run completion."""
+    the pipeline's worker thread writes at run completion. Also ALTER-in any columns added
+    after the initial deployed schema (§5.2) so an existing DB evolves without a rebuild."""
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    have = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    for col, decl in _ADDED_COLUMNS:
+        if col not in have:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
 
 
 @contextmanager
@@ -332,6 +343,9 @@ def build_run_row(run_dir: Path, *, summary: dict | None = None) -> dict | None:
         "jd_role_title": p0.get("role_title"),
         "value_alignment": p1.get("value_alignment_notes"),
         "no_fit_reason": p1.get("no_fit_reason"),
+        # Display label (F-47 precedence: owner's manual/edited sidecar value → JD-inferred).
+        "company_name": meta.get("company_name") or p0.get("company_name"),
+        "unsupported_claims": footer.get("fabrication_flags"),
     }
 
 
@@ -385,35 +399,44 @@ def build_iteration_rows(run_dir: Path) -> list[dict]:
 # Write path                                                                   #
 # --------------------------------------------------------------------------- #
 
-def _insert(conn: sqlite3.Connection, table: str, columns, rows: list[dict], *,
-            mode: str = "REPLACE") -> None:
-    """INSERT OR <mode> the given dict rows, projecting each through ``columns``."""
+# UPSERT: sync every disk-derived column from the incoming row, but never lose the
+# live-only convergence_reason — COALESCE prefers the incoming value (live path supplies it)
+# and falls back to the stored one (a migration passes NULL, so the row keeps it). This makes
+# the live write and the migration idempotent AND lets a re-migration backfill columns added
+# later (§5.2) on rows written before they existed.
+_RUN_UPSERT = (
+    f"INSERT INTO runs ({', '.join(RUN_COLUMNS)}) "
+    f"VALUES ({', '.join('?' for _ in RUN_COLUMNS)}) "
+    "ON CONFLICT(run_id) DO UPDATE SET "
+    + ", ".join(f"{c} = excluded.{c}" for c in RUN_COLUMNS
+                if c not in ("run_id", "convergence_reason"))
+    + ", convergence_reason = COALESCE(excluded.convergence_reason, runs.convergence_reason)"
+)
+
+
+def _insert(conn: sqlite3.Connection, table: str, columns, rows: list[dict]) -> None:
     if not rows:
         return
     placeholders = ", ".join("?" for _ in columns)
-    sql = f"INSERT OR {mode} INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
+    sql = f"INSERT OR REPLACE INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
     conn.executemany(sql, [tuple(r[c] for c in columns) for r in rows])
 
 
-def write_run(conn: sqlite3.Connection, run_dir: Path, *, summary: dict | None = None,
-              mode: str = "REPLACE") -> bool:
-    """Write one run's three tables through an existing connection (single transaction
-    owned by the caller). ``mode`` is REPLACE for the live path (a re-run/retry overwrites)
-    and IGNORE for the migration (never clobber existing/newer rows). Returns False when
+def write_run(conn: sqlite3.Connection, run_dir: Path, *, summary: dict | None = None) -> bool:
+    """Write one run's three tables through an existing connection (caller owns the
+    transaction). Idempotent UPSERT: re-runs/retries and re-migrations converge to the
+    on-disk truth, preserving the live-only convergence_reason. Children are refreshed
+    (delete + reinsert) since a re-run may drop a section/iteration. Returns False when
     the run has no recordable row (incomplete / no audit trail)."""
     run_row = build_run_row(run_dir, summary=summary)
     if run_row is None:
         return False
     run_id = run_row["run_id"]
-    _insert(conn, "runs", RUN_COLUMNS, [run_row], mode=mode)
-    if mode == "REPLACE":
-        # Child rows have composite PKs, but a re-run could *remove* a section/iteration;
-        # clear then re-insert so stale children can't linger. (IGNORE mode for migration
-        # leaves any existing children untouched, matching its never-clobber contract.)
-        conn.execute("DELETE FROM run_sections WHERE run_id = ?", (run_id,))
-        conn.execute("DELETE FROM run_iterations WHERE run_id = ?", (run_id,))
-    _insert(conn, "run_sections", SECTION_COLUMNS, build_section_rows(run_dir), mode=mode)
-    _insert(conn, "run_iterations", ITERATION_COLUMNS, build_iteration_rows(run_dir), mode=mode)
+    conn.execute(_RUN_UPSERT, tuple(run_row[c] for c in RUN_COLUMNS))
+    conn.execute("DELETE FROM run_sections WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM run_iterations WHERE run_id = ?", (run_id,))
+    _insert(conn, "run_sections", SECTION_COLUMNS, build_section_rows(run_dir))
+    _insert(conn, "run_iterations", ITERATION_COLUMNS, build_iteration_rows(run_dir))
     return True
 
 
@@ -423,22 +446,23 @@ def record_run_complete(run_id: str, *, output_dir: str | Path = "outputs",
 
     Called at the ``run_complete`` event (``tailor/run.py``) for every run — CLI and
     API alike — alongside the existing on-disk checkpoints, which remain the source of
-    truth. ``INSERT OR REPLACE`` on ``runs`` makes re-runs/retries idempotent. Reads the
-    run's checkpoints from ``outputs/<run_id>/``; ``summary`` supplies the two
-    in-memory-only fields (``convergence_reason``/``converged``)."""
+    truth. The UPSERT makes re-runs/retries idempotent. Reads the run's checkpoints from
+    ``outputs/<run_id>/``; ``summary`` supplies the in-memory-only convergence_reason."""
     run_dir = Path(output_dir) / run_id
     with get_db(output_dir) as conn:
-        return write_run(conn, run_dir, summary=summary, mode="REPLACE")
+        return write_run(conn, run_dir, summary=summary)
 
 
 # --------------------------------------------------------------------------- #
 # Read path — paginated run list (API §4.2)                                    #
 # --------------------------------------------------------------------------- #
 
-# The subset of ``runs`` columns the list endpoint returns (§4.2).
+# The subset of ``runs`` columns the list endpoint returns (§4.2 + the §5.2 owner-management
+# fields: company_name, keep, cost_usd, unsupported_claims — so RunsPage needs no filesystem scan).
 _LIST_FIELDS = (
     "run_id", "ts", "mode", "status", "fit_outcome", "fit_score", "coverage_score",
     "quality_score", "job_radar_job_id", "rerun_of", "public_demo", "jd_role_title",
+    "company_name", "keep", "cost_usd", "unsupported_claims", "iterations_run",
 )
 
 
@@ -469,6 +493,7 @@ def query_runs(output_dir: str | Path = "outputs", *, limit: int = 20, offset: i
     for r in rows:
         d = dict(r)
         d["public_demo"] = bool(d["public_demo"])
+        d["keep"] = bool(d["keep"])
         runs.append(d)
     return {"runs": runs, "total": total, "limit": limit, "offset": offset}
 

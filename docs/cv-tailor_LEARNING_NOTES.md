@@ -457,6 +457,20 @@ makes `PATCH` write SQLite) and `convergence_reason` (no checkpoint) are reporte
 The gate matters most before Phase 3 — the only irreversible step (it retires the old write paths). Same
 discipline as the Job Radar storage migration.
 
+**Phase 2 (built) — API-driven run detail + schema evolution.** The report now renders from data, not a
+static `cv_final.html` iframe: `GET /api/runs/{id}` (structured, SQLite + disk) drives six native React
+tabs, with `/sections/{sid}/diff`, `/reasoning`, and on-demand `/html` (the F-40 regen helper promoted to
+a supported path; `phase6_output` split into `build_report_context` / `render_report` / `regenerate_html`
+so the run-time and on-demand paths can't drift). The run list moved onto the SQLite-backed `GET /api/runs`
+(capability-aware). Two decisions worth recording: (1) the run-list rewrite needed fields the lean §4.2
+projection lacked (`company_name`, `unsupported_claims`), so we **extended the schema** rather than regress
+the owner management or re-introduce filesystem scanning — the first post-deploy columns, which forced a
+schema-evolution story: declare in `SCHEMA` + `_ADDED_COLUMNS`, `ALTER` them in on open, and change the
+write path to an **idempotent UPSERT** that syncs disk-derived columns but keeps the live-only
+`convergence_reason` (`COALESCE(excluded, existing)`), making `migrate_runs` double as a repair/sync that
+backfills new columns. (2) Live session status moved `GET /{id}` → `/{id}/status` so the bare path is the
+structured detail per §4.1 (the frontend never called bare `/{id}`; only the test poller did).
+
 **The soak gate immediately earned its keep (Phase 1 deploy → gate passed 2026-07-07).** The deploy used a
 bare `docker compose up -d backend`, which does **not** recreate an already-running container when its
 config is unchanged — so the pre-deploy backend kept serving for 2.5 weeks and the live SQLite write path

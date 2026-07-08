@@ -132,7 +132,7 @@ def test_failed_run_recorded_with_status(tmp_path, monkeypatch):
     out = tmp_path / "outputs"
     make_run(out, "run_20260609_144918", footer=False, failed=True)
     with db.get_db(out) as conn:
-        assert db.write_run(conn, out / "run_20260609_144918", mode="IGNORE")
+        assert db.write_run(conn, out / "run_20260609_144918")
     row = db.query_runs(out)["runs"][0]
     assert row["status"] == "failed"
 
@@ -181,15 +181,16 @@ def test_replace_refreshes_and_prunes_children(tmp_path, monkeypatch):
         assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
 
 
-def test_ignore_preserves_existing(tmp_path, monkeypatch):
+def test_upsert_preserves_live_only_convergence_reason(tmp_path, monkeypatch):
     monkeypatch.delenv("CV_TAILOR_DB", raising=False)
     out = tmp_path / "outputs"
     make_run(out, "run_a", outcome="strong", iterations=[_iter(1)])
     db.record_run_complete("run_a", output_dir=out,
                            summary={"convergence_reason": "live_value"})
-    # Migration (IGNORE) must NOT clobber the live row's convergence_reason.
+    # A migration (no summary → NULL convergence_reason) must NOT clobber the live value:
+    # COALESCE(excluded, existing) keeps it.
     with db.get_db(out) as conn:
-        db.write_run(conn, out / "run_a", mode="IGNORE")
+        db.write_run(conn, out / "run_a")
         r = dict(conn.execute("SELECT * FROM runs").fetchone())
     assert r["convergence_reason"] == "live_value"
 
@@ -219,6 +220,42 @@ def test_query_pagination_filter_ordering(tmp_path, monkeypatch):
     assert db.query_runs(out, mode="full")["total"] == 1
     pub = db.query_runs(out, public_only=True)
     assert pub["total"] == 1 and pub["runs"][0]["run_id"] == "run_20260602_000000"
+
+
+def test_new_columns_populated_and_listed(tmp_path, monkeypatch):
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    # fabrication_flags on the footer → unsupported_claims; sidecar company_name resolved.
+    rd = make_run(out, "run_20260701_000000", meta={"company_name": "Acme"})
+    log = (rd / "run_log.jsonl").read_text(encoding="utf-8").replace(
+        '"grounded_coverage": 0.5,', '"grounded_coverage": 0.5, "fabrication_flags": 3,')
+    (rd / "run_log.jsonl").write_text(log, encoding="utf-8")
+    db.record_run_complete("run_20260701_000000", output_dir=out)
+    row = db.query_runs(out)["runs"][0]
+    assert row["company_name"] == "Acme" and row["unsupported_claims"] == 3
+    assert row["keep"] is False and "cost_usd" in row
+
+
+def test_schema_evolution_alters_existing_db(tmp_path, monkeypatch):
+    """A Phase-1-era DB (full original schema, without the §5.2 columns) gets them ALTER-ed
+    in on next open — no rebuild, existing rows preserved."""
+    import sqlite3
+    monkeypatch.setenv("CV_TAILOR_DB", str(tmp_path / "old.db"))
+    with db.get_db("outputs") as conn:                 # create the full current schema
+        conn.execute("INSERT INTO runs (run_id, ts, mode, status, convergence_reason) "
+                     "VALUES ('old', '2026-01-01', 'demo', 'complete', 'plateau')")
+    # Simulate the deployed Phase-1 DB: same schema minus the two new columns.
+    raw = sqlite3.connect(str(tmp_path / "old.db"))
+    raw.execute("ALTER TABLE runs DROP COLUMN company_name")
+    raw.execute("ALTER TABLE runs DROP COLUMN unsupported_claims")
+    raw.commit()
+    raw.close()
+    with db.get_db("outputs") as conn:                 # reopen → init_schema ALTERs them back
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        assert "company_name" in cols and "unsupported_claims" in cols
+        r = dict(conn.execute("SELECT * FROM runs WHERE run_id='old'").fetchone())
+        assert r["convergence_reason"] == "plateau"    # existing row + live-only field preserved
+        assert r["company_name"] is None               # new column defaults NULL until backfilled
 
 
 def test_query_empty_db_no_error(tmp_path, monkeypatch):

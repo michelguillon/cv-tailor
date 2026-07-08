@@ -93,12 +93,22 @@ def list_runs(request: Request, limit: int = 20, offset: int = 0,
     """Paginated run list from the SQLite store, newest first (SPEC_SQLITE_MIGRATION §4.2).
 
     Replaces the old in-memory live-sessions list (which the frontend never consumed — it
-    reads `/archive` and streams a known run id over SSE). Returns
-    `{runs, total, limit, offset}`; filter by `mode` ('demo'|'full') or `public_only`.
-    A fresh deploy with no DB yet returns an empty list rather than erroring (the schema is
-    created on demand)."""
-    return db.query_runs(OUTPUT_DIR, limit=limit, offset=offset, mode=mode,
-                         public_only=public_only)
+    reads `/archive` and streams a known run id over SSE). Returns `{runs, total, limit, offset}`;
+    filter by `mode` ('demo'|'full') or `public_only`. **Capability-aware (§12.9/D-40):** a locked
+    request sees only `public_demo` runs, with owner-only fields (cost, unsupported claims, Job
+    Radar id) redacted — same contract as `/archive`. A fresh deploy with no DB yet returns an
+    empty list rather than erroring (the schema is created on demand)."""
+    unlocked = _unlocked(request)
+    if not unlocked:
+        public_only = True                 # locked visitors: curated public-demo runs only
+    result = db.query_runs(OUTPUT_DIR, limit=limit, offset=offset, mode=mode,
+                           public_only=public_only)
+    if not unlocked:
+        for r in result["runs"]:
+            r["cost_usd"] = None
+            r["unsupported_claims"] = None
+            r["job_radar_job_id"] = None
+    return result
 
 
 # NB: declared before "/{run_id}" so the literal path isn't captured as a run id.

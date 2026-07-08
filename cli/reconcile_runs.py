@@ -33,7 +33,9 @@ from pathlib import Path
 from tailor import db
 
 # Fields whose disk-vs-SQLite difference is expected, not a bug (see module docstring).
-DRIFT_OK = ("public_demo", "keep")     # mutable sidecar; SQLite refreshed only at write time
+# public_demo/keep/company_name are mutable sidecar state (PATCH writes the sidecar, not SQLite,
+# until Phase 3), so SQLite can lag until the next write/migration.
+DRIFT_OK = ("public_demo", "keep", "company_name")
 SKIP = ("convergence_reason",)         # DB-only; no checkpoint to rebuild from
 
 

@@ -313,15 +313,26 @@ for the Job Radar storage migration.)
 
 *Nothing breaks. Existing UI unchanged. SQLite is additive.*
 
-### Phase 2 — API-driven run detail (1 day)
+### Phase 2 — API-driven run detail (built)
 
-1. Add `GET /api/runs/{run_id}` structured JSON endpoint
-2. Add `GET /api/runs/{run_id}/html` on-demand HTML generation
-3. Rewrite run detail page to call the API instead of serving static file
-4. Add `GET /api/runs/{run_id}/sections/{section_id}/diff` for Changes tab
-5. Add `GET /api/runs/{run_id}/reasoning` for Reasoning tab (streams JSONL)
+1. `GET /api/runs/{run_id}` structured JSON (§4.1) — SQLite scalars/fit/scores/sections +
+   disk `cv_final_md`/`jd_raw`/`gaps`/grounding + display fields (company, card, downloads,
+   owner-gated Job Radar). Live status moved to `GET /{run_id}/status`.
+2. `GET /api/runs/{run_id}/html` on-demand HTML (regenerated from checkpoints; promotes the
+   F-40 regen helper to a supported path) + `/sections/{sid}/diff` + `/reasoning`.
+3. Run detail page = six native React tabs from the API (no iframe).
+4. Run list moved onto `GET /api/runs` (§5.2), capability-aware. This added two `runs`
+   columns — **company_name** + **unsupported_claims** — so the owner list needs no disk read.
 
-*`cv_final.html` still generated at run time (belt + braces during transition)*
+**Schema evolution (Phase 2 introduced the first post-deploy columns).** New columns are declared
+in `SCHEMA` *and* listed in `_ADDED_COLUMNS`; `init_schema` `ALTER TABLE ADD COLUMN`s any that a
+pre-existing DB lacks (idempotent, no rebuild). The write path became an **idempotent UPSERT** that
+sets every disk-derived column from the incoming row but keeps `convergence_reason` via
+`COALESCE(excluded, existing)` — so `migrate_runs` is now also a **repair/sync** that backfills new
+columns on rows recorded before they existed. Advancing after a schema change: `up -d
+--force-recreate backend` → `migrate_runs` (backfills) → `reconcile_runs` CLEAN.
+
+*`cv_final.html` still generated at run time (belt + braces during transition).*
 
 ### Phase 3 — Retire static HTML (half day)
 

@@ -2120,7 +2120,7 @@ dict**, so `start_run` instead derives the stored value from the raw response vi
 and robust to the mock. `fetch_job` still embeds the typed models (the documented contract / the
 `test_fetch_job_parses_*` tests); the two paths share `parse_assessment`.
 
-### 12.13 — SQLite run store + dynamic report (Phase 1 built, F-59; Phases 2–3 planned)
+### 12.13 — SQLite run store + dynamic report (Phases 1–2 built, F-59; Phase 3 planned)
 
 Full design: **`docs/SPEC_SQLITE_MIGRATION.md`**. A queryable SQLite run store at
 `data/cv_tailor.db` (`tailor/db.py`) that converges cv-tailor's storage with Job Radar's
@@ -2159,8 +2159,24 @@ on-disk checkpoints and diffs it against SQLite (`exit 1` gates; `public_demo`/`
 are reported but don't gate). The gate matters most before Phase 3, the only irreversible step. Same
 discipline as the Job Radar storage migration. (Migration spec §6.)
 
-**Phases 2–3 (planned).** Phase 2: API-driven run-detail (`GET /api/runs/{id}` structured JSON +
-`/sections/{id}/diff` + `/reasoning` + on-demand `/html`), React run-detail page rendering all six tabs
-from the API. Phase 3: retire static `cv_final.html` generation (on-demand only), make SQLite the
-source of truth for visibility flags (`PATCH` writes SQLite), drop the `run_meta.json` write. `cv_final.md`
-(the submission artifact) and `run_log.jsonl` (the audit trail) are never touched.
+**Phase 2 (built).** API-driven run detail — the report is rendered from data, not a static HTML iframe:
+- `GET /api/runs/{id}` structured detail (§4.1) — scalars/fit/scores/sections from SQLite; `cv_final_md` +
+  `jd_raw` + `fit.gaps` + grounding + the display fields (company, card, downloads, owner-gated Job Radar)
+  from disk/sidecar; owner-gated (private→404 locked); pre-migration runs degrade to disk/nulls.
+- `GET /api/runs/{id}/sections/{sid}/diff` (Changes), `/reasoning` (Reasoning), `/html` (on-demand report
+  regenerated from checkpoints, as a download — promotes the F-40 regen helper to a supported path).
+- Live status moved `GET /{id}` → `/{id}/status`; the bare path is the structured detail.
+- Frontend `OutputPanel` rewritten to **six native React tabs** (Fit/CV/Changes/Scores/Reasoning/JD) — no
+  iframe; a minimal inline markdown renderer + tab strip. New DB fields surface automatically (§5.1).
+- Run list moved off the filesystem scan onto `GET /api/runs` (§4.2/§5.2), **capability-aware** (locked →
+  public-demo only, owner-only fields redacted). This needed two **new `runs` columns** — `company_name`
+  (resolved label) + `unsupported_claims` — so the owner-management list needs no disk read. Columns are
+  **ALTER-ed into an existing DB on open** (`_ADDED_COLUMNS`), and the write path is now an **idempotent
+  UPSERT that syncs disk-derived columns while preserving the live-only `convergence_reason`** — so a
+  re-migration backfills columns added after a run was first recorded. `cli/reconcile_runs` treats
+  `company_name` as expected drift (mutable sidecar). Deploy: `git pull` → `up -d --force-recreate backend`
+  → `migrate_runs` (backfills the new columns) → `reconcile_runs` CLEAN.
+
+**Phase 3 (planned).** Retire static `cv_final.html` generation (on-demand only), make SQLite the source of
+truth for visibility flags (`PATCH` writes SQLite), drop the `run_meta.json` write. `cv_final.md` (the
+submission artifact) and `run_log.jsonl` (the audit trail) are never touched.
