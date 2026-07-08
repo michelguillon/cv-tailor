@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -28,7 +28,9 @@ from api.runner import launch_run
 from api.security import FULL_COOKIE, full_mode_configured, require_unlocked, verify_token
 from api.session import TERMINAL, SessionError
 from tailor import db
+from tailor.audit import read_entries
 from tailor.config import ConfigError, load_config, resolve_run_config
+from tailor.phases import phase6_output
 from tailor.run_context import new_run_id
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -117,12 +119,140 @@ def cleanup_runs() -> dict:
     return {"removed": removed, "count": len(removed), "max_age_days": days}
 
 
-@router.get("/{run_id}")
-def get_run(run_id: str, request: Request) -> dict:
+@router.get("/{run_id}/status")
+def get_run_status(run_id: str, request: Request) -> dict:
+    """Live session status for an in-flight run (running → complete/stopped/error + result).
+    The run flow uses SSE; this is the poll fallback. (Was `GET /{run_id}`, moved here so the
+    bare path serves the completed-run structured detail — SPEC_SQLITE_MIGRATION §4.1.)"""
     session = request.app.state.sessions.get(run_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
     return session.public()
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _grounding_from_log(run_dir: Path) -> dict:
+    """The verifier's unsupported-claim flags for the Grounding surface (F-35), read from
+    the run_log (reason = 'sid: issue')."""
+    claims = []
+    for e in read_entries(run_dir / "run_log.jsonl"):
+        if e.get("phase") == "verification" and e.get("event") == "unsupported_claim":
+            sid, _, issue = (e.get("reasoning", "")).partition(": ")
+            claims.append({"section": sid, "issue": issue or e.get("reasoning", "")})
+    return {"total": len(claims), "claims": claims}
+
+
+def _enrich_detail_from_disk(run_dir: Path, detail: dict) -> dict:
+    """Add the disk-only fields to a structured detail (§4.1): fit.gaps + cv_final_md +
+    jd_raw + grounding, and backfill fit scalars for a pre-migration run (not in SQLite)."""
+    p0 = _read_json(run_dir / "phase0_jd_analysis.json")
+    p1 = _read_json(run_dir / "phase1_fit_assessment.json")
+    fit = detail["fit"]
+    fit["gaps"] = p1.get("gaps", []) or []
+    fit["outcome"] = fit["outcome"] if fit["outcome"] is not None else p1.get("outcome")
+    fit["score"] = fit["score"] if fit["score"] is not None else p1.get("overall_fit_score")
+    fit["role_title"] = fit["role_title"] if fit["role_title"] is not None else p0.get("role_title")
+    fit["value_alignment"] = (fit["value_alignment"] if fit["value_alignment"] is not None
+                              else p1.get("value_alignment_notes"))
+    fit["no_fit_reason"] = (fit["no_fit_reason"] if fit["no_fit_reason"] is not None
+                            else p1.get("no_fit_reason"))
+    md = run_dir / "cv_final.md"
+    detail["cv_final_md"] = md.read_text(encoding="utf-8") if md.exists() else None
+    jd = run_dir / "jd_raw.txt"
+    detail["jd_raw"] = jd.read_text(encoding="utf-8") if jd.exists() else None
+    detail["grounding"] = _grounding_from_log(run_dir)
+    return detail
+
+
+def _null_detail(run_id: str) -> dict:
+    """A structured-detail skeleton (all-null) for a run that isn't in SQLite (pre-migration);
+    the disk enrichment then fills what it can (§7 graceful degradation)."""
+    return {
+        "run_id": run_id, "ts": None, "mode": None, "status": None, "job_radar_job_id": None,
+        "rerun_of": None, "public_demo": None, "cost_usd": None, "cvcm_enabled": None,
+        "convergence_reason": None,
+        "fit": {"outcome": None, "score": None, "role_title": None, "value_alignment": None,
+                "no_fit_reason": None, "gaps": []},
+        "scores": {"coverage": None, "quality": None, "iterations": []},
+        "sections": [],
+    }
+
+
+@router.get("/{run_id}")
+def get_run_detail(run_id: str, request: Request) -> dict:
+    """Structured run detail driving the six report tabs (SPEC_SQLITE_MIGRATION §4.1):
+    scalars/fit/scores/sections from SQLite; cv_final_md + jd_raw + fit.gaps + grounding
+    from disk. A private run 404s for a locked request (don't reveal it, §12.9); a
+    pre-migration run (not in SQLite) degrades to disk/nulls rather than crashing."""
+    # No output dir → no artifacts to render (cv_md/jd_raw live on disk), so 404 without
+    # even opening the DB — this also keeps an unknown-run probe from creating an empty DB.
+    run_dir = archive.run_dir_if_exists(OUTPUT_DIR, run_id)
+    if run_dir is None:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    if not _viewable(request, run_id):
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    detail = db.get_run_detail(run_id, OUTPUT_DIR) or _null_detail(run_id)  # nulls if pre-migration
+    _enrich_detail_from_disk(run_dir, detail)
+    # The Job Radar reference links a personal job-search tool — owner-only, even on a public
+    # or live-session-viewable run (Integration §5.4 / §12.12), same as run_detail.
+    if not _unlocked(request):
+        detail["job_radar_job_id"] = None
+    return detail
+
+
+@router.get("/{run_id}/sections/{section_id}/diff")
+def run_section_diff(run_id: str, section_id: str, request: Request) -> dict:
+    """The Changes-tab diff for one section — v0→final word diff (§5.1). 404 if the run
+    isn't viewable, or the section is unknown / has no version files."""
+    if not _viewable(request, run_id):
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    run_dir = archive.run_dir_if_exists(OUTPUT_DIR, run_id)
+    if run_dir is None:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    change = phase6_output.section_change_from_disk(run_dir, section_id)
+    if change is None:
+        raise HTTPException(status_code=404,
+                            detail=f"no section {section_id!r} for run {run_id!r}")
+    return change
+
+
+@router.get("/{run_id}/reasoning")
+def run_reasoning(run_id: str, request: Request) -> dict:
+    """The Reasoning-tab trace — the run_log's reasoning entries (§5.1). Non-reasoning
+    records (the run_complete/run_failed footers, which have no phase/event) are skipped."""
+    if not _viewable(request, run_id):
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    run_dir = archive.run_dir_if_exists(OUTPUT_DIR, run_id)
+    if run_dir is None:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    entries = [e for e in read_entries(run_dir / "run_log.jsonl")
+               if e.get("phase") and e.get("event")]
+    return {"run_id": run_id, "entries": entries}
+
+
+@router.get("/{run_id}/html")
+def run_html(run_id: str, request: Request):
+    """Generate the report HTML on demand from the run's checkpoints (§4.3) — the
+    replacement for the static cv_final.html. Returned as a download."""
+    if not _viewable(request, run_id):
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    run_dir = archive.run_dir_if_exists(OUTPUT_DIR, run_id)
+    if run_dir is None:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
+    try:
+        html = phase6_output.regenerate_html(run_dir, config=load_config())
+    except (FileNotFoundError, KeyError, ValueError) as exc:   # missing/old checkpoints
+        raise HTTPException(status_code=422,
+                            detail=f"cannot regenerate report for {run_id!r}: {exc}")
+    return Response(content=html, media_type="text/html",
+                    headers={"Content-Disposition": f'attachment; filename="{run_id}_report.html"'})
 
 
 @router.get("/{run_id}/detail")

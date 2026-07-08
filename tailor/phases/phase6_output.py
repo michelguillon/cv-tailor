@@ -31,8 +31,15 @@ from pathlib import Path
 import jinja2
 
 from tailor.audit import read_entries
+from tailor.helpers import strip_tool_artifacts
+from tailor.models import (CritiqueItem, FitAssessment, IterationScore, JDAnalysis,
+                           ScoringRubric)
+from tailor.run_context import RunContext
 
-__all__ = ["assemble_markdown", "generate_output", "summary_card"]
+__all__ = ["assemble_markdown", "generate_output", "summary_card",
+           "build_report_context", "render_report", "reconstruct_report_inputs",
+           "regenerate_html", "section_change", "section_change_from_disk",
+           "load_final_manifest"]
 
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 
@@ -174,25 +181,32 @@ def _section_versions(ctx, manifest, sid: str) -> list[tuple[str, str]]:
     return out
 
 
+def section_change(ctx, manifest: dict, sid: str) -> dict | None:
+    """The Changes-tab entry for one section: version labels + the v0→final word diff
+    (or rendered latest when there's a single version). None if the section is absent or
+    has no version files. Static sections are copied verbatim (D-13). Shared by the report
+    and the `/sections/{sid}/diff` endpoint (SPEC_SQLITE_MIGRATION §5.1)."""
+    m = manifest.get(sid)
+    if m is None:
+        return None
+    disp = m.get("label") or m.get("title") or sid
+    if m["static"]:
+        return {"sid": sid, "title": disp, "static": True,
+                "versions": ["static"], "diff_html": "(copied verbatim)"}
+    versions = _section_versions(ctx, manifest, sid)
+    if not versions:
+        return None
+    first, last = versions[0][1], versions[-1][1]
+    return {
+        "sid": sid, "title": disp, "static": False,
+        "versions": [lbl for lbl, _ in versions],
+        "diff_html": _word_diff_html(first, last) if len(versions) > 1 else _md_to_html(last),
+    }
+
+
 def _build_changes(ctx, manifest, config) -> list[dict]:
-    changes = []
-    for sid in _ordered_ids(manifest, config):
-        m = manifest[sid]
-        disp = m.get("label") or m.get("title") or sid
-        if m["static"]:
-            changes.append({"sid": sid, "title": disp, "static": True,
-                            "versions": ["static"], "diff_html": "(copied verbatim)"})
-            continue
-        versions = _section_versions(ctx, manifest, sid)
-        if not versions:
-            continue
-        first, last = versions[0][1], versions[-1][1]
-        changes.append({
-            "sid": sid, "title": disp, "static": False,
-            "versions": [lbl for lbl, _ in versions],
-            "diff_html": _word_diff_html(first, last) if len(versions) > 1 else _md_to_html(last),
-        })
-    return changes
+    return [c for sid in _ordered_ids(manifest, config)
+            if (c := section_change(ctx, manifest, sid)) is not None]
 
 
 def _build_scores(manifest, iterations, config) -> dict:
@@ -260,25 +274,18 @@ def _build_grounding(flags) -> dict:
     return {"total": len(claims), "sections": len(flags), "claims": claims}
 
 
-def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
-                    config, template_dir: str | Path = TEMPLATE_DIR,
-                    source_docx=None, verification_flags=None, jd_raw: str = "") -> dict:
-    """Write cv_final.md + cv_final.html (+ cv_final.docx when `source_docx` is given,
-    the --docx stretch). `verification_flags` ({sid: [CritiqueItem]}) feeds the report's
-    Grounding tab (F-35); `jd_raw` is the raw JD for the JD tab (D-37). Returns
-    {'md', 'html'[, 'docx']} paths."""
-    cv_md = assemble_markdown(ctx, manifest, config)
-    md_path = ctx.output_dir / "cv_final.md"
-    md_path.write_text(cv_md, encoding="utf-8")
+def build_report_context(ctx, manifest, jd, fit, final_rubric, iterations, *,
+                         config, verification_flags=None, jd_raw: str = "",
+                         cv_md: str | None = None) -> dict:
+    """Assemble the Jinja context for the report template (the 7 tabs + summary card).
 
-    env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(str(template_dir)),
-        autoescape=jinja2.select_autoescape(["html"]),
-    )
-    template = env.get_template(TEMPLATE_NAME)
+    Pure (no file writes): the single place the report's shape is defined, shared by the
+    run-time `generate_output` and the on-demand `regenerate_html` (so the two can't drift).
+    `cv_md` is assembled if not supplied."""
+    cv_md = assemble_markdown(ctx, manifest, config) if cv_md is None else cv_md
     grounding = _build_grounding(verification_flags)
     grounded_coverage = iterations[-1].keyword_coverage if iterations else None
-    context = {
+    return {
         "role_title": jd.role_title,
         "outcome": fit.outcome,
         "fit_score": round(fit.overall_fit_score, 3),
@@ -312,7 +319,32 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
         "rubric": final_rubric,
         "run_id": ctx.run_id,
     }
-    html_out = template.render(**context)
+
+
+def render_report(context: dict, *, template_dir: str | Path = TEMPLATE_DIR) -> str:
+    """Render the report template to an HTML string (no file write)."""
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(str(template_dir)),
+        autoescape=jinja2.select_autoescape(["html"]),
+    )
+    return env.get_template(TEMPLATE_NAME).render(**context)
+
+
+def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
+                    config, template_dir: str | Path = TEMPLATE_DIR,
+                    source_docx=None, verification_flags=None, jd_raw: str = "") -> dict:
+    """Write cv_final.md + cv_final.html (+ cv_final.docx when `source_docx` is given,
+    the --docx stretch). `verification_flags` ({sid: [CritiqueItem]}) feeds the report's
+    Grounding tab (F-35); `jd_raw` is the raw JD for the JD tab (D-37). Returns
+    {'md', 'html'[, 'docx']} paths."""
+    cv_md = assemble_markdown(ctx, manifest, config)
+    md_path = ctx.output_dir / "cv_final.md"
+    md_path.write_text(cv_md, encoding="utf-8")
+
+    context = build_report_context(ctx, manifest, jd, fit, final_rubric, iterations,
+                                   config=config, verification_flags=verification_flags,
+                                   jd_raw=jd_raw, cv_md=cv_md)
+    html_out = render_report(context, template_dir=template_dir)
     html_path = ctx.output_dir / "cv_final.html"
     html_path.write_text(html_out, encoding="utf-8")
 
@@ -327,3 +359,92 @@ def generate_output(ctx, manifest, jd, fit, final_rubric, iterations, *,
                             f"cv_final.docx (formatting from {Path(source_docx).name})")
         out["docx"] = str(docx_path)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# On-demand report regeneration from disk (SPEC_SQLITE_MIGRATION §4.3)         #
+#                                                                             #
+# The report is fully reconstructable from a run's checkpoints — this is what #
+# lets the static cv_final.html become an on-demand artifact (Phase 3 retires #
+# the run-time write entirely). Promoted from the tmp/sweep/regen_report.py   #
+# helper (F-40) into a supported path.                                        #
+# --------------------------------------------------------------------------- #
+
+def load_final_manifest(run_dir: str | Path) -> dict:
+    """The run's final section manifest: prefer `final_manifest.json` (post-refinement
+    state, F-40); for an older run reconstruct the latest version per non-static section
+    from the on-disk section files."""
+    run_dir = Path(run_dir)
+    if (run_dir / "final_manifest.json").exists():
+        return json.loads((run_dir / "final_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "phase2_draft_manifest.json").read_text(encoding="utf-8"))
+    for sid, m in manifest.items():
+        if not m["static"]:
+            vs = [int(p.stem.rsplit("_v", 1)[1])
+                  for p in (run_dir / "sections").glob(f"{sid}_v*.md")]
+            if vs:
+                m["version"] = max(vs)
+    return manifest
+
+
+def section_change_from_disk(run_dir: str | Path, sid: str) -> dict | None:
+    """The Changes-tab entry for one section, reconstructed from a run's checkpoints —
+    behind `GET /api/runs/{id}/sections/{sid}/diff` (§5.1). None if the section is unknown
+    or has no version files."""
+    run_dir = Path(run_dir)
+    ctx = RunContext(run_id=run_dir.name, output_dir=run_dir)
+    return section_change(ctx, load_final_manifest(run_dir), sid)
+
+
+def _reconstruct_flags(run_dir: Path) -> dict:
+    """Rebuild the verifier's grounding flags from the run_log `unsupported_claim` events
+    (reason = 'sid: issue'). {sid: [CritiqueItem, ...]}."""
+    flags: dict[str, list] = {}
+    for e in read_entries(run_dir / "run_log.jsonl"):
+        if e.get("phase") == "verification" and e.get("event") == "unsupported_claim":
+            sid, _, issue = (e.get("reasoning", "")).partition(": ")
+            flags.setdefault(sid, []).append(CritiqueItem(
+                section=sid, severity="major", issue=issue or e.get("reasoning", ""),
+                suggestion="Verify against your source CV before sending.", source_writer="verifier"))
+    return flags
+
+
+def reconstruct_report_inputs(run_dir: str | Path, config: dict) -> dict:
+    """Rebuild generate_output's inputs from a run's on-disk checkpoints (§4.3). Returns
+    a dict of {ctx, manifest, jd, fit, rubric, iterations, flags, jd_raw}. Faithful:
+    prefers final_manifest.json (else reconstructs versions from the section files),
+    rebuilds grounding flags from the run_log, cleans stored fit text (F-40)."""
+    run_dir = Path(run_dir)
+
+    def jload(name):
+        return json.loads((run_dir / name).read_text(encoding="utf-8"))
+
+    ctx = RunContext(run_id=run_dir.name, output_dir=run_dir)
+    jd = JDAnalysis.from_dict(jload("phase0_jd_analysis.json"))
+    fit = FitAssessment.from_dict(jload("phase1_fit_assessment.json"))
+    fit.value_alignment_notes = strip_tool_artifacts(fit.value_alignment_notes)   # F-40
+    fit.no_fit_reason = strip_tool_artifacts(fit.no_fit_reason)
+    rubric = ScoringRubric.from_dict(jload("phase0_rubric.json"))
+    manifest = load_final_manifest(run_dir)
+
+    iterations, i = [], 1
+    while (run_dir / f"iteration_{i}.json").exists():
+        iterations.append(IterationScore.from_dict(jload(f"iteration_{i}.json")))
+        i += 1
+
+    jd_raw_path = run_dir / "jd_raw.txt"
+    jd_raw = jd_raw_path.read_text(encoding="utf-8") if jd_raw_path.exists() else ""
+
+    return {"ctx": ctx, "manifest": manifest, "jd": jd, "fit": fit, "rubric": rubric,
+            "iterations": iterations, "flags": _reconstruct_flags(run_dir), "jd_raw": jd_raw}
+
+
+def regenerate_html(run_dir: str | Path, *, config: dict,
+                    template_dir: str | Path = TEMPLATE_DIR) -> str:
+    """Regenerate the report HTML for an existing run from its checkpoints, as a string
+    (no file write) — the on-demand path behind `GET /api/runs/{id}/html` (§4.3)."""
+    p = reconstruct_report_inputs(run_dir, config)
+    context = build_report_context(p["ctx"], p["manifest"], p["jd"], p["fit"], p["rubric"],
+                                   p["iterations"], config=config,
+                                   verification_flags=p["flags"] or None, jd_raw=p["jd_raw"])
+    return render_report(context, template_dir=template_dir)

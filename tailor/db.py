@@ -45,7 +45,7 @@ from pathlib import Path
 
 __all__ = [
     "db_path_for", "get_db", "init_schema",
-    "record_run_complete", "query_runs",
+    "record_run_complete", "query_runs", "get_run_detail",
     "RUN_COLUMNS", "SECTION_COLUMNS", "ITERATION_COLUMNS",
 ]
 
@@ -471,3 +471,53 @@ def query_runs(output_dir: str | Path = "outputs", *, limit: int = 20, offset: i
         d["public_demo"] = bool(d["public_demo"])
         runs.append(d)
     return {"runs": runs, "total": total, "limit": limit, "offset": offset}
+
+
+def get_run_detail(run_id: str, output_dir: str | Path = "outputs") -> dict | None:
+    """One run's structured detail from SQLite, shaped for the run-detail API (§4.1):
+    scalars + fit + scores(iterations) + sections. Returns None if the run isn't in
+    SQLite (a pre-migration run) — the endpoint then degrades to disk/nulls. The
+    disk-only fields (`cv_final_md`, `jd_raw`, `fit.gaps`, grounding) are added by the
+    caller; SQLite owns the structured/tabular data so new columns surface in the UI
+    without regenerating anything (§5.1)."""
+    with get_db(output_dir) as conn:
+        row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if row is None:
+            return None
+        run = dict(row)
+        sections = [dict(s) for s in conn.execute(
+            "SELECT * FROM run_sections WHERE run_id = ? ORDER BY position, section_id",
+            (run_id,)).fetchall()]
+        iterations = [dict(it) for it in conn.execute(
+            "SELECT * FROM run_iterations WHERE run_id = ? ORDER BY iteration",
+            (run_id,)).fetchall()]
+
+    for s in sections:                       # ints → bools for the client
+        s["static"] = bool(s["static"])
+        s["converged"] = None if s["converged"] is None else bool(s["converged"])
+    return {
+        "run_id": run["run_id"],
+        "ts": run["ts"],
+        "mode": run["mode"],
+        "status": run["status"],
+        "job_radar_job_id": run["job_radar_job_id"],
+        "rerun_of": run["rerun_of"],
+        "public_demo": bool(run["public_demo"]),
+        "cost_usd": run["cost_usd"],
+        "cvcm_enabled": bool(run["cvcm_enabled"]),
+        "convergence_reason": run["convergence_reason"],
+        "fit": {
+            "outcome": run["fit_outcome"],
+            "score": run["fit_score"],
+            "role_title": run["jd_role_title"],
+            "value_alignment": run["value_alignment"],
+            "no_fit_reason": run["no_fit_reason"],
+            "gaps": [],                      # filled from disk by the caller (not in SQLite)
+        },
+        "scores": {
+            "coverage": run["coverage_score"],
+            "quality": run["quality_score"],
+            "iterations": iterations,
+        },
+        "sections": sections,
+    }

@@ -146,7 +146,7 @@ def _fake_run_pipeline(jd_path, *, on_event=None, run_id=None, **kw):
 def _await_terminal(client, run_id, timeout=3.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        s = client.get(f"/api/runs/{run_id}").json()
+        s = client.get(f"/api/runs/{run_id}/status").json()
         if s["status"] in ("complete", "error", "stopped"):
             return s
         time.sleep(0.01)
@@ -211,7 +211,7 @@ def test_run_failure_persists_traceback_footer(tmp_path):
 def _await_status(client, run_id, status, timeout=3.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        s = client.get(f"/api/runs/{run_id}").json()
+        s = client.get(f"/api/runs/{run_id}/status").json()
         if s["status"] == status:
             return s
         time.sleep(0.01)
@@ -458,6 +458,139 @@ def test_runs_list_from_sqlite(client, tmp_path, monkeypatch):
     assert client.get("/api/runs?limit=1&offset=1").json()["runs"][0]["run_id"] == "run_20260601_000000"
     pub = client.get("/api/runs?public_only=true").json()
     assert pub["total"] == 1 and pub["runs"][0]["run_id"] == "run_20260602_000000"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — API-driven run detail (SPEC_SQLITE_MIGRATION §4.1/§4.3/§5.1)        #
+# --------------------------------------------------------------------------- #
+
+def _make_full_run(out, run_id, *, meta=None):
+    """A run dir complete enough to drive the structured detail + on-demand HTML: phase0/1
+    checkpoints, a rubric, a final manifest (one drafted + one static section), one iteration
+    with section scores, section version files, a verifier flag in the log, cv_final.md + jd_raw."""
+    from pathlib import Path
+    rd = Path(out) / run_id
+    (rd / "sections").mkdir(parents=True)
+    (rd / "run_log.jsonl").write_text("\n".join([
+        json.dumps({"ts": "2026-07-01T12:00:00Z", "phase": "phase0", "event": "jd_analysed",
+                    "reasoning": "Solutions Architect (senior)"}),
+        json.dumps({"ts": "2026-07-01T12:05:00Z", "phase": "verification",
+                    "event": "unsupported_claim", "reasoning": "profile: claims Kafka, not in source"}),
+        json.dumps({"type": "run_complete", "mode": "full", "iterations_run": 1,
+                    "total_estimated_usd": 0.8, "grounded_coverage": 0.7, "fabrication_flags": 1,
+                    "cost_breakdown_estimated_usd": {"anthropic_sonnet": 0.8}}),
+    ]) + "\n", encoding="utf-8")
+    (rd / "phase0_jd_analysis.json").write_text(json.dumps({
+        "raw_text": "JD body", "role_title": "Solutions Architect", "seniority_level": "senior",
+        "key_requirements": ["python"], "nice_to_haves": [], "company_context": "A scale-up",
+        "tone_signals": ["technical"], "company_name": "Globex"}), encoding="utf-8")
+    (rd / "phase0_rubric.json").write_text(json.dumps({
+        "version": 1, "required_keywords": ["python"], "nice_to_have_keywords": [],
+        "structural_requirements": [], "created_at": "2026-07-01T12:00:00Z",
+        "updated_at": "2026-07-01T12:00:00Z"}), encoding="utf-8")
+    (rd / "phase1_fit_assessment.json").write_text(json.dumps({
+        "outcome": "partial", "overall_fit_score": 0.72,
+        "value_alignment_notes": "Strong platform-adoption pattern.",
+        "skills_transferable": ["pre-sales", "enterprise"],
+        "gaps": [{"requirement": "k8s", "gap_type": "keyword", "addressable": True,
+                  "severity": "minor", "reason": "not evidenced"}],
+        "no_fit_reason": None}), encoding="utf-8")
+    (rd / "final_manifest.json").write_text(json.dumps({
+        "header": {"static": True, "version": None, "section_type": "header", "position": 0,
+                   "source_cv": "AI", "title": "header", "label": "header"},
+        "profile": {"static": False, "version": 1, "section_type": "profile", "position": 1,
+                    "source_cv": "AI", "title": "Profile", "label": "Profile"},
+    }), encoding="utf-8")
+    (rd / "iteration_1.json").write_text(json.dumps({
+        "iteration": 1, "keyword_coverage": 0.7, "critique_score": 8.0, "keyword_delta": 0.0,
+        "quality_delta": 0.0, "sections_converged": 1, "sections_active": 0,
+        "section_scores": {"profile": {"section_id": "profile", "section_type": "profile",
+                                       "keyword_coverage": 0.8, "claude_quality": 8.0,
+                                       "gpt_quality": 7.0, "selected_writer": "claude",
+                                       "converged": True, "current_version": 1}}}),
+        encoding="utf-8")
+    (rd / "sections" / "header_static.md").write_text("Jane Candidate\n", encoding="utf-8")
+    (rd / "sections" / "profile_v0.md").write_text("Generalist profile text.\n", encoding="utf-8")
+    (rd / "sections" / "profile_v1.md").write_text("Tailored platform profile text.\n", encoding="utf-8")
+    (rd / "cv_final.md").write_text("# CV\n## Profile\nTailored platform profile text.\n", encoding="utf-8")
+    (rd / "jd_raw.txt").write_text("We need a Solutions Architect.\n", encoding="utf-8")
+    if meta:
+        run_meta.write_meta(rd, **meta)
+    return rd
+
+
+@pytest.fixture
+def phase2_run(tmp_path, monkeypatch, unlocked):
+    """A full run on disk + recorded to SQLite; OUTPUT_DIR + DB isolated to tmp. `unlocked`
+    so the owner view is exercised (detail is capability-gated)."""
+    from tailor import db
+    monkeypatch.delenv("CV_TAILOR_DB", raising=False)
+    out = tmp_path / "outputs"
+    _make_full_run(out, "run_20260701_120000")
+    monkeypatch.setattr(runs_router, "OUTPUT_DIR", str(out))
+    db.record_run_complete("run_20260701_120000", output_dir=str(out),
+                           summary={"convergence_reason": "both_signals_plateau"})
+    return out
+
+
+def test_run_detail_structured_json(client, phase2_run):
+    d = client.get("/api/runs/run_20260701_120000").json()
+    assert d["run_id"] == "run_20260701_120000" and d["mode"] == "full"
+    assert d["convergence_reason"] == "both_signals_plateau"      # summary-only field via SQLite
+    # fit: scalars from SQLite, gaps from disk
+    assert d["fit"]["outcome"] == "partial" and d["fit"]["score"] == 0.72
+    assert d["fit"]["role_title"] == "Solutions Architect"
+    assert d["fit"]["gaps"] and d["fit"]["gaps"][0]["requirement"] == "k8s"
+    # scores + sections from SQLite
+    assert len(d["scores"]["iterations"]) == 1 and d["scores"]["quality"] == 8.0
+    sids = {s["section_id"]: s for s in d["sections"]}
+    assert sids["header"]["static"] is True and sids["profile"]["static"] is False
+    assert sids["profile"]["selected_writer"] == "claude" and sids["profile"]["converged"] is True
+    # disk-only content
+    assert "Tailored platform profile" in d["cv_final_md"]
+    assert "Solutions Architect" in d["jd_raw"]
+    assert d["grounding"]["total"] == 1 and d["grounding"]["claims"][0]["section"] == "profile"
+
+
+def test_run_detail_private_404_when_locked(client, phase2_run):
+    # A fresh (locked) client — no owner cookie — must not see a private run.
+    from fastapi.testclient import TestClient
+    from api.main import app
+    locked = TestClient(app)
+    assert locked.get("/api/runs/run_20260701_120000").status_code == 404
+
+
+def test_run_detail_unknown_404(client, phase2_run):
+    assert client.get("/api/runs/nope/").status_code in (404, 307)   # trailing slash → redirect/404
+    assert client.get("/api/runs/nope").status_code == 404
+
+
+def test_run_section_diff(client, phase2_run):
+    d = client.get("/api/runs/run_20260701_120000/sections/profile/diff").json()
+    assert d["sid"] == "profile" and d["static"] is False
+    assert d["versions"] == ["v0", "v1"]
+    assert "<ins>" in d["diff_html"] or "<del>" in d["diff_html"]      # a real word diff
+    # unknown section → 404
+    assert client.get("/api/runs/run_20260701_120000/sections/nope/diff").status_code == 404
+
+
+def test_run_reasoning(client, phase2_run):
+    d = client.get("/api/runs/run_20260701_120000/reasoning").json()
+    events = {e["event"] for e in d["entries"]}
+    assert "jd_analysed" in events and "unsupported_claim" in events
+    assert all(e.get("type") != "run_complete" for e in d["entries"])  # footer skipped
+
+
+def test_run_html_on_demand(client, phase2_run):
+    r = client.get("/api/runs/run_20260701_120000/html")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert "Tailored platform profile" in r.text            # regenerated from checkpoints, live
+
+
+def test_run_status_endpoint_moved(client, phase2_run):
+    # Live status now lives at /status; an archived run has no live session → 404.
+    assert client.get("/api/runs/run_20260701_120000/status").status_code == 404
 
 
 # --------------------------------------------------------------------------- #
