@@ -18,10 +18,18 @@ export default function App() {
   // Re-run handoff (SPEC_RERUN §4.1): the Runs page POSTs the re-run, then asks us to jump to
   // the Tailor tab and attach the progress view to the already-started new run's SSE stream.
   const [attachRunId, setAttachRunId] = useState<string | null>(null);
+  // "Open report" handoff: after a run finishes, the Tailor tab asks us to open its report in the
+  // Runs tab's in-app OutputPanel — the SAME view as clicking "Open" in the list (no HTML download).
+  const [viewRunId, setViewRunId] = useState<string | null>(null);
 
   function openRunStream(runId: string) {
     setAttachRunId(runId);
     setTab("run");
+  }
+
+  function openRunView(runId: string) {
+    setViewRunId(runId);
+    setTab("runs");
   }
 
   // Deep-link from the standalone report's Re-run button (SPEC_RERUN §12.11): it POSTs the re-run,
@@ -68,9 +76,19 @@ export default function App() {
       <main className="mx-auto max-w-5xl px-6 py-8">
         {tab === "corpus" && <CorpusPage />}
         {tab === "run" && (
-          <RunPage attachRunId={attachRunId} onAttached={() => setAttachRunId(null)} />
+          <RunPage
+            attachRunId={attachRunId}
+            onAttached={() => setAttachRunId(null)}
+            onOpenReport={openRunView}
+          />
         )}
-        {tab === "runs" && <RunsPage onRerun={openRunStream} />}
+        {tab === "runs" && (
+          <RunsPage
+            onRerun={openRunStream}
+            openRunId={viewRunId}
+            onOpened={() => setViewRunId(null)}
+          />
+        )}
       </main>
     </div>
     </UnlockProvider>

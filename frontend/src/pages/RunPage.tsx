@@ -40,11 +40,15 @@ interface Summary {
 export function RunPage({
   attachRunId,
   onAttached,
+  onOpenReport,
 }: {
   // Re-run handoff (SPEC_RERUN §4.1): when set, attach the progress view to an already-started
   // run's SSE stream instead of starting a new one from the form.
   attachRunId?: string | null;
   onAttached?: () => void;
+  // "Open report" handoff: open the just-finished run in the Runs tab's in-app OutputPanel (the
+  // same view as opening it from the list) instead of downloading the static HTML.
+  onOpenReport?: (runId: string) => void;
 } = {}) {
   const [jd, setJd] = useState("");
   const [company, setCompany] = useState(""); // optional run label (§12.9) → run metadata
@@ -546,11 +550,9 @@ export function RunPage({
             </span>
             {runId && (
               <div className="flex w-full flex-wrap gap-2 pt-1">
-                <a href={api.runHtmlUrl(runId)} target="_blank" rel="noreferrer">
-                  <Button variant="outline" size="sm">
-                    <ExternalLink className="h-4 w-4" /> Open report
-                  </Button>
-                </a>
+                <Button variant="outline" size="sm" onClick={() => onOpenReport?.(runId)}>
+                  <ExternalLink className="h-4 w-4" /> Open report
+                </Button>
                 <a href={api.fileUrl(runId, "cv_final.md")}>
                   <Button variant="ghost" size="sm">
                     <Download className="h-4 w-4" /> cv_final.md

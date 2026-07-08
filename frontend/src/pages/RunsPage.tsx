@@ -19,12 +19,31 @@ function fitBand(score: number | null): string | null {
   return pct >= 75 ? "strong" : pct >= 40 ? "partial" : "low";
 }
 
-export function RunsPage({ onRerun }: { onRerun?: (runId: string) => void } = {}) {
+export function RunsPage({
+  onRerun,
+  openRunId,
+  onOpened,
+}: {
+  onRerun?: (runId: string) => void;
+  // "Open report" handoff from the Tailor tab: open this run's OutputPanel on arrival (the same
+  // in-app view as clicking "Open" below), then clear the parent's request via onOpened.
+  openRunId?: string | null;
+  onOpened?: () => void;
+} = {}) {
   const [runs, setRuns] = useState<RunListRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<RunListRow | null>(null); // company-name edit dialog
+
+  // A handoff from the Tailor tab ("Open report") opens the run's panel directly; clear the
+  // request so the OutputPanel's Back button returns to the list and a later handoff re-fires.
+  useEffect(() => {
+    if (openRunId) {
+      setSelected(openRunId);
+      onOpened?.();
+    }
+  }, [openRunId, onOpened]);
 
   // Runs are capability-aware (D-40/§12.9): locked sessions get only curated public-demo
   // runs (redacted); the owner (valid cookie) gets all runs + management controls. The
