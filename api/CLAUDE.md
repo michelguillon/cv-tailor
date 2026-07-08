@@ -42,8 +42,16 @@ root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 1–6).
   — gated on the same owner capability cookie as full mode (**D-39/§12.8**, `api/security.py`),
   **403 fail-closed** when no key is configured or the cookie is missing/invalid. Any future
   corpus-mutating endpoint must add the same dependency.
-- `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`. **Run
-  visibility & retention (D-40/§12.9):** the archive is **capability-aware** — `GET /archive`
+- `runs.py` (`/api/runs`) — Mode 2: start a run, list/get, SSE progress `/stream`. **SQLite run store
+  + API-driven detail (§12.13/F-59, Phases 1–2):** `record_run_complete` (in `tailor/run.py`, guarded)
+  writes `data/cv_tailor.db` at completion. `GET /api/runs` is now the **SQLite-backed paginated list**
+  (`{runs,total,limit,offset}`, capability-aware — locked ⇒ public-demo only + owner fields redacted),
+  replacing the old live-sessions list; live status moved to `GET /{id}/status`. The **run detail** is
+  driven by `GET /{id}` (structured JSON, SQLite + disk) + `/{id}/sections/{sid}/diff`, `/{id}/reasoning`,
+  and `/{id}/html` (report regenerated on demand from checkpoints — `phase6_output.regenerate_html`). All
+  are `_viewable`-gated (private→404 locked; owner-only Job Radar blanked). The **legacy** `/{id}/detail`
+  + `/{id}/report` (filesystem `api/archive.py`) still exist for the transition; Phase 3 retires them.
+  **Run visibility & retention (D-40/§12.9):** the archive is **capability-aware** — `GET /archive`
   and `/{id}/detail|report|files` return only `public_demo` runs (list redacted) unless the
   request is unlocked (`verify_token` on `cv_full_mode`); a private run **404s** when locked
   (don't leak ids). **Exception — live-session grant (F-48):** `_viewable` also passes when a

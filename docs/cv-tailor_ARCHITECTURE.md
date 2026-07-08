@@ -329,8 +329,9 @@ Phase 5: formatting corrections + grounding report
   ↓ HITL #3
 Phase 6: section assembly (ordered by CVSection.position, role_line re-attached)
   → cv_final.md  (clean, for sending)
-  → cv_final.html (6 tabs + sticky summary card)
+  → cv_final.html (belt+braces; run detail UI is now API-driven React tabs, §12.13)
   → run_log.jsonl (audit trail, D-06: separate from context)
+  → SQLite run store (data/cv_tailor.db) — structured metadata for the API (§12.13)
 ```
 
 ### Corpus ingestion
@@ -452,6 +453,18 @@ owner from running expensive operations or mutating state.
 - Private runs: filtered from list/detail (404, not 403 — run IDs not revealed)
 - Cleanup: startup-triggered only when `RUN_RETENTION_DAYS` env var set;
   `keep` and `public_demo` runs are protected; age from run_id, not mtime
+
+**Run store + API-driven report (SQLite migration, §12.13 / F-59 — Phases 1–2 deployed):**
+- Structured run metadata lives in **SQLite** (`data/cv_tailor.db`: `runs`/`run_sections`/
+  `run_iterations`), written at the `run_complete` event **alongside** the on-disk checkpoints +
+  `run_log.jsonl`, which remain the source of truth (SQLite is a queryable view; `tailor/db.py`).
+- `GET /api/runs` is the SQLite-backed paginated run list (capability-aware); the run **detail**
+  page renders **seven native React tabs** from `GET /api/runs/{id}` (+ `/sections/{sid}/diff`,
+  `/reasoning`, on-demand `/html`) — **no static-HTML iframe**. `cv_final.html` is still generated
+  at run time (belt + braces) but is no longer the UI surface; Phase 3 retires that generation.
+- Storage evolves via **dual-write → soak → reconcile** (`cli/migrate_runs.py` +
+  `cli/reconcile_runs.py`); schema additions are ALTER-ed into an existing DB on open, and the
+  write path is an idempotent UPSERT that backfills them on re-migration.
 
 ---
 

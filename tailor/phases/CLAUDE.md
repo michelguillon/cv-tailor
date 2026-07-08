@@ -100,6 +100,13 @@ The pipeline phases (SPEC §5). Deterministic, fixed order — **except**
   section (or static). Jinja `templates/output.html`, **7 tabs (Fit/CV/Grounding/
   Changes/Scores/Reasoning/JD)** + a **sticky summary card** (D-34/F-43); word-level
   diffs via `difflib`. `cv_final.md` is the clean artefact.
+  **Split for the API (SQLite migration Phase 2, §12.13):** `generate_output` = `build_report_context`
+  (pure, the report's data shape) + `render_report` (Jinja → HTML string) + file writes.
+  `regenerate_html(run_dir)` reconstructs the inputs from a run's checkpoints
+  (`reconstruct_report_inputs` — the promoted `tmp/sweep/regen_report.py`, F-40) and re-renders on
+  demand — this backs `GET /api/runs/{id}/html` and is what lets Phase 3 retire the run-time
+  `cv_final.html` write. `section_change`/`section_change_from_disk` back the Changes-tab diff endpoint;
+  `summary_card` is the single source of truth for the card (the archive + the API detail both reuse it).
 - **Summary card + JD tab (D-34/D-37/F-43):** the card reuses signals the pipeline
   already produces — **no extra LLM pass**. `summary_card(outcome, fit_score,
   grounded_coverage, unsupported)` is the single source of truth for the fit band +
