@@ -20,7 +20,7 @@ const FIT_BAND_VARIANT: Record<string, "success" | "secondary" | "destructive"> 
   low: "destructive",
 };
 
-const TABS = ["Fit", "CV", "Changes", "Scores", "Reasoning", "JD"] as const;
+const TABS = ["Fit", "CV", "Grounding", "Changes", "Scores", "Reasoning", "JD"] as const;
 type Tab = (typeof TABS)[number];
 
 /** View one completed run: the D-34 summary card, downloads, and the six report tabs
@@ -124,7 +124,7 @@ export function OutputPanel({
                 }
               >
                 {t}
-                {t === "Changes" && detail.grounding.total > 0 && (
+                {t === "Grounding" && detail.grounding.total > 0 && (
                   <span className="ml-1 text-amber-600 dark:text-amber-500">•</span>
                 )}
               </button>
@@ -133,7 +133,12 @@ export function OutputPanel({
 
           <div className="min-h-[40vh]">
             {tab === "Fit" && <FitTab detail={detail} />}
-            {tab === "CV" && <Markdown md={detail.cv_final_md} />}
+            {tab === "CV" && (
+              <div className="rounded-lg border border-border bg-card p-5">
+                <Markdown md={detail.cv_final_md} />
+              </div>
+            )}
+            {tab === "Grounding" && <GroundingTab grounding={detail.grounding} />}
             {tab === "Changes" && <ChangesTab runId={runId} sections={detail.sections} />}
             {tab === "Scores" && <ScoresTab detail={detail} />}
             {tab === "Reasoning" && <ReasoningTab runId={runId} />}
@@ -242,73 +247,109 @@ function SummaryCard({
   );
 }
 
-// -- Fit tab: why-a-fit narrative, transferable strengths, gaps, grounding flags ----- //
+// -- Fit tab: role-fit header + bar, two color-coded columns, grounding (mirrors report) - //
+const BAR_BG: Record<string, string> = {
+  strong: "bg-emerald-500",
+  partial: "bg-amber-500",
+  low: "bg-red-500",
+};
+
 function FitTab({ detail }: { detail: RunDetailV2 }) {
-  const { value_alignment, skills_transferable, gaps, no_fit_reason } = detail.fit;
-  const claims = detail.grounding.claims;
+  const { outcome, value_alignment, skills_transferable, gaps, no_fit_reason } = detail.fit;
+  const pct = detail.card.fit_pct;
   return (
-    <div className="space-y-5 text-sm">
-      {value_alignment && (
-        <section>
-          <h3 className="mb-1 font-medium">Why you’re a fit</h3>
-          <p className="whitespace-pre-wrap text-muted-foreground">{value_alignment}</p>
-        </section>
-      )}
-      {no_fit_reason && (
-        <section>
-          <h3 className="mb-1 font-medium text-destructive">Why this isn’t a fit</h3>
-          <p className="whitespace-pre-wrap text-muted-foreground">{no_fit_reason}</p>
-        </section>
-      )}
-      {skills_transferable.length > 0 && (
-        <section>
-          <h3 className="mb-1 font-medium">Transferable strengths</h3>
-          <div className="flex flex-wrap gap-1.5">
-            {skills_transferable.map((s, i) => (
-              <Badge key={i} variant="secondary">
-                {s}
-              </Badge>
-            ))}
-          </div>
-        </section>
-      )}
-      {gaps.length > 0 && (
-        <section>
-          <h3 className="mb-1 font-medium">Gaps</h3>
-          <ul className="space-y-1">
-            {gaps.map((g, i) => (
-              <li key={i} className="text-muted-foreground">
-                <span className="font-medium text-foreground">{g.requirement}</span>{" "}
-                <Badge variant={g.severity === "blocking" ? "destructive" : "outline"}>
-                  {g.severity}
-                </Badge>{" "}
-                <span className="text-xs">
-                  ({g.gap_type}
-                  {g.addressable ? ", addressable" : ""}) — {g.reason}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      <section>
-        <h3 className="mb-1 font-medium">
-          Grounding {claims.length > 0 && <span className="text-amber-600 dark:text-amber-500">⚠</span>}
+    <div className="space-y-4 text-sm">
+      {/* Role fit — accent bar + blue title + value-alignment narrative. */}
+      <div className="rounded-lg border border-l-4 border-border border-l-sky-500 bg-muted/20 p-4">
+        <h3 className="font-semibold text-sky-600 dark:text-sky-400">
+          Role fit — {outcome ?? "—"}
+          {pct != null && ` (${pct}%)`}
         </h3>
-        {claims.length === 0 ? (
-          <p className="text-muted-foreground">
-            ✓ Every tailored claim traces to your source CV — no unsupported claims flagged.
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {claims.map((c, i) => (
-              <li key={i} className="text-muted-foreground">
-                <span className="font-medium text-foreground">{c.section}</span>: {c.issue}
-              </li>
-            ))}
-          </ul>
+        {pct != null && (
+          <div className="my-2.5 h-1.5 w-full overflow-hidden rounded-full bg-border">
+            <div className={`h-full rounded-full ${BAR_BG[detail.card.fit_band] ?? "bg-sky-500"}`} style={{ width: `${pct}%` }} />
+          </div>
         )}
-      </section>
+        {value_alignment ? (
+          <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">{value_alignment}</p>
+        ) : no_fit_reason ? (
+          <p className="whitespace-pre-wrap leading-relaxed text-red-600 dark:text-red-400">{no_fit_reason}</p>
+        ) : (
+          <p className="italic text-muted-foreground">
+            No value-alignment summary for this run (add a candidate value model to enable it).
+          </p>
+        )}
+      </div>
+
+      {/* Two columns: strong alignment (green) · potential gaps (red, bold majors). */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        {skills_transferable.length > 0 && (
+          <div className="rounded-lg border border-border p-4">
+            <h3 className="mb-2 font-semibold text-emerald-600 dark:text-emerald-400">Strong alignment</h3>
+            <ul className="ml-4 list-disc space-y-1 text-muted-foreground marker:text-emerald-500">
+              {skills_transferable.map((s, i) => (
+                <li key={i}>{s}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {gaps.length > 0 && (
+          <div className="rounded-lg border border-border p-4">
+            <h3 className="mb-2 font-semibold text-red-600 dark:text-red-400">Potential gaps</h3>
+            <ul className="ml-4 list-disc space-y-1 marker:text-red-500">
+              {gaps.map((g, i) => {
+                const major = g.severity === "major" || g.severity === "blocking";
+                return (
+                  <li key={i} className={major ? "font-semibold text-red-600 dark:text-red-400" : "text-muted-foreground"}>
+                    {g.requirement}{" "}
+                    <span className="text-xs font-normal text-muted-foreground">
+                      — {g.gap_type} / {g.severity} / {g.addressable ? "addressable" : "not addressable"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </div>
+
+    </div>
+  );
+}
+
+// -- Grounding tab: the verifier's unsupported-claim flags (F-35), red-headed like the report - //
+function GroundingTab({ grounding }: { grounding: RunDetailV2["grounding"] }) {
+  if (grounding.total === 0) {
+    return (
+      <div className="rounded-lg border border-border bg-card p-4 text-sm">
+        <h3 className="font-semibold text-emerald-600 dark:text-emerald-400">
+          ✓ Every tailored section traces to your source CV.
+        </h3>
+        <p className="mt-1 text-muted-foreground">
+          The verifier found no claim in the final CV that your source corpus doesn’t support.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-950/30">
+        <h3 className="font-semibold text-red-600 dark:text-red-400">
+          ⚠ {grounding.total} unsupported claim{grounding.total === 1 ? "" : "s"} across{" "}
+          {grounding.sections} section{grounding.sections === 1 ? "" : "s"} — review before sending.
+        </h3>
+        <p className="mt-1 text-muted-foreground">
+          These appear in the tailored CV but were not found in your source corpus. They were raised
+          at the review step.
+        </p>
+      </div>
+      {grounding.claims.map((c, i) => (
+        <div key={i} className="rounded-lg border border-border bg-card p-4">
+          <h3 className="font-semibold text-red-600 dark:text-red-400">{c.section}</h3>
+          <p className="mt-1">{c.issue}</p>
+          {c.suggestion && <p className="mt-1 text-xs text-muted-foreground">{c.suggestion}</p>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -372,63 +413,88 @@ function ChangesTab({ runId, sections }: { runId: string; sections: RunSection[]
   );
 }
 
-// -- Scores tab: per-iteration aggregate + per-section final scores ------------------- //
+// -- Scores tab: per-section final scores + per-iteration progression (bordered, labelled) - //
 function ScoresTab({ detail }: { detail: RunDetailV2 }) {
   const its = detail.scores.iterations;
   const sections = detail.sections.filter((s) => !s.static);
   const pct = (v: number | null) => (v == null ? "—" : `${(v * 100).toFixed(0)}%`);
   const num = (v: number | null) => (v == null ? "—" : v.toFixed(1));
-  return (
-    <div className="space-y-6 overflow-x-auto text-sm">
-      <table className="w-full min-w-[32rem] border-collapse">
-        <caption className="mb-1 text-left font-medium">Per iteration</caption>
-        <thead className="text-muted-foreground">
-          <tr className="border-b border-border text-left">
-            <th className="py-1 pr-4 font-normal">#</th>
-            <th className="py-1 pr-4 font-normal">Coverage</th>
-            <th className="py-1 pr-4 font-normal">Quality</th>
-            <th className="py-1 pr-4 font-normal">Converged</th>
-            <th className="py-1 pr-4 font-normal">Active</th>
-          </tr>
-        </thead>
-        <tbody>
-          {its.map((it) => (
-            <tr key={it.iteration} className="border-b border-border/50">
-              <td className="py-1 pr-4 tabular-nums">{it.iteration}</td>
-              <td className="py-1 pr-4 tabular-nums">{pct(it.keyword_coverage)}</td>
-              <td className="py-1 pr-4 tabular-nums">{num(it.quality_score)}</td>
-              <td className="py-1 pr-4 tabular-nums">{it.sections_converged ?? "—"}</td>
-              <td className="py-1 pr-4 tabular-nums">{it.sections_active ?? "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+  const delta = (v: number | null) => (v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(3));
+  const th = "border border-border bg-muted/60 px-2 py-1.5 text-left font-medium";
+  const td = "border border-border px-2 py-1.5";
+  const tdn = td + " text-right tabular-nums";
 
-      <table className="w-full min-w-[32rem] border-collapse">
-        <caption className="mb-1 text-left font-medium">Per section (final)</caption>
-        <thead className="text-muted-foreground">
-          <tr className="border-b border-border text-left">
-            <th className="py-1 pr-4 font-normal">Section</th>
-            <th className="py-1 pr-4 font-normal">Coverage</th>
-            <th className="py-1 pr-4 font-normal">Claude</th>
-            <th className="py-1 pr-4 font-normal">GPT</th>
-            <th className="py-1 pr-4 font-normal">Selected</th>
-            <th className="py-1 pr-4 font-normal">Converged</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sections.map((s) => (
-            <tr key={s.section_id} className="border-b border-border/50">
-              <td className="py-1 pr-4">{s.section_id}</td>
-              <td className="py-1 pr-4 tabular-nums">{pct(s.keyword_coverage)}</td>
-              <td className="py-1 pr-4 tabular-nums">{num(s.claude_quality)}</td>
-              <td className="py-1 pr-4 tabular-nums">{num(s.gpt_quality)}</td>
-              <td className="py-1 pr-4">{s.selected_writer ?? "—"}</td>
-              <td className="py-1 pr-4">{s.converged ? "✓" : "—"}</td>
+  return (
+    <div className="space-y-6 overflow-x-auto text-[13px]">
+      <div>
+        <div className="mb-1 font-medium">Per section (final)</div>
+        <table className="w-full min-w-[34rem] border-collapse">
+          <thead>
+            <tr>
+              <th className={th}>Section</th>
+              <th className={th + " text-right"}>Coverage</th>
+              <th className={th}>Quality (selected)</th>
+              <th className={th + " text-right"}>Claude</th>
+              <th className={th + " text-right"}>GPT</th>
+              <th className={th}>State</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {sections.map((s) => (
+              <tr key={s.section_id}>
+                <td className={td}>{s.section_id}</td>
+                <td className={tdn}>{pct(s.keyword_coverage)}</td>
+                <td className={td}>
+                  {s.selected_writer && (
+                    <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-950/60 dark:text-sky-300">
+                      {s.selected_writer}
+                    </span>
+                  )}
+                </td>
+                <td className={tdn}>{num(s.claude_quality)}</td>
+                <td className={tdn}>{num(s.gpt_quality)}</td>
+                <td className={td}>
+                  {s.converged ? (
+                    <span className="font-medium text-emerald-600 dark:text-emerald-400">✓ frozen</span>
+                  ) : (
+                    <span className="text-muted-foreground">active</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <div className="mb-1 font-medium">Per iteration (progression)</div>
+        <table className="w-full min-w-[34rem] border-collapse">
+          <thead>
+            <tr>
+              <th className={th + " text-right"}>Iter</th>
+              <th className={th + " text-right"}>Coverage</th>
+              <th className={th + " text-right"}>Quality</th>
+              <th className={th + " text-right"}>Δ coverage</th>
+              <th className={th + " text-right"}>Δ quality</th>
+              <th className={th + " text-right"}>Converged</th>
+              <th className={th + " text-right"}>Active</th>
+            </tr>
+          </thead>
+          <tbody>
+            {its.map((it) => (
+              <tr key={it.iteration}>
+                <td className={tdn}>{it.iteration}</td>
+                <td className={tdn}>{pct(it.keyword_coverage)}</td>
+                <td className={tdn}>{num(it.quality_score)}</td>
+                <td className={tdn + " text-muted-foreground"}>{delta(it.keyword_delta)}</td>
+                <td className={tdn + " text-muted-foreground"}>{delta(it.quality_delta)}</td>
+                <td className={tdn}>{it.sections_converged ?? "—"}</td>
+                <td className={tdn}>{it.sections_active ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -508,7 +574,10 @@ function Markdown({ md }: { md: string | null }) {
     if (line.startsWith("## ")) {
       flush();
       blocks.push(
-        <h2 key={blocks.length} className="mt-4 border-b border-border pb-1 text-base font-semibold">
+        <h2
+          key={blocks.length}
+          className="mb-2 mt-5 border-b border-border pb-1 text-sm font-semibold uppercase tracking-wide text-sky-600 first:mt-0 dark:text-sky-400"
+        >
           {bold(line.slice(3))}
         </h2>,
       );

@@ -302,7 +302,11 @@ export interface RunDetailV2 {
   sections: RunSection[];
   cv_final_md: string | null;
   jd_raw: string | null;
-  grounding: { total: number; claims: Array<{ section: string; issue: string }> };
+  grounding: {
+    total: number;
+    sections: number;
+    claims: Array<{ section: string; issue: string; suggestion?: string }>;
+  };
   company_name: string | null;
   keep: boolean;
   has_md: boolean;

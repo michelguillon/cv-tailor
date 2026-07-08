@@ -566,7 +566,9 @@ def test_run_detail_structured_json(client, phase2_run):
     # disk-only content
     assert "Tailored platform profile" in d["cv_final_md"]
     assert "Solutions Architect" in d["jd_raw"]
-    assert d["grounding"]["total"] == 1 and d["grounding"]["claims"][0]["section"] == "profile"
+    assert d["grounding"]["total"] == 1 and d["grounding"]["sections"] == 1
+    assert d["grounding"]["claims"][0]["section"] == "profile"
+    assert d["grounding"]["claims"][0]["suggestion"]        # non-empty, drives the Grounding tab
     # summary-card + display fields (parity with the old detail surface)
     assert d["company_name"] == "Globex" and d["has_md"] is True and d["has_html"] is False
     assert d["card"]["fit_band"] == "partial" and d["card"]["status"] == "Review Required"

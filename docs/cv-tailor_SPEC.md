@@ -2166,8 +2166,10 @@ discipline as the Job Radar storage migration. (Migration spec §6.)
 - `GET /api/runs/{id}/sections/{sid}/diff` (Changes), `/reasoning` (Reasoning), `/html` (on-demand report
   regenerated from checkpoints, as a download — promotes the F-40 regen helper to a supported path).
 - Live status moved `GET /{id}` → `/{id}/status`; the bare path is the structured detail.
-- Frontend `OutputPanel` rewritten to **six native React tabs** (Fit/CV/Changes/Scores/Reasoning/JD) — no
-  iframe; a minimal inline markdown renderer + tab strip. New DB fields surface automatically (§5.1).
+- Frontend `OutputPanel` rewritten to **seven native React tabs** (Fit/CV/Grounding/Changes/Scores/
+  Reasoning/JD) — no iframe; a minimal inline markdown renderer + tab strip, visuals mirroring the
+  Phase-6 report (accent CV headings, role-fit bar + green/red columns, red-headed Grounding, bordered
+  Scores tables with writer pill + ✓-frozen). New DB fields surface automatically (§5.1).
 - Run list moved off the filesystem scan onto `GET /api/runs` (§4.2/§5.2), **capability-aware** (locked →
   public-demo only, owner-only fields redacted). This needed two **new `runs` columns** — `company_name`
   (resolved label) + `unsupported_claims` — so the owner-management list needs no disk read. Columns are

@@ -35,14 +35,17 @@ the root `CLAUDE.md` first. Built incrementally per SPEC §12.6 (UI Steps 2–6)
   on `unlocked` change so the list widens/narrows. `RunPage` has an optional **Company** field
   passed to `api.startRun` (stored in the run metadata). Company shows "Unknown company" when
   unset. Backend is the source of truth (private runs 404 when locked); UI gating is convenience.
-- **Run detail = six native React tabs (SQLite migration Phase 2, §5.1):** `OutputPanel`
-  fetches `api.runDetailV2(id)` (`GET /api/runs/{id}`) and renders Fit / CV / Changes / Scores /
-  Reasoning / JD **from the JSON — no `cv_final.html` iframe**. Changes lazy-loads
-  `api.sectionDiff` per section; Reasoning uses `api.runReasoning`; the HTML report is a download
-  (`api.runHtmlUrl`, regenerated on demand). CV is a **minimal inline markdown renderer** + a
-  state-based tab strip (no markdown/tabs deps). The summary card (D-34) is served pre-derived as
-  `detail.card` (`phase6.summary_card`, single source of truth with the report). New DB fields
-  appear automatically — add the field to the endpoint, read it in the tab; no HTML regen.
+- **Run detail = seven native React tabs (SQLite migration Phase 2, §5.1):** `OutputPanel`
+  fetches `api.runDetailV2(id)` (`GET /api/runs/{id}`) and renders **Fit / CV / Grounding / Changes /
+  Scores / Reasoning / JD** from the JSON — **no `cv_final.html` iframe**. (Grounding is its own tab,
+  matching the report, not folded into Fit.) Changes lazy-loads `api.sectionDiff` per section;
+  Reasoning uses `api.runReasoning`; the HTML report is a download (`api.runHtmlUrl`, regenerated on
+  demand). CV is a **minimal inline markdown renderer** + a state-based tab strip (no markdown/tabs
+  deps). Tab visuals mirror the Phase-6 report (`templates/output.html`): CV headings uppercase/
+  accent/underlined, Fit = role-fit bar + green/red two-column layout, Grounding red-headed, Scores
+  bordered tables with a selected-writer pill + ✓-frozen. The summary card (D-34) is served
+  pre-derived as `detail.card` (`phase6.summary_card`, single source of truth with the report). New DB
+  fields appear automatically — add the field to the endpoint, read it in the tab; no HTML regen.
 - **Run list = `api.runsList()` (`GET /api/runs`, §4.2/§5.2):** `RunsPage` reads the SQLite-backed
   paginated list, **not** `api.archiveRuns()` (filesystem scan, now legacy). Capability-awareness is
   **server-side** (locked → public-demo only, owner-only fields redacted), so the page just renders;

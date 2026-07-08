@@ -149,14 +149,17 @@ def _read_json(path: Path) -> dict:
 
 
 def _grounding_from_log(run_dir: Path) -> dict:
-    """The verifier's unsupported-claim flags for the Grounding surface (F-35), read from
-    the run_log (reason = 'sid: issue')."""
-    claims = []
+    """The verifier's unsupported-claim flags for the Grounding tab (F-35), read from the
+    run_log (reason = 'sid: issue'). Mirrors the report's grounding card: total + affected
+    section count + per-claim {section, issue, suggestion}."""
+    claims, sections = [], set()
     for e in read_entries(run_dir / "run_log.jsonl"):
         if e.get("phase") == "verification" and e.get("event") == "unsupported_claim":
             sid, _, issue = (e.get("reasoning", "")).partition(": ")
-            claims.append({"section": sid, "issue": issue or e.get("reasoning", "")})
-    return {"total": len(claims), "claims": claims}
+            claims.append({"section": sid, "issue": issue or e.get("reasoning", ""),
+                           "suggestion": "Verify against your source CV before sending."})
+            sections.add(sid)
+    return {"total": len(claims), "sections": len(sections), "claims": claims}
 
 
 def _enrich_detail_from_disk(run_dir: Path, detail: dict) -> dict:
