@@ -233,6 +233,127 @@ export interface RunDetail extends ArchiveRun {
   cv_md: string | null;
 }
 
+// --- Phase 2: API-driven run detail (SPEC_SQLITE_MIGRATION §4.1) ------------- //
+
+export interface FitGap {
+  requirement: string;
+  gap_type: string;
+  addressable: boolean;
+  severity: string;
+  reason: string;
+}
+
+export interface RunIteration {
+  iteration: number;
+  keyword_coverage: number | null;
+  quality_score: number | null;
+  keyword_delta: number | null;
+  quality_delta: number | null;
+  sections_converged: number | null;
+  sections_active: number | null;
+}
+
+export interface RunSection {
+  section_id: string;
+  section_type: string;
+  position: number;
+  static: boolean;
+  final_version: number | null;
+  converged: boolean | null;
+  keyword_coverage: number | null;
+  claude_quality: number | null;
+  gpt_quality: number | null;
+  selected_writer: string | null;
+  source_cv: string | null;
+}
+
+// The D-34 summary card, derived server-side (single source of truth with the report).
+export interface SummaryCard {
+  fit_label: string;
+  fit_pct: number | null;
+  fit_band: string;
+  grounded_pct: number | null;
+  unsupported: number;
+  status: string;
+}
+
+// Structured run detail — drives the six report tabs (§4.1/§5.1).
+export interface RunDetailV2 {
+  run_id: string;
+  ts: string | null;
+  mode: string | null;
+  status: string | null;
+  job_radar_job_id: string | null;
+  rerun_of: string | null;
+  public_demo: boolean | null;
+  cost_usd: number | null;
+  cvcm_enabled: boolean | null;
+  convergence_reason: string | null;
+  fit: {
+    outcome: string | null;
+    score: number | null;
+    role_title: string | null;
+    value_alignment: string | null;
+    no_fit_reason: string | null;
+    gaps: FitGap[];
+    skills_transferable: string[];
+  };
+  scores: { coverage: number | null; quality: number | null; iterations: RunIteration[] };
+  sections: RunSection[];
+  cv_final_md: string | null;
+  jd_raw: string | null;
+  grounding: { total: number; claims: Array<{ section: string; issue: string }> };
+  company_name: string | null;
+  keep: boolean;
+  has_md: boolean;
+  has_html: boolean;
+  card: SummaryCard;
+  job_radar_source?: JobRadarSource | null;
+  job_radar_assessment?: JobRadarAssessment | null;
+}
+
+export interface SectionDiff {
+  sid: string;
+  title: string;
+  static: boolean;
+  versions: string[];
+  diff_html: string;
+}
+
+export interface ReasoningEntry {
+  ts?: string;
+  phase: string;
+  event: string;
+  reasoning?: string;
+  iteration?: number | null;
+  keyword_score?: number | null;
+  critique_score?: number | null;
+  [key: string]: unknown;
+}
+
+// Paginated run list (§4.2) — the SQLite-backed list the run-list page consumes.
+export interface RunListRow {
+  run_id: string;
+  ts: string | null;
+  mode: string | null;
+  status: string | null;
+  fit_outcome: string | null;
+  fit_score: number | null;
+  coverage_score: number | null;
+  quality_score: number | null;
+  job_radar_job_id: string | null;
+  rerun_of: string | null;
+  public_demo: boolean;
+  jd_role_title: string | null;
+}
+
+export interface RunListResponse {
+  runs: RunListRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // Progress events streamed over SSE (SPEC §12.2). `type` discriminates; the rest
 // of the fields depend on the type (kept loose — the Run page reads by type).
 export interface RunEvent {
@@ -319,6 +440,27 @@ export const api = {
   reportUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/report`,
   fileUrl: (runId: string, name: string) =>
     `${BASE}/runs/${encodeURIComponent(runId)}/files/${encodeURIComponent(name)}`,
+  // Phase 2 (§4): structured detail + per-tab data + on-demand HTML.
+  runDetailV2: (runId: string) => get<RunDetailV2>(`/runs/${encodeURIComponent(runId)}`),
+  sectionDiff: (runId: string, sectionId: string) =>
+    get<SectionDiff>(
+      `/runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/diff`,
+    ),
+  runReasoning: (runId: string) =>
+    get<{ run_id: string; entries: ReasoningEntry[] }>(
+      `/runs/${encodeURIComponent(runId)}/reasoning`,
+    ),
+  runHtmlUrl: (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/html`,
+  // Paginated SQLite-backed run list (§4.2).
+  runsList: (params: { limit?: number; offset?: number; mode?: string; public_only?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.offset != null) q.set("offset", String(params.offset));
+    if (params.mode) q.set("mode", params.mode);
+    if (params.public_only) q.set("public_only", "true");
+    const qs = q.toString();
+    return get<RunListResponse>(`/runs${qs ? `?${qs}` : ""}`);
+  },
 };
 
 // The progress events the Run page reacts to (also used to register SSE listeners).

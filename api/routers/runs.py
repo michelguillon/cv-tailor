@@ -163,6 +163,7 @@ def _enrich_detail_from_disk(run_dir: Path, detail: dict) -> dict:
                               else p1.get("value_alignment_notes"))
     fit["no_fit_reason"] = (fit["no_fit_reason"] if fit["no_fit_reason"] is not None
                             else p1.get("no_fit_reason"))
+    fit["skills_transferable"] = p1.get("skills_transferable", []) or []
     md = run_dir / "cv_final.md"
     detail["cv_final_md"] = md.read_text(encoding="utf-8") if md.exists() else None
     jd = run_dir / "jd_raw.txt"
@@ -200,10 +201,28 @@ def get_run_detail(run_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r}")
     detail = db.get_run_detail(run_id, OUTPUT_DIR) or _null_detail(run_id)  # nulls if pre-migration
     _enrich_detail_from_disk(run_dir, detail)
-    # The Job Radar reference links a personal job-search tool — owner-only, even on a public
-    # or live-session-viewable run (Integration §5.4 / §12.12), same as run_detail.
-    if not _unlocked(request):
+
+    # Visibility/retention sidecar + display fields (parity with the run's summary card, D-34/F-47).
+    meta = read_meta(run_dir)
+    p0_company = _read_json(run_dir / "phase0_jd_analysis.json").get("company_name")
+    detail["company_name"] = meta["company_name"] or p0_company        # manual wins (F-47)
+    detail["keep"] = meta["keep"]
+    detail["has_md"] = (run_dir / "cv_final.md").exists()
+    detail["has_html"] = (run_dir / "cv_final.html").exists()
+    # Derived summary card (D-34) — single source of truth reused from Phase 6 (F-43).
+    detail["card"] = phase6_output.summary_card(
+        detail["fit"]["outcome"] or "", detail["fit"]["score"],
+        detail["scores"]["coverage"], detail["grounding"]["total"])
+
+    # Job Radar reference + the owner's assessment link a personal job-search tool — owner-only,
+    # even on a public / live-session-viewable run (Integration §5.4 / §12.12), same as run_detail.
+    if _unlocked(request):
+        detail["job_radar_source"] = meta.get("job_radar_source")
+        detail["job_radar_assessment"] = meta.get("job_radar_assessment")
+    else:
         detail["job_radar_job_id"] = None
+        detail["job_radar_source"] = None
+        detail["job_radar_assessment"] = None
     return detail
 
 
